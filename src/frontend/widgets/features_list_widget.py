@@ -1,20 +1,19 @@
-
 from __future__ import annotations
 from typing import Optional, Sequence, Any
 
 import logging
-
 import pandas as pd
+
 from PySide6.QtCore import QObject, Qt, Signal, QTimer, QItemSelectionModel
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QGroupBox, QLineEdit, QVBoxLayout
-from ..localization import tr
 
-from ..models.features_model import FeaturesFilterProxyModel, FeaturesTableModel
+from ..localization import tr
+from ..models.features_model import FeaturesTableModel
 from ..models.hybrid_pandas_model import HybridPandasModel
 from ..threading.runner import run_in_thread
 from ..threading.utils import run_in_main_thread
-from .fast_table import FastTable
+from .fast_table import FastTable, FastPandasProxyModel
 from ..utils import toast_error
 
 logger = logging.getLogger(__name__)
@@ -22,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 class FeaturesListWidgetViewModel(QObject):
     """Keeps a features list in sync with a HybridPandasModel.
-    
+
     When enabled, automatically filters features to show only those in the current
     selection (via DatabaseModel.selected_features_changed signal).
     """
@@ -44,7 +43,7 @@ class FeaturesListWidgetViewModel(QObject):
             "tags": None,
         }
         self._data_model: Optional[HybridPandasModel] = data_model
-        self._use_selection_filter: bool = False  # Whether to show only selected features
+        self._use_selection_filter: bool = False
         if self._data_model is not None:
             self._data_model.database_changed.connect(self._on_database_changed)
             self._data_model.selected_features_changed.connect(self._on_selected_features_changed)
@@ -52,7 +51,6 @@ class FeaturesListWidgetViewModel(QObject):
         self.reload_features()
 
     def set_use_selection_filter(self, enabled: bool) -> None:
-        """Enable/disable filtering features by current selection."""
         if self._use_selection_filter == enabled:
             return
         self._use_selection_filter = enabled
@@ -90,7 +88,7 @@ class FeaturesListWidgetViewModel(QObject):
         def _load() -> pd.DataFrame:
             try:
                 return self._load_features_dataframe(model, filters)
-            except Exception as exc:  # pragma: no cover - defensive
+            except Exception as exc:  # pragma: no cover
                 logger.exception("Failed to load features: %s", exc)
                 raise exc
 
@@ -113,12 +111,10 @@ class FeaturesListWidgetViewModel(QObject):
             cancel_previous=True,
         )
 
-    # ------------------------------------------------------------------
     def _on_database_changed(self, *_args) -> None:
         self.reload_features()
 
     def _on_selected_features_changed(self, selected_features: pd.DataFrame) -> None:
-        """Called when DatabaseModel selection changes for selection-filtered lists."""
         if not self._use_selection_filter:
             return
         self.features_loaded.emit(selected_features)
@@ -139,7 +135,6 @@ class FeaturesListWidgetViewModel(QObject):
             return pd.DataFrame(
                 columns=["feature_id", "name", "source", "unit", "type", "lag_seconds", "tags", "notes"],
             )
-        # Load based on system/Dataset filters
         if systems or datasets:
             return model.features_for_systems_datasets(
                 systems=systems,
@@ -149,12 +144,9 @@ class FeaturesListWidgetViewModel(QObject):
             )
         return model.features_df(import_ids=import_ids, tags=tags)
 
+
 class FeaturesListWidget(QGroupBox):
-    """Reusable widget that exposes a searchable, filterable features table.
-    
-    Can optionally filter to show only selected features via the data_model's
-    active selection state (set via SelectionsViewModel).
-    """
+    """Reusable widget that exposes a searchable, filterable features table."""
 
     selection_changed = Signal(list)
     features_reloaded = Signal(object)
@@ -169,10 +161,16 @@ class FeaturesListWidget(QGroupBox):
     ) -> None:
         super().__init__(tr(title), parent)
         self._suppress_autoselect = False
+        self._pending_search_text = ""
+        self._suppress_selection_emit = False
+        self._last_selection_ids: tuple[int, ...] = ()
+
+        # Domain source model (keeps payload + headers)
         self._table_model = FeaturesTableModel()
-        self._proxy_model = FeaturesFilterProxyModel(self)
+
+        # Fast vectorized proxy (sorting/filtering)
+        self._proxy_model = FastPandasProxyModel(self)
         self._proxy_model.setSourceModel(self._table_model)
-        self._proxy_model.setDynamicSortFilter(True)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -191,16 +189,18 @@ class FeaturesListWidget(QGroupBox):
             parent=self,
         )
         self._table.setModel(self._proxy_model)
+        self._table.setSortingEnabled(True)
         self._table.sortByColumn(0, Qt.SortOrder.AscendingOrder)
         layout.addWidget(self._table, 1)
 
-        self._pending_search_text = ""
-        self._suppress_selection_emit = False
+        # Search debounce
         self._search_timer = QTimer(self)
         self._search_timer.setSingleShot(True)
         self._search_timer.setInterval(120)
         self._search_timer.timeout.connect(self._apply_search_text)
         self._search_edit.textChanged.connect(self._queue_search_text)
+
+        # Selection debounce
         self._selection_emit_timer = QTimer(self)
         self._selection_emit_timer.setSingleShot(True)
         self._selection_emit_timer.setInterval(0)
@@ -210,40 +210,13 @@ class FeaturesListWidget(QGroupBox):
         if selection is not None:
             selection.selectionChanged.connect(self._queue_selection_changed)
 
+        # View model for loading
         self._view_model = FeaturesListWidgetViewModel(
             data_model=data_model,
             parent=self,
         )
         self._view_model.features_loaded.connect(self._apply_dataframe)
         self._view_model.load_failed.connect(self._log_failure)
-        self._last_selection_ids: tuple[int, ...] = ()
-
-    # ------------------------------------------------------------------
-    def _queue_search_text(self, text: str) -> None:
-        self._pending_search_text = text or ""
-        self._search_timer.start()
-
-    def _apply_search_text(self) -> None:
-        if self._pending_search_text.strip().lower() == self._proxy_model.search_text():
-            return
-        self._suppress_selection_emit = True
-        try:
-            self._proxy_model.set_search_text(self._pending_search_text)
-        finally:
-            QTimer.singleShot(0, self._clear_search_suppression)
-
-    def _clear_search_suppression(self) -> None:
-        self._suppress_selection_emit = False
-
-    def _queue_selection_changed(self, *_args) -> None:
-        self._selection_emit_timer.start()
-
-    def _build_context_menu(self, menu, _pos, _table):
-        action = QAction(tr("Details..."), menu)
-        payloads = self.selected_payloads()
-        action.setEnabled(bool(payloads))
-        action.triggered.connect(lambda: self.details_requested.emit(payloads))
-        menu.addAction(action)
 
     # ------------------------------------------------------------------
     @property
@@ -255,7 +228,6 @@ class FeaturesListWidget(QGroupBox):
         return self._search_edit
 
     def set_use_selection_filter(self, enabled: bool) -> None:
-        """Enable/disable filtering features by current selection."""
         self._view_model.set_use_selection_filter(enabled)
 
     @property
@@ -282,6 +254,34 @@ class FeaturesListWidget(QGroupBox):
     def reload_features(self) -> None:
         self._view_model.reload_features()
 
+    # ------------------------------------------------------------------
+    def _queue_search_text(self, text: str) -> None:
+        self._pending_search_text = text or ""
+        self._search_timer.start()
+
+    def _apply_search_text(self) -> None:
+        text = (self._pending_search_text or "").strip()
+        # proxy rebuild is fast; our own timer already debounces
+        self._suppress_selection_emit = True
+        try:
+            self._proxy_model.set_filter(text, columns=None, case_sensitive=False, debounce_ms=0)
+        finally:
+            QTimer.singleShot(0, self._clear_search_suppression)
+
+    def _clear_search_suppression(self) -> None:
+        self._suppress_selection_emit = False
+
+    def _queue_selection_changed(self, *_args) -> None:
+        self._selection_emit_timer.start()
+
+    def _build_context_menu(self, menu, _pos, _table):
+        action = QAction(tr("Details..."), menu)
+        payloads = self.selected_payloads()
+        action.setEnabled(bool(payloads))
+        action.triggered.connect(lambda: self.details_requested.emit(payloads))
+        menu.addAction(action)
+
+    # ------------------------------------------------------------------
     def selected_payloads(self) -> list[dict]:
         selection = self._table.selectionModel()
         if not selection:
@@ -325,27 +325,24 @@ class FeaturesListWidget(QGroupBox):
         selection.clearSelection()
 
     def clear_selection_and_suppress_autoselect(self) -> None:
-        """Clear current selection and prevent auto-select on the next reload."""
         self._suppress_autoselect = True
         self.clear_selection()
 
     # ------------------------------------------------------------------
     def _apply_dataframe(self, df: pd.DataFrame) -> None:
-        # Remember currently selected feature IDs before updating the model
         previously_selected_ids = set(self.selected_feature_ids())
         if self._suppress_autoselect:
             previously_selected_ids = set()
 
         previous_suppression = self._suppress_selection_emit
-        dynamic_sort = self._proxy_model.dynamicSortFilter()
         self._suppress_selection_emit = True
         self._table.setUpdatesEnabled(False)
-        if dynamic_sort:
-            self._proxy_model.setDynamicSortFilter(False)
+
         try:
             selection = self._table.selectionModel()
             if selection is not None:
                 selection.clearSelection()
+
             try:
                 self._table_model.set_dataframe(df)
             except Exception as exc:
@@ -362,19 +359,21 @@ class FeaturesListWidget(QGroupBox):
                 )
                 return
 
-            # Try to restore selection if we had previously selected features
+            # Re-apply existing sort after data reload (keeps UX stable)
+            try:
+                hdr = self._table.horizontalHeader()
+                sort_col = int(hdr.sortIndicatorSection())
+                sort_ord = hdr.sortIndicatorOrder()
+                self._table.sortByColumn(sort_col, sort_ord)
+            except Exception:
+                pass
+
             selection_restored = False
             if previously_selected_ids and self._table_model.rowCount() > 0:
                 selection_restored = self._restore_selection(previously_selected_ids)
 
-            # If there was a previous explicit selection but none of those features exist anymore,
-            # keep the selection empty.
-            if (
-                previously_selected_ids
-                and not selection_restored
-            ):
+            if previously_selected_ids and not selection_restored:
                 pass
-            # For first-time loads (no previous explicit selection), keep legacy auto-select behavior.
             elif (
                 not self._suppress_autoselect
                 and not self.selected_payloads()
@@ -384,9 +383,8 @@ class FeaturesListWidget(QGroupBox):
                     self._table.selectRow(0)
                 except Exception:
                     logger.warning("Exception in _apply_dataframe", exc_info=True)
+
         finally:
-            if dynamic_sort:
-                self._proxy_model.setDynamicSortFilter(True)
             self._table.setUpdatesEnabled(True)
             self._suppress_selection_emit = previous_suppression
 
@@ -397,24 +395,19 @@ class FeaturesListWidget(QGroupBox):
         self._queue_selection_changed()
 
     def _restore_selection(self, feature_ids: set[int]) -> bool:
-        """Try to restore selection to features with the given IDs.
-        
-        Returns True if at least one feature was selected.
-        """
         selection = self._table.selectionModel()
         if selection is None:
             return False
-        
-        rows_to_select = []
+
+        rows_to_select: list[int] = []
         for row in range(self._table_model.rowCount()):
             payload = self._table_model.feature_payload_at(row)
             if payload and payload.get("feature_id") in feature_ids:
                 rows_to_select.append(row)
-        
+
         if not rows_to_select:
             return False
-        
-        # Select all matching rows through the proxy model without replacing prior selections.
+
         try:
             selection.clearSelection()
             for row in rows_to_select:
@@ -425,11 +418,11 @@ class FeaturesListWidget(QGroupBox):
                         proxy_index,
                         QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows,
                     )
-            return len(rows_to_select) > 0
+            return True
         except Exception:
             return False
 
-    def _log_failure(self, message: str) -> None:  # pragma: no cover - defensive logging
+    def _log_failure(self, message: str) -> None:  # pragma: no cover
         logger.warning("Features list reload failed: %s", message)
         try:
             toast_error(
@@ -446,8 +439,7 @@ class FeaturesListWidget(QGroupBox):
         if selection_ids == self._last_selection_ids:
             return
         self._last_selection_ids = selection_ids
-        payloads = self.selected_payloads()
-        self.selection_changed.emit(payloads)
+        self.selection_changed.emit(self.selected_payloads())
 
 
 __all__ = ["FeaturesListWidget", "FeaturesListWidgetViewModel"]

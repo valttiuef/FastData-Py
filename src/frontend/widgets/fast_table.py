@@ -3,19 +3,250 @@ from __future__ import annotations
 import logging
 
 logger = logging.getLogger(__name__)
-# frontend/widgets/fast_table.py
 
 from typing import Optional, Callable, Iterable, Sequence
 
 import pandas as pd
-from PySide6.QtCore import Qt, QPoint, QRect, QSortFilterProxyModel, Signal, QEvent, QTimer, QAbstractTableModel, QModelIndex
+import numpy as np
+
+from PySide6.QtCore import (
+    Qt,
+    QPoint,
+    QRect,
+    Signal,
+    QEvent,
+    QTimer,
+    QAbstractTableModel,
+    QAbstractProxyModel,
+    QModelIndex,
+)
 from PySide6.QtGui import QAction, QColor, QPainter
 from PySide6.QtWidgets import (
-
-    QTableView, QHeaderView, QAbstractItemView, QMenu, QWidget, QApplication,
-    QStyledItemDelegate, QStyleOptionViewItem, QStyle
+    QTableView,
+    QHeaderView,
+    QAbstractItemView,
+    QMenu,
+    QWidget,
+    QApplication,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
+    QStyle,
 )
 from ..localization import tr
+
+
+class FastPandasProxyModel(QAbstractProxyModel):
+    """
+    SAFE row-map proxy (no QSortFilterProxyModel internals):
+
+      - filtering recomputes visible rows in one pandas pass
+      - sorting recomputes visible row order in one pandas pass
+      - maps view rows -> source rows via an int array
+    """
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        self._filter_text: str = ""
+        self._filter_cols: list[int] | None = None
+        self._filter_case_sensitive: bool = False
+
+        self._visible_rows: np.ndarray = np.empty((0,), dtype=np.int64)
+        self._sorted_col: int = -1
+        self._sorted_order: Qt.SortOrder = Qt.SortOrder.AscendingOrder
+
+        self._rebuild_timer = QTimer(self)
+        self._rebuild_timer.setSingleShot(True)
+        self._rebuild_timer.setInterval(60)
+        self._rebuild_timer.timeout.connect(self._rebuild_visible_rows)
+
+    # -------- Public API --------
+    def set_filter(
+        self,
+        text: str,
+        *,
+        columns: list[int] | None = None,
+        case_sensitive: bool = False,
+        debounce_ms: int = 60,
+    ) -> None:
+        self._filter_text = (text or "").strip()
+        self._filter_cols = columns[:] if columns else None
+        self._filter_case_sensitive = bool(case_sensitive)
+        self._rebuild_timer.setInterval(max(0, int(debounce_ms)))
+        self._rebuild_timer.start()
+
+    # -------- Required proxy plumbing --------
+    def setSourceModel(self, sourceModel):  # noqa: N802
+        old = self.sourceModel()
+        if old is not None:
+            try:
+                old.modelReset.disconnect(self._schedule_rebuild)
+                old.layoutChanged.disconnect(self._schedule_rebuild)
+                old.dataChanged.disconnect(self._schedule_rebuild)
+                old.rowsInserted.disconnect(self._schedule_rebuild)
+                old.rowsRemoved.disconnect(self._schedule_rebuild)
+                old.columnsInserted.disconnect(self._schedule_rebuild)
+                old.columnsRemoved.disconnect(self._schedule_rebuild)
+            except Exception:
+                pass
+
+        super().setSourceModel(sourceModel)
+
+        sm = self.sourceModel()
+        if sm is not None:
+            # Any structural change should rebuild mapping.
+            try:
+                sm.modelReset.connect(self._schedule_rebuild)
+                sm.layoutChanged.connect(self._schedule_rebuild)
+                sm.dataChanged.connect(self._schedule_rebuild)
+                sm.rowsInserted.connect(self._schedule_rebuild)
+                sm.rowsRemoved.connect(self._schedule_rebuild)
+                sm.columnsInserted.connect(self._schedule_rebuild)
+                sm.columnsRemoved.connect(self._schedule_rebuild)
+            except Exception:
+                logger.warning("Failed connecting source signals", exc_info=True)
+
+        self._rebuild_visible_rows()
+
+    def _schedule_rebuild(self, *_args) -> None:
+        self._rebuild_timer.start()
+
+    def rowCount(self, parent=QModelIndex()):  # noqa: N802
+        if parent.isValid():
+            return 0
+        return int(self._visible_rows.size)
+
+    def columnCount(self, parent=QModelIndex()):  # noqa: N802
+        sm = self.sourceModel()
+        if parent.isValid() or sm is None:
+            return 0
+        return int(sm.columnCount())
+
+    def index(self, row, column, parent=QModelIndex()):  # noqa: N802
+        if parent.isValid():
+            return QModelIndex()
+        if row < 0 or column < 0 or row >= self.rowCount() or column >= self.columnCount():
+            return QModelIndex()
+        return self.createIndex(int(row), int(column))
+
+    def parent(self, _child=QModelIndex()):  # noqa: N802
+        return QModelIndex()
+
+    def mapToSource(self, proxyIndex: QModelIndex) -> QModelIndex:  # noqa: N802
+        sm = self.sourceModel()
+        if sm is None or not proxyIndex.isValid():
+            return QModelIndex()
+        r = int(proxyIndex.row())
+        if r < 0 or r >= int(self._visible_rows.size):
+            return QModelIndex()
+        src_row = int(self._visible_rows[r])
+        return sm.index(src_row, int(proxyIndex.column()))
+
+    def mapFromSource(self, sourceIndex: QModelIndex) -> QModelIndex:  # noqa: N802
+        if not sourceIndex.isValid():
+            return QModelIndex()
+        src_row = int(sourceIndex.row())
+        pos = np.where(self._visible_rows == src_row)[0]
+        if pos.size == 0:
+            return QModelIndex()
+        return self.index(int(pos[0]), int(sourceIndex.column()))
+
+    def data(self, index: QModelIndex, role=Qt.ItemDataRole.DisplayRole):  # noqa: N802
+        sm = self.sourceModel()
+        if sm is None or not index.isValid():
+            return None
+        return sm.data(self.mapToSource(index), role)
+
+    def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):  # noqa: N802
+        sm = self.sourceModel()
+        if sm is None:
+            return None
+        return sm.headerData(section, orientation, role)
+
+    def flags(self, index):  # noqa: N802
+        sm = self.sourceModel()
+        if sm is None or not index.isValid():
+            return Qt.ItemFlag.NoItemFlags
+        return sm.flags(self.mapToSource(index))
+
+    def setData(self, index, value, role=Qt.ItemDataRole.EditRole):  # noqa: N802
+        sm = self.sourceModel()
+        if sm is None or not index.isValid():
+            return False
+        ok = sm.setData(self.mapToSource(index), value, role)
+        if ok:
+            self._schedule_rebuild()
+        return ok
+
+    # -------- Sorting --------
+    def sort(self, column: int, order: Qt.SortOrder = Qt.SortOrder.AscendingOrder):  # noqa: N802
+        self._sorted_col = int(column)
+        self._sorted_order = order
+        self._rebuild_visible_rows()
+
+    # -------- Rebuild mapping (vectorized) --------
+    def _rebuild_visible_rows(self) -> None:
+        sm = self.sourceModel()
+        if sm is None or not hasattr(sm, "_df"):
+            self.beginResetModel()
+            self._visible_rows = np.empty((0,), dtype=np.int64)
+            self.endResetModel()
+            return
+
+        df: pd.DataFrame = getattr(sm, "_df", None)
+        if df is None:
+            self.beginResetModel()
+            self._visible_rows = np.empty((0,), dtype=np.int64)
+            self.endResetModel()
+            return
+
+        n = int(df.shape[0])
+        if n <= 0:
+            self.beginResetModel()
+            self._visible_rows = np.empty((0,), dtype=np.int64)
+            self.endResetModel()
+            return
+
+        rows = np.arange(n, dtype=np.int64)
+
+        # FILTER
+        ft = self._filter_text
+        if ft:
+            cols = self._filter_cols
+            if cols is None:
+                cols = list(range(int(df.shape[1])))
+
+            part = df.iloc[:, cols]
+            s = part.astype("string").fillna("").agg(" ".join, axis=1)
+
+            if self._filter_case_sensitive:
+                mask = s.str.contains(ft, regex=False)
+            else:
+                mask = s.str.contains(ft, case=False, regex=False)
+
+            rows = rows[mask.to_numpy(dtype=bool, na_value=False)]
+
+        # SORT
+        c = self._sorted_col
+        if c is not None and c >= 0 and c < int(df.shape[1]) and rows.size > 1:
+            ascending = self._sorted_order != Qt.SortOrder.DescendingOrder
+            series = df.iloc[rows, c]
+
+            numeric = pd.to_numeric(series, errors="coerce")
+            sort_key = numeric if bool(numeric.notna().any()) else series.astype("string")
+
+            try:
+                order_idx = sort_key.sort_values(
+                    ascending=ascending,
+                    kind="mergesort",
+                    na_position="last",
+                ).index
+                rows = order_idx.to_numpy(dtype=np.int64, copy=False)
+            except Exception:
+                pass
+
+        self.beginResetModel()
+        self._visible_rows = rows
+        self.endResetModel()
 
 
 class FastDataFrameModel(QAbstractTableModel):
@@ -62,7 +293,8 @@ class FastDataFrameModel(QAbstractTableModel):
         return self._set_data_impl(index, value, role)
 
     def sort(self, column, order=Qt.SortOrder.AscendingOrder):  # noqa: N802
-        self._sort_impl(column, order)
+        # Sorting handled by FastPandasProxyModel if used
+        return
 
     def _normalize_dataframe(self, df: Optional[pd.DataFrame]) -> pd.DataFrame:
         out = pd.DataFrame() if df is None else df.copy()
@@ -75,6 +307,8 @@ class FastDataFrameModel(QAbstractTableModel):
         new_df = self._normalize_dataframe(df)
         self.beginResetModel()
         self._df = new_df
+        self._np = self._df.to_numpy(copy=False) if self._df is not None else None
+        self._disp_cache = {}
         self.endResetModel()
 
     def dataframe(self) -> pd.DataFrame:
@@ -92,18 +326,35 @@ class FastDataFrameModel(QAbstractTableModel):
     def _data_impl(self, index, role: int):
         if not index.isValid() or self._df is None:
             return None
+
+        r, c = int(index.row()), int(index.column())
+
         try:
-            value = self._df.iat[index.row(), index.column()]
+            npv = getattr(self, "_np", None)
+            value = npv[r, c] if npv is not None else self._df.iat[r, c]
         except Exception:
             return None
+
         if role == Qt.ItemDataRole.DisplayRole:
-            return self._format_value(value)
+            cache = getattr(self, "_disp_cache", None)
+            if cache is not None:
+                key = (r, c)
+                hit = cache.get(key)
+                if hit is not None:
+                    return hit
+            out = self._format_value(value)
+            if cache is not None and len(cache) < 200_000:
+                cache[(r, c)] = out
+            return out
+
         if role in (Qt.ItemDataRole.EditRole, Qt.ItemDataRole.UserRole):
             return value
+
         if role == Qt.ItemDataRole.TextAlignmentRole:
             if isinstance(value, (int, float)) and not pd.isna(value):
                 return Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
             return Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+
         return None
 
     def _header_impl(self, section: int, orientation: Qt.Orientation, role: int):
@@ -140,33 +391,21 @@ class FastDataFrameModel(QAbstractTableModel):
                 return False
             if column_name not in self._editable_columns:
                 return False
+        r, c = int(index.row()), int(index.column())
         try:
-            self._df.iat[index.row(), index.column()] = value
+            self._df.iat[r, c] = value
+            npv = getattr(self, "_np", None)
+            if npv is not None:
+                try:
+                    npv[r, c] = value
+                except Exception:
+                    self._np = self._df.to_numpy(copy=False)
+            if hasattr(self, "_disp_cache"):
+                self._disp_cache.pop((r, c), None)
         except Exception:
             return False
         self.dataChanged.emit(index, index, [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole])
         return True
-
-    def _sort_impl(self, column: int, order: Qt.SortOrder):
-        if self._df is None or self._df.empty:
-            return
-        if column < 0 or column >= self._df.shape[1]:
-            return
-        ascending = order != Qt.SortOrder.DescendingOrder
-        series = self._df.iloc[:, column]
-        numeric = pd.to_numeric(series, errors="coerce")
-        sort_key = numeric if bool(numeric.notna().any()) else series.astype(str)
-        try:
-            sorted_index = sort_key.sort_values(
-                ascending=ascending,
-                kind="mergesort",
-                na_position="last",
-            ).index
-        except Exception:
-            return
-        self.layoutAboutToBeChanged.emit()
-        self._df = self._df.loc[sorted_index].reset_index(drop=True)
-        self.layoutChanged.emit()
 
     def _format_value(self, value) -> str:
         if value is None:
@@ -185,14 +424,6 @@ class FastDataFrameModel(QAbstractTableModel):
 
 
 class HoverRowDelegate(QStyledItemDelegate):
-    """
-    Minimal hover highlight: tints the entire row under the mouse.
-    Does NOT follow selection behavior, does NOT do column/cell modes.
-    Tries to be as cheap as possible:
-      - tracks hovered row
-      - only repaints the old+new hovered row rectangles
-      - suppresses hover while mouse is pressed (optional)
-    """
     def __init__(self, view: QTableView, color: QColor):
         super().__init__(view)
         self._view = view
@@ -211,7 +442,6 @@ class HoverRowDelegate(QStyledItemDelegate):
             vp.update()
 
     def eventFilter(self, obj, ev):
-        # Guard if view is being destroyed
         try:
             vp = self._view.viewport()
         except Exception:
@@ -220,11 +450,9 @@ class HoverRowDelegate(QStyledItemDelegate):
         if obj is vp:
             t = ev.type()
             if t == QEvent.Type.MouseMove:
-                # Qt6: QMouseEvent.position() is QPointF
                 try:
                     pos = ev.position().toPoint()
                 except Exception:
-                    # fallback for older events
                     try:
                         pos = ev.pos()
                     except Exception:
@@ -276,7 +504,6 @@ class HoverRowDelegate(QStyledItemDelegate):
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index):
         opt = QStyleOptionViewItem(option)
 
-        # Optional: suppress hover while actively selecting/pressing
         if getattr(self._view, "_suppress_hover", False):
             return super().paint(painter, opt, index)
 
@@ -294,16 +521,16 @@ class HoverRowDelegate(QStyledItemDelegate):
 
 
 class FastTable(QTableView):
-    rowActivated = Signal(int)            # row index in the *view*
-    selectionChangedInstant = Signal()    # emitted immediately on selection change
+    rowActivated = Signal(int)
+    selectionChangedInstant = Signal()
 
     def __init__(
         self,
         parent: Optional[QWidget] = None,
         *,
-        select: str = "rows",                 # "rows" | "columns" | "items"
+        select: str = "rows",
         single_selection: bool = True,
-        tint_current_selection: bool = True,  # now used: enables hover row tint
+        tint_current_selection: bool = True,
         editable: bool = False,
         auto_resize_once: bool = True,
         stretch_column: int = -1,
@@ -334,12 +561,10 @@ class FastTable(QTableView):
         self._uniform_applied = False
         self._dataframe_model: Optional[FastDataFrameModel] = None
 
-        # hover
         self._hover_delegate: Optional[HoverRowDelegate] = None
         self._hover_enabled = bool(tint_current_selection)
-        self._suppress_hover = False  # used by delegate to avoid "flash" during press
+        self._suppress_hover = False
 
-        # selection behavior
         sel_beh_map = {
             "rows": QAbstractItemView.SelectionBehavior.SelectRows,
             "columns": QAbstractItemView.SelectionBehavior.SelectColumns,
@@ -352,10 +577,8 @@ class FastTable(QTableView):
             else QAbstractItemView.SelectionMode.ExtendedSelection
         )
 
-        # editing
         self.set_editable(editable)
 
-        # performance-friendly defaults
         self.setWordWrap(False)
         self.setAlternatingRowColors(bool(alt_row_colors))
         self.setSortingEnabled(bool(sorting_enabled))
@@ -363,7 +586,6 @@ class FastTable(QTableView):
         self.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
 
-        # headers
         hh = self.horizontalHeader()
         hh.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         hh.setStretchLastSection(False)
@@ -375,20 +597,15 @@ class FastTable(QTableView):
         vh.setDefaultSectionSize(self._fixed_row_height)
         vh.setMinimumSectionSize(self._fixed_row_height)
 
-        # activation -> rowActivated
         self.doubleClicked.connect(lambda idx: self.rowActivated.emit(idx.row()))
         self.activated.connect(lambda idx: self.rowActivated.emit(idx.row()))
-
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
-        # track selection model for safe disconnect/reconnect
         self._last_sel_model = None
 
-        # install hover delegate if enabled
         if self._hover_enabled:
             self._install_hover(alpha=36)
 
-    # Optional suppression to avoid hover repaint thrash while clicking/dragging selection
     def mousePressEvent(self, ev):
         if ev.button() == Qt.MouseButton.LeftButton:
             self._suppress_hover = True
@@ -401,7 +618,6 @@ class FastTable(QTableView):
         if vp:
             vp.update()
 
-    # ---------- Public API ----------
     def set_editable(self, editable: bool):
         if editable:
             self.setEditTriggers(
@@ -435,6 +651,10 @@ class FastTable(QTableView):
 
     def dataframe(self) -> pd.DataFrame:
         model = self.model()
+        if isinstance(model, FastPandasProxyModel):
+            sm = model.sourceModel()
+            if isinstance(sm, FastDataFrameModel):
+                return sm.dataframe()
         if isinstance(model, FastDataFrameModel):
             return model.dataframe()
         return pd.DataFrame()
@@ -451,54 +671,57 @@ class FastTable(QTableView):
         float_format: str = "{:.4f}",
     ) -> FastDataFrameModel:
         existing = self.model()
-        if isinstance(existing, FastDataFrameModel):
-            if editable_columns is not None:
-                existing.set_editable_columns(editable_columns)
-            if float_format:
-                existing.set_float_format(float_format)
-            existing._include_index = bool(include_index)
-            return existing
-        model = FastDataFrameModel(
-            pd.DataFrame(),
-            parent=self,
-            include_index=include_index,
-            editable_columns=editable_columns,
-            float_format=float_format,
-            editable_all=(self.editTriggers() != QAbstractItemView.EditTrigger.NoEditTriggers),
-        )
-        self._dataframe_model = model
-        self.setModel(model)
-        return model
 
-    def enable_hover_tint(self, enabled: bool, alpha: int = 36):
-        """
-        Enables/disables hover row tint at runtime.
-        """
-        enabled = bool(enabled)
-        if enabled and self._hover_delegate is None:
-            self._install_hover(alpha=alpha)
-        elif not enabled and self._hover_delegate is not None:
-            if self.itemDelegate() is self._hover_delegate:
-                self.setItemDelegate(None)
-            self._hover_delegate = None
-        self._hover_enabled = enabled
+        if isinstance(existing, FastPandasProxyModel):
+            src = existing.sourceModel()
+            if isinstance(src, FastDataFrameModel):
+                if editable_columns is not None:
+                    src.set_editable_columns(editable_columns)
+                if float_format:
+                    src.set_float_format(float_format)
+                src._include_index = bool(include_index)
+                return src
+
+        if isinstance(existing, FastDataFrameModel):
+            src_model = existing
+        else:
+            src_model = FastDataFrameModel(
+                pd.DataFrame(),
+                parent=self,
+                include_index=include_index,
+                editable_columns=editable_columns,
+                float_format=float_format,
+                editable_all=(self.editTriggers() != QAbstractItemView.EditTrigger.NoEditTriggers),
+            )
+
+        proxy = FastPandasProxyModel(parent=self)
+        proxy.setSourceModel(src_model)
+
+        self._dataframe_model = src_model
+        self.setModel(proxy)
+        return src_model
+
+    def set_filter_text(
+        self,
+        text: str,
+        *,
+        columns: list[int] | None = None,
+        case_sensitive: bool = False,
+        debounce_ms: int = 60,
+    ) -> None:
+        m = self.model()
+        if isinstance(m, FastPandasProxyModel):
+            m.set_filter(text, columns=columns, case_sensitive=case_sensitive, debounce_ms=debounce_ms)
 
     def map_to_source_row(self, row: int) -> int:
         m = self.model()
-        if isinstance(m, QSortFilterProxyModel):
+        if isinstance(m, QAbstractProxyModel):
             return m.mapToSource(m.index(row, 0)).row()
         return row
 
     def set_stretch_column(self, col: int | None):
         self._stretch_column = col
         QTimer.singleShot(0, self._apply_stretch_column)
-
-    def reapply_uniform_column_widths(self) -> None:
-        """Force one-shot recomputation of initial uniform column widths."""
-        if not self._uniform_column_widths:
-            return
-        self._uniform_applied = False
-        QTimer.singleShot(0, self._apply_uniform_column_widths)
 
     def set_default_context_menu(self):
         def build(menu: QMenu, _pos: QPoint, table: FastTable):
@@ -512,7 +735,6 @@ class FastTable(QTableView):
 
         self._context_menu_builder = build
 
-    # ---------- Model / sizing ----------
     def setModel(self, model):  # noqa: N802
         sorting = self.isSortingEnabled()
         if sorting:
@@ -525,7 +747,6 @@ class FastTable(QTableView):
             if sorting:
                 super().setSortingEnabled(True)
 
-            # disconnect old selection model
             prev = getattr(self, "_last_sel_model", None)
             if prev is not None:
                 try:
@@ -544,20 +765,14 @@ class FastTable(QTableView):
             if model is None:
                 return
 
-            # initial sizing (ONE shot only)
             if self._auto_resize_once and not self._did_initial_resize:
-                if self._uniform_column_widths:
-                    self._apply_uniform_column_widths()
-                else:
-                    # keep it cheap
-                    self._apply_min_column_widths()
+                self._apply_min_column_widths()
                 self._did_initial_resize = True
             else:
                 self._apply_min_column_widths()
 
             self._apply_stretch_column()
 
-            # refresh hover tint color from palette if installed
             if self._hover_delegate is not None:
                 self._hover_delegate.set_color(self._make_mild_tint(36))
         finally:
@@ -565,35 +780,11 @@ class FastTable(QTableView):
 
     def resizeEvent(self, ev):
         super().resizeEvent(ev)
-        if self._uniform_column_widths and self.model() and not self._uniform_applied:
-            self._apply_uniform_column_widths()
-            return
         self._grow_stretch_column_to_viewport()
 
     def showEvent(self, ev):
         super().showEvent(ev)
-        if self._uniform_column_widths and self.model() and not self._uniform_applied:
-            self._apply_uniform_column_widths()
         self._grow_stretch_column_to_viewport()
-
-    def _apply_uniform_column_widths(self) -> None:
-        model = self.model()
-        count = int(self._initial_uniform_column_count)
-        if model:
-            try:
-                count = max(count, int(model.columnCount()))
-            except Exception:
-                count = max(count, 0)
-        if count <= 0:
-            return
-        vp = self.viewport()
-        available = vp.width() if vp else self.width()
-        if available <= 0:
-            available = count * 120
-        width = max(self._min_column_width, int(available / max(1, count)))
-        for col in range(count):
-            self.setColumnWidth(col, width)
-        self._uniform_applied = True
 
     def _apply_min_column_widths(self) -> None:
         model = self.model()
@@ -645,7 +836,6 @@ class FastTable(QTableView):
         if available > cur:
             self.setColumnWidth(idx, available)
 
-    # ---------- Context menu ----------
     def contextMenuEvent(self, ev):
         if self._context_menu_builder is None:
             return super().contextMenuEvent(ev)
@@ -654,7 +844,6 @@ class FastTable(QTableView):
         if not menu.isEmpty():
             menu.exec(ev.globalPos())
 
-    # ---------- Clipboard helpers ----------
     def _copy_current_cell(self):
         idx = self.currentIndex()
         if not idx.isValid():
@@ -672,11 +861,9 @@ class FastTable(QTableView):
         texts = [str(model.index(row, c).data()) for c in range(model.columnCount())]
         QApplication.clipboard().setText("\t".join(texts))
 
-    # ---------- Signals ----------
     def _emit_sel_changed_instant(self, *_):
         self.selectionChangedInstant.emit()
 
-    # ---------- Hover internals ----------
     def _install_hover(self, alpha: int = 36):
         self._hover_delegate = HoverRowDelegate(self, self._make_mild_tint(alpha))
         self.setItemDelegate(self._hover_delegate)

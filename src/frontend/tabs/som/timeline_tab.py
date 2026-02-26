@@ -157,7 +157,7 @@ class TimelineTabWidget(QWidget):
             tint_current_selection=True,
             initial_uniform_column_widths=True,
             initial_uniform_column_count=len(TIMELINE_TABLE_COLUMNS),
-            sorting_enabled=False,
+            sorting_enabled=True,
         )
         self.timeline_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.timeline_table.set_dataframe(empty_timeline_table_dataframe(), include_index=False)

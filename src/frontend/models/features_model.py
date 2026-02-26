@@ -1,10 +1,11 @@
-
 from __future__ import annotations
 from typing import Optional
 
-import pandas as pd
-from PySide6.QtCore import QAbstractTableModel, Qt, QModelIndex, QSortFilterProxyModel
 import logging
+import numpy as np
+import pandas as pd
+
+from PySide6.QtCore import QAbstractTableModel, Qt, QModelIndex
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,12 @@ class FeaturesTableModel(QAbstractTableModel):
         if df is None:
             df = pd.DataFrame(columns=list(self.TABLE_COLUMNS))
         self._df = self._normalize_for_table(df)
+
+        # Hot-path caches (paint/sort/filter call data() a lot)
+        self._np = self._df.to_numpy(copy=False) if self._df is not None else None
+        self._disp_cache: dict[tuple[int, int], str] = {}
+
+        # Search cache for quick filter fallback / other uses
         self._search_cache: list[str] | None = None
 
     def set_dataframe(self, df: pd.DataFrame):
@@ -54,16 +61,21 @@ class FeaturesTableModel(QAbstractTableModel):
         old_columns = tuple(old_df.columns) if old_df is not None else ()
         old_shape = old_df.shape if old_df is not None else (0, 0)
         new_shape = normalized.shape
+
+        # invalidate caches
         self._search_cache = None
+        self._disp_cache.clear()
 
         # Resetting is significantly cheaper than incremental row inserts/removals for full table reloads.
         if old_shape != new_shape or old_columns != tuple(normalized.columns):
             self.beginResetModel()
             self._df = normalized
+            self._np = self._df.to_numpy(copy=False) if self._df is not None else None
             self.endResetModel()
             return
 
         self._df = normalized
+        self._np = self._df.to_numpy(copy=False) if self._df is not None else None
         if new_shape[0] > 0 and new_shape[1] > 0:
             self.dataChanged.emit(
                 self.index(0, 0),
@@ -89,51 +101,63 @@ class FeaturesTableModel(QAbstractTableModel):
             out["tags"] = [[] for _ in range(len(out))]
         return out.loc[:, list(self.TABLE_COLUMNS)]
 
-    def rowCount(self, parent=QModelIndex()) -> int:
-        # For tree models; for a flat table always return 0 for children
+    def rowCount(self, parent=QModelIndex()) -> int:  # noqa: N802
         if parent.isValid():
             return 0
-
         if self._df is None:
             return 0
+        return int(self._df.shape[0])
 
-        return self._df.shape[0]
-
-    def columnCount(self, parent=QModelIndex()) -> int:
+    def columnCount(self, parent=QModelIndex()) -> int:  # noqa: N802
         if parent.isValid():
             return 0
-
         if self._df is None:
             return 0
+        return int(self._df.shape[1])
 
-        return self._df.shape[1]
-
-    def data(self, index, role=Qt.DisplayRole):
+    def data(self, index, role=Qt.DisplayRole):  # noqa: N802
         if not index.isValid() or self._df is None:
             return None
 
         if role not in (Qt.DisplayRole, Qt.EditRole):
             return None
 
+        r, c = int(index.row()), int(index.column())
+
+        # Display cache helps a lot during repaints and sort-triggered redraws
+        if role == Qt.DisplayRole:
+            hit = self._disp_cache.get((r, c))
+            if hit is not None:
+                return hit
+
         try:
-            val = self._df.iat[index.row(), index.column()]
+            val = self._np[r, c] if self._np is not None else self._df.iat[r, c]
         except Exception:
-            # Out-of-range or other DF issue – fail gracefully
             return None
 
-        key = str(self._df.columns[index.column()]) if self._df is not None else ""
+        key = str(self._df.columns[c]) if self._df is not None else ""
         if key in {"feature_id", "lag_seconds"}:
             as_int = self._coerce_int_display(val)
             if as_int is not None:
-                return str(as_int)
+                out = str(as_int)
+                if role == Qt.DisplayRole and len(self._disp_cache) < 200_000:
+                    self._disp_cache[(r, c)] = out
+                return out
 
         if isinstance(val, (list, tuple, set)) and not val:
-            return ""
-        # Be safe with pd.isna
+            out = ""
+            if role == Qt.DisplayRole and len(self._disp_cache) < 200_000:
+                self._disp_cache[(r, c)] = out
+            return out
+
         try:
-            return "" if pd.isna(val) else str(val)
+            out = "" if pd.isna(val) else str(val)
         except Exception:
-            return str(val)
+            out = str(val)
+
+        if role == Qt.DisplayRole and len(self._disp_cache) < 200_000:
+            self._disp_cache[(r, c)] = out
+        return out
 
     def raw_value(self, row: int, column: int):
         if self._df is None:
@@ -166,10 +190,13 @@ class FeaturesTableModel(QAbstractTableModel):
         except Exception:
             return None
 
-    def headerData(self, section, orientation, role=Qt.DisplayRole):
+    def headerData(self, section, orientation, role=Qt.DisplayRole):  # noqa: N802
         if role == Qt.DisplayRole:
             if orientation == Qt.Orientation.Horizontal:
-                key = str(self._df.columns[section])
+                try:
+                    key = str(self._df.columns[section])
+                except Exception:
+                    key = str(section)
                 labels = {
                     "feature_id": "Id",
                     "name": "Name",
@@ -181,14 +208,14 @@ class FeaturesTableModel(QAbstractTableModel):
                     "notes": "Notes",
                 }
                 return labels.get(key, key)
-            else:
-                return str(section + 1)
+            return str(section + 1)
         return None
 
     def feature_payload_at(self, row: int) -> dict | None:
-        if row < 0 or row >= len(self._df):
+        if self._df is None or row < 0 or row >= len(self._df):
             return None
         r = self._df.iloc[row]
+
         def _normalize(value):
             try:
                 if pd.isna(value):
@@ -196,19 +223,22 @@ class FeaturesTableModel(QAbstractTableModel):
             except Exception:
                 logger.warning("Exception in _normalize", exc_info=True)
             return value
+
         fid = r.get("feature_id")
         try:
             feature_id = int(fid) if pd.notna(fid) else None
         except Exception:
             feature_id = None
+
         return dict(
             feature_id=feature_id,
-            name      = _normalize(r.get("name")),
-            source    = _normalize(r.get("source")),
-            unit      = _normalize(r.get("unit")),
-            type      = _normalize(r.get("type")),
-            notes     = _normalize(r.get("notes")),
-            lag_seconds = _normalize(r.get("lag_seconds")),
+            name=_normalize(r.get("name")),
+            source=_normalize(r.get("source")),
+            unit=_normalize(r.get("unit")),
+            type=_normalize(r.get("type")),
+            notes=_normalize(r.get("notes")),
+            lag_seconds=_normalize(r.get("lag_seconds")),
+            tags=_normalize(r.get("tags")),
         )
 
     def search_text_at(self, row: int) -> str:
@@ -227,9 +257,7 @@ class FeaturesTableModel(QAbstractTableModel):
             joined = safe.astype(str).agg(" ".join, axis=1).str.lower()
             self._search_cache = joined.tolist()
         except Exception:
-            self._search_cache = []
-            for _idx in range(len(self._df)):
-                self._search_cache.append("")
+            self._search_cache = [""] * len(self._df)
             for idx in range(len(self._df)):
                 try:
                     row = self._df.iloc[idx]
@@ -237,62 +265,3 @@ class FeaturesTableModel(QAbstractTableModel):
                 except Exception:
                     text = ""
                 self._search_cache[idx] = text
-
-
-class FeaturesFilterProxyModel(QSortFilterProxyModel):
-    """
-    Filter across ALL columns using case-insensitive contains.
-    """
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._needle = ""
-        self._needles: tuple[str, ...] = ()
-
-    def set_search_text(self, text: str):
-        needle = (text or "").strip().lower()
-        needles = tuple(part.strip() for part in needle.split(",") if part.strip())
-        if needle == self._needle and needles == self._needles:
-            return
-        self._needle = needle
-        self._needles = needles
-        self.invalidateFilter()
-
-    def search_text(self) -> str:
-        return self._needle
-
-    def filterAcceptsRow(self, source_row, source_parent):
-        if not self._needles:
-            return True
-        src = self.sourceModel()
-        if src is None:
-            return False
-        search_text = None
-        try:
-            search_text = src.search_text_at(source_row)
-        except Exception:
-            search_text = None
-        if search_text is not None:
-            return any(needle in search_text for needle in self._needles)
-        cols = src.columnCount()
-        for c in range(cols):
-            idx = src.index(source_row, c, source_parent)
-            val = src.data(idx, Qt.DisplayRole)
-            if val and any(needle in str(val).lower() for needle in self._needles):
-                return True
-        return False
-
-    def lessThan(self, left, right):  # noqa: N802
-        try:
-            if left.column() == 0 and right.column() == 0:
-                src = self.sourceModel()
-                if src is not None:
-                    left_data = getattr(src, "raw_value", lambda *_: None)(left.row(), left.column())
-                    right_data = getattr(src, "raw_value", lambda *_: None)(right.row(), right.column())
-                    if left_data in (None, "") and right_data not in (None, ""):
-                        return True
-                    if right_data in (None, "") and left_data not in (None, ""):
-                        return False
-                    return int(float(left_data)) < int(float(right_data))
-        except Exception:
-            pass
-        return super().lessThan(left, right)

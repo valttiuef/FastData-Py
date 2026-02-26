@@ -54,7 +54,7 @@ class SomSavedMapsDialog(QDialog):
             single_selection=True,
             editable=False,
             initial_uniform_column_widths=True,
-            sorting_enabled=False,
+            sorting_enabled=True,
         )
         self._table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._table.set_stretch_column(-1)

@@ -108,7 +108,7 @@ class SelectionsTab(TabWidget):
         self.features_table = FastTable(
             select="items",
             single_selection=False,
-            tint_current_selection=False,
+            tint_current_selection=True,
             editable=True,
             initial_uniform_column_widths=True,
             min_column_width=120,
