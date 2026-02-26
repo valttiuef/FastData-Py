@@ -54,6 +54,12 @@ class SelectionsViewModel(QObject):
     def _run_in_thread(self, func, *, on_result=None, key: object | None = None):
         run_in_thread(func, on_result=on_result, owner=self, key=key)
 
+    def _payload_with_current_global_state(self, payload: SelectionSettingsPayload) -> SelectionSettingsPayload:
+        merged = SelectionSettingsPayload.from_dict(payload.to_dict())
+        merged.filters = dict(self._database_model.selection_filters or {})
+        merged.preprocessing = dict(self._database_model.selection_preprocessing or {})
+        return merged
+
     # ------------------------------------------------------------------
     def _refresh_features(self) -> None:
         """Load and emit feature list. Call when features actually change."""
@@ -168,7 +174,9 @@ class SelectionsViewModel(QObject):
                 return
             if payload:
                 try:
-                    self._database_model.apply_selection_payload(payload)
+                    self._database_model.apply_selection_payload(
+                        self._payload_with_current_global_state(payload)
+                    )
                 except Exception:
                     logger.warning("Exception in _apply", exc_info=True)
                 self._refresh_settings()
@@ -476,10 +484,6 @@ class SelectionsViewModel(QObject):
             return
         self._active_setting_key = key
         self.active_setting_changed.emit(record if record else None)
-        try:
-            self._database_model.apply_selection_payload(record.get("payload") if record else None)
-        except Exception:
-            logger.warning("Exception in _emit_active_setting", exc_info=True)
 
     def _active_setting_key_for(self, record: Optional[dict]) -> tuple:
         if not record:

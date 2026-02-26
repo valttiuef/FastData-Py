@@ -38,6 +38,7 @@ class FiltersWidgetViewModel(QObject):
     systems_updated = Signal(list)
     datasets_updated = Signal(list)
     imports_updated = Signal(list)
+    filters_refreshed = Signal()
     groups_updated = Signal(object)
     tags_updated = Signal(list)
     group_remove_finished = Signal(object)
@@ -49,12 +50,12 @@ class FiltersWidgetViewModel(QObject):
         parent: Optional[QObject] = None,
     ) -> None:
         super().__init__(parent)
-        self._model: Optional[DatabaseModel] = None
+        self._model: Optional[DatabaseModel] = model
         self._remove_running = False
-        self._set_model(model)
-
-    def set_model(self, model: Optional[DatabaseModel]) -> None:
-        self._set_model(model)
+        if self._model is not None:
+            self._model.database_changed.connect(self._on_database_changed)
+            self._model.features_list_changed.connect(self._on_features_changed)
+            self._model.groups_changed.connect(self._on_groups_changed)
 
     def refresh_filters(self) -> None:
         model = self._model
@@ -101,6 +102,7 @@ class FiltersWidgetViewModel(QObject):
             self.groups_updated.emit(payload["groups"])
             self.tags_updated.emit(payload["tags"])
             self.imports_updated.emit(payload["imports"])
+            self.filters_refreshed.emit()
 
         run_in_thread(
             _load,
@@ -109,38 +111,6 @@ class FiltersWidgetViewModel(QObject):
             key="filters_load",
             cancel_previous=True,
         )
-
-    # ------------------------------------------------------------------
-    def _set_model(self, model: Optional[DatabaseModel]) -> None:
-        if self._model is model:
-            return
-        if self._model is not None:
-            try:
-                self._model.database_changed.disconnect(self._on_database_changed)
-            except Exception:
-                logger.warning("Exception in _set_model", exc_info=True)
-            try:
-                self._model.features_list_changed.disconnect(self._on_features_changed)
-            except Exception:
-                logger.warning("Exception in _set_model", exc_info=True)
-            try:
-                self._model.groups_changed.disconnect(self._on_groups_changed)
-            except Exception:
-                logger.warning("Exception in _set_model", exc_info=True)
-        self._model = model
-        if self._model is not None:
-            try:
-                self._model.database_changed.connect(self._on_database_changed)
-            except Exception:
-                logger.warning("Exception in _set_model", exc_info=True)
-            try:
-                self._model.features_list_changed.connect(self._on_features_changed)
-            except Exception:
-                logger.warning("Exception in _set_model", exc_info=True)
-            try:
-                self._model.groups_changed.connect(self._on_groups_changed)
-            except Exception:
-                logger.warning("Exception in _set_model", exc_info=True)
 
     def _on_database_changed(self, *_args) -> None:
         self.refresh_filters()
@@ -260,6 +230,7 @@ class FiltersWidget(CollapsibleSection):
     systems_changed = Signal()
     datasets_changed = Signal()
     imports_changed = Signal()
+    filters_refreshed = Signal()
     months_changed = Signal()
     groups_changed = Signal()
     tags_changed = Signal()
@@ -402,6 +373,7 @@ class FiltersWidget(CollapsibleSection):
         self._filters_view_model.tags_updated.connect(
             lambda items: self.set_tags(items, check_all=False)
         )
+        self._filters_view_model.filters_refreshed.connect(self.filters_refreshed.emit)
         self._filters_view_model.group_remove_finished.connect(self._on_group_remove_finished)
         self._filters_view_model.group_remove_failed.connect(self._on_group_remove_failed)
 
@@ -473,9 +445,6 @@ class FiltersWidget(CollapsibleSection):
 
     def set_tags(self, items: list[tuple[str, Any]], *, check_all: bool = True) -> None:
         self.tags_combo.set_items(items, check_all=check_all)
-
-    def set_model(self, model: Optional[DatabaseModel]) -> None:
-        self._filters_view_model.set_model(model)
 
     def refresh_filters(self) -> None:
         self._filters_view_model.refresh_filters()

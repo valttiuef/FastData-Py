@@ -34,6 +34,7 @@ Do not introduce new architectural patterns without explicit instruction.
 - Keep help content synchronized under `resources/help/**` when UI changes.
 - Keep release tab behavior aligned with `src/frontend/tabs/tab_modules.py`.
 - Respect local-first architecture. Do not introduce cloud-only dependencies.
+- When fixing issues, never suppress warnings/errors as a workaround; fix the root cause.
 
 ## DataSelectorWidget Rule (Strict)
 

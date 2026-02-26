@@ -38,10 +38,10 @@ class Sidebar(SidebarWidget):
         actions_layout.addWidget(self.save_button)
         self.set_sticky_actions(actions)
 
-        self.preprocessing_widget = PreprocessingWidget(collapsed=True, parent=self)
+        self.preprocessing_widget = PreprocessingWidget(collapsed=False, parent=self)
         layout.addWidget(self.preprocessing_widget)
 
-        self.filters_widget = FiltersWidget(collapsed=True, parent=self, model=model)
+        self.filters_widget = FiltersWidget(collapsed=False, parent=self, model=model)
         layout.addWidget(self.filters_widget)
 
         # Selection settings controls

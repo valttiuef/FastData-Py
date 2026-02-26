@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Mapping, Optional, Sequence
 
 import pandas as pd
-from PySide6.QtCore import QObject, QTimer, Signal
+from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QGroupBox, QVBoxLayout
 from ..localization import tr
 
@@ -144,35 +144,16 @@ class DataSelectorViewModel(QObject):
         self._data_model: Optional[HybridPandasModel] = None
         self._selection_refresh_pending = False
         self._selection_refresh_waiting_features_reload = False
-        self._selection_apply_timer = QTimer(self)
-        self._selection_apply_timer.setSingleShot(True)
-        self._selection_apply_timer.setInterval(140)
-        self._selection_apply_timer.timeout.connect(self._apply_selection_state_after_filters_refresh)
         self._widget.filters_changed.connect(self.filters_changed)
         self._widget.preprocessing_changed.connect(self.preprocessing_changed)
         self._widget.features_selection_changed.connect(self.features_selection_changed)
         self._widget.data_requirements_changed.connect(self.data_requirements_changed)
+        self._widget.filters_widget.filters_refreshed.connect(self._apply_selection_state_after_filters_refresh)
         self._widget.features_widget.features_reloaded.connect(self._on_features_reloaded)
-        self.set_data_model(data_model)
-
-    # ------------------------------------------------------------------
-    def set_data_model(self, model: Optional[HybridPandasModel]) -> None:
-        if self._data_model is model:
-            return
+        self._data_model = data_model
         if self._data_model is not None:
-            try:
-                self._data_model.database_changed.disconnect(self._on_database_changed)
-                self._data_model.selection_state_changed.disconnect(self._on_selection_state_changed)
-            except Exception:
-                logger.warning("Exception in set_data_model", exc_info=True)
-        self._data_model = model
-        self._widget.set_data_model(model)
-        if self._data_model is not None:
-            try:
-                self._data_model.database_changed.connect(self._on_database_changed)
-                self._data_model.selection_state_changed.connect(self._on_selection_state_changed)
-            except Exception:
-                logger.warning("Exception in set_data_model", exc_info=True)
+            self._data_model.database_changed.connect(self._on_database_changed)
+            self._data_model.selection_state_changed.connect(self._on_selection_state_changed)
         self.refresh_from_model()
 
     def refresh_from_model(self) -> None:
@@ -207,7 +188,7 @@ class DataSelectorViewModel(QObject):
             self._widget.filters_widget.refresh_filters()
         except Exception:
             logger.warning("Exception in _on_selection_state_changed", exc_info=True)
-        self._selection_apply_timer.start()
+            self._apply_selection_state_after_filters_refresh()
 
     def _apply_selection_state_after_filters_refresh(self) -> None:
         if not self._selection_refresh_pending:
@@ -234,7 +215,6 @@ class DataSelectorViewModel(QObject):
             return
         self._selection_refresh_pending = False
         self._selection_refresh_waiting_features_reload = False
-        self._selection_apply_timer.stop()
         self._widget.end_data_requirements_batch()
 
     def _apply_selection_state_to_widget(self) -> None:
@@ -369,14 +349,6 @@ class DataSelectorWidget(QGroupBox):
             return get_help_viewmodel()
         except Exception:
             return None
-
-    # ------------------------------------------------------------------
-    def set_data_model(self, model: Optional[HybridPandasModel]) -> None:
-        if self._data_model is model:
-            return
-        self._data_model = model
-        self.filters_widget.set_model(model)
-        self.features_widget._view_model.set_data_model(model)  # type: ignore[attr-defined]
 
     # ------------------------------------------------------------------
     def _on_preprocessing_changed(self, params: Mapping[str, Any]) -> None:

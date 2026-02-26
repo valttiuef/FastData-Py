@@ -42,40 +42,11 @@ class DataViewModel(QObject):
         SettingsModel + database routing. All DB access goes through this model.
         """
         super().__init__(parent)
-        self._model: Optional[HybridPandasModel] = None
-        self._set_model(model)
-
-    # ------------------------------------------------------------------
-    def _set_model(self, model: Optional[HybridPandasModel]) -> None:
-        """Swap the underlying HybridPandasModel and wire signals."""
-        if getattr(self, "_model", None) is model:
-            return
-
-        old_model = getattr(self, "_model", None)
-        if old_model is not None:
-            # Disconnect old signals
-            try:
-                old_model.progress.disconnect(self.progress.emit)
-            except Exception:
-                logger.warning("Exception in _set_model", exc_info=True)
-            try:
-                old_model.database_changed.disconnect(self._on_model_database_changed)
-            except Exception:
-                logger.warning("Exception in _set_model", exc_info=True)
-
-        self._model = model
-
+        self._model: Optional[HybridPandasModel] = model
         if self._model is not None:
             # Forward progress
-            try:
-                self._model.progress.connect(self.progress.emit)
-            except Exception:
-                logger.warning("Exception in _set_model", exc_info=True)
-            # Listen for DB path changes
-            try:
-                self._model.database_changed.connect(self._on_model_database_changed)
-            except Exception:
-                logger.warning("Exception in _set_model", exc_info=True)
+            self._model.progress.connect(self.progress.emit)
+            self._model.database_changed.connect(self._on_model_database_changed)
 
             # Initial notification with current db handle
             try:
@@ -205,4 +176,3 @@ class DataViewModel(QObject):
 
 
 __all__ = ["DataViewModel"]
-

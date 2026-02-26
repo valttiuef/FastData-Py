@@ -265,6 +265,8 @@ class PreprocessingWidget(CollapsibleSection):
     # ------------------------------------------------------------------
     def set_parameters(self, params: dict[str, Any]) -> None:
         params = params or {}
+        self._pending = None
+        self._debounce.stop()
 
         # Set timestep mode/interval to matching value if found.
         timestep_val = params.get("timestep")
@@ -359,8 +361,6 @@ class PreprocessingWidget(CollapsibleSection):
         self._set_combo_value(self.fill_combo, params.get("fill"))
         self._set_combo_value(self.agg_combo, params.get("agg"))
 
-        self.parameters_changed.emit(self.parameters())
-
     def _set_combo_value(self, combo: QComboBox, value: Any) -> None:
         if value is None:
             return
@@ -386,4 +386,3 @@ class PreprocessingWidget(CollapsibleSection):
             if combo.itemData(idx) == target:
                 combo.setCurrentIndex(idx)
                 return
-

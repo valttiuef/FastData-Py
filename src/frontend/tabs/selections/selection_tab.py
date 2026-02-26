@@ -236,12 +236,19 @@ class SelectionsTab(TabWidget):
         self.sidebar.set_setting_name(name or "")
         target_id = record.get("id") if record else None
         self._select_setting_in_list(target_id)
+        self._apply_active_selection_payload(payload)
         if self._pending_toast_action == "activate_setting":
             self._pending_toast_action = None
             try:
                 toast_success(tr("Selection setting activated."), title=tr("Selections"), tab_key="selections")
             except Exception:
                 logger.warning("Exception in _on_active_setting_changed", exc_info=True)
+
+    def _apply_active_selection_payload(self, payload: SelectionSettingsPayload) -> None:
+        try:
+            self._database_model.apply_selection_payload(SelectionSettingsPayload.from_dict(payload.to_dict()))
+        except Exception:
+            logger.warning("Exception in _apply_active_selection_payload", exc_info=True)
 
     def _select_setting_in_list(self, setting_id: Optional[int]) -> None:
         count = self.sidebar.settings_list.count()

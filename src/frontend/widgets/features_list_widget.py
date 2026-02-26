@@ -43,29 +43,12 @@ class FeaturesListWidgetViewModel(QObject):
             "import_ids": None,
             "tags": None,
         }
-        self._data_model: Optional[HybridPandasModel] = None
+        self._data_model: Optional[HybridPandasModel] = data_model
         self._use_selection_filter: bool = False  # Whether to show only selected features
-        self.set_data_model(data_model)
-
-    # ------------------------------------------------------------------
-    def set_data_model(self, model: Optional[HybridPandasModel]) -> None:
-        if self._data_model is model:
-            return
         if self._data_model is not None:
-            try:
-                self._data_model.database_changed.disconnect(self._on_database_changed)
-                self._data_model.selected_features_changed.disconnect(self._on_selected_features_changed)
-                self._data_model.features_list_changed.disconnect(self._on_features_list_changed)
-            except Exception:
-                logger.warning("Exception in set_data_model", exc_info=True)
-        self._data_model = model
-        if self._data_model is not None:
-            try:
-                self._data_model.database_changed.connect(self._on_database_changed)
-                self._data_model.selected_features_changed.connect(self._on_selected_features_changed)
-                self._data_model.features_list_changed.connect(self._on_features_list_changed)
-            except Exception:
-                logger.warning("Exception in set_data_model", exc_info=True)
+            self._data_model.database_changed.connect(self._on_database_changed)
+            self._data_model.selected_features_changed.connect(self._on_selected_features_changed)
+            self._data_model.features_list_changed.connect(self._on_features_list_changed)
         self.reload_features()
 
     def set_use_selection_filter(self, enabled: bool) -> None:
@@ -234,7 +217,6 @@ class FeaturesListWidget(QGroupBox):
         self._view_model.features_loaded.connect(self._apply_dataframe)
         self._view_model.load_failed.connect(self._log_failure)
         self._last_selection_ids: tuple[int, ...] = ()
-        self._suppress_missing_selection_warning_once = False
 
     # ------------------------------------------------------------------
     def _queue_search_text(self, text: str) -> None:
@@ -289,10 +271,6 @@ class FeaturesListWidget(QGroupBox):
         tags: Optional[Sequence[str]] = None,
         reload: bool = True,
     ) -> None:
-        if reload:
-            # Filter-driven reloads can legitimately hide currently selected features.
-            # In that case we should clear selection silently instead of showing a stale-selection error.
-            self._suppress_missing_selection_warning_once = True
         self._view_model.set_filters(
             systems=systems,
             datasets=datasets,
@@ -361,6 +339,9 @@ class FeaturesListWidget(QGroupBox):
         previous_suppression = self._suppress_selection_emit
         self._suppress_selection_emit = True
         try:
+            selection = self._table.selectionModel()
+            if selection is not None:
+                selection.clearSelection()
             try:
                 self._table_model.set_dataframe(df)
             except Exception as exc:
@@ -387,7 +368,6 @@ class FeaturesListWidget(QGroupBox):
             if (
                 previously_selected_ids
                 and not selection_restored
-                and not self._suppress_missing_selection_warning_once
             ):
                 try:
                     toast_error(
@@ -411,7 +391,6 @@ class FeaturesListWidget(QGroupBox):
 
         if self._suppress_autoselect:
             self._suppress_autoselect = False
-        self._suppress_missing_selection_warning_once = False
 
         self.features_reloaded.emit(df)
         self._queue_selection_changed()
