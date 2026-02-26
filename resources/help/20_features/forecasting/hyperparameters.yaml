@@ -1,0 +1,284 @@
+entries:
+  controls.forecasting.hyperparams.models.naive.strategy:
+    title: "Strategy (naive)"
+    short: "How the naive forecaster projects future values."
+    body: |
+      <p>Select the baseline rule used to forecast.</p>
+      <ul>
+        <li><b>last</b>: repeats the last observed value.</li>
+        <li><b>mean</b>: forecasts the historical mean.</li>
+        <li><b>drift</b>: extends the overall linear trend.</li>
+      </ul>
+
+  controls.forecasting.hyperparams.models.naive.sp:
+    title: "Seasonal period (naive)"
+    short: "Length of the seasonality cycle used by the naive model."
+    body: |
+      <p>Defines how many time steps make up one season.</p>
+      <ul>
+        <li>Use 7 for weekly seasonality on daily data, 12 for monthly seasonality on monthly data, etc.</li>
+      </ul>
+
+  controls.forecasting.hyperparams.models.theta.sp:
+    title: "Seasonal period (theta)"
+    short: "Season length used by the theta forecaster."
+    body: |
+      <p>Helps the model separate seasonality from trend when present.</p>
+      <ul>
+        <li>Set to the number of observations per season.</li>
+      </ul>
+
+  controls.forecasting.hyperparams.models.theta.deseasonalize:
+    title: "Deseasonalize (theta)"
+    short: "Remove seasonality before fitting the theta model."
+    body: |
+      <p>Enable when your series has strong seasonal patterns.</p>
+      <ul>
+        <li>If disabled, the model fits directly on the original data.</li>
+      </ul>
+
+  controls.forecasting.hyperparams.models.exp_smoothing.trend:
+    title: "Trend (exponential smoothing)"
+    short: "Type of trend component to include."
+    body: |
+      <p>Controls how the model extrapolates the long-term movement.</p>
+      <ul>
+        <li><b>add</b>: linear trend (adds the trend each step).</li>
+        <li><b>mul</b>: multiplicative trend (scales with level).</li>
+        <li><b>None</b>: no explicit trend component.</li>
+      </ul>
+
+  controls.forecasting.hyperparams.models.exp_smoothing.seasonal:
+    title: "Seasonal (exponential smoothing)"
+    short: "Seasonality mode for the exponential smoothing model."
+    body: |
+      <p>Select how seasonal patterns are modeled.</p>
+      <ul>
+        <li><b>add</b>: seasonality adds to the level.</li>
+        <li><b>mul</b>: seasonality multiplies the level.</li>
+        <li><b>None</b>: no seasonal component.</li>
+      </ul>
+
+  controls.forecasting.hyperparams.models.exp_smoothing.sp:
+    title: "Seasonal period (exponential smoothing)"
+    short: "Number of steps in one seasonal cycle."
+    body: |
+      <p>Use the length of your repeating pattern to get better seasonal fits.</p>
+
+  controls.forecasting.hyperparams.models.poly_trend.degree:
+    title: "Polynomial degree"
+    short: "Complexity of the polynomial trend."
+    body: |
+      <p>Higher degrees allow more curvature in the trend.</p>
+      <ul>
+        <li>Start with a low degree to avoid overfitting.</li>
+      </ul>
+
+  controls.forecasting.hyperparams.models.bats.use_box_cox:
+    title: "Use Box-Cox (BATS)"
+    short: "Apply a Box-Cox transform to stabilize variance."
+    body: |
+      <p>Helps when variability grows with the level of the series.</p>
+
+  controls.forecasting.hyperparams.models.bats.use_trend:
+    title: "Use trend (BATS)"
+    short: "Include a trend component in the BATS model."
+    body: |
+      <p>Enable to capture long-term upward or downward movement.</p>
+
+  controls.forecasting.hyperparams.models.bats.use_damped_trend:
+    title: "Use damped trend (BATS)"
+    short: "Dampen the trend so it flattens over time."
+    body: |
+      <p>Useful when trends should level off rather than grow indefinitely.</p>
+
+  controls.forecasting.hyperparams.models.tbats.use_box_cox:
+    title: "Use Box-Cox (TBATS)"
+    short: "Apply a Box-Cox transform to stabilize variance."
+    body: |
+      <p>Improves modeling when variance changes with the level.</p>
+
+  controls.forecasting.hyperparams.models.tbats.use_trend:
+    title: "Use trend (TBATS)"
+    short: "Include a trend component in the TBATS model."
+    body: |
+      <p>Enable to track long-term movement in the series.</p>
+
+  controls.forecasting.hyperparams.models.tbats.use_damped_trend:
+    title: "Use damped trend (TBATS)"
+    short: "Dampen the trend component over time."
+    body: |
+      <p>Prevents overly aggressive trend extrapolation.</p>
+
+  controls.forecasting.hyperparams.models.croston.smoothing:
+    title: "Smoothing (Croston)"
+    short: "Smoothing factor for intermittent demand forecasting."
+    body: |
+      <p>Controls how quickly the model reacts to new observations.</p>
+      <ul>
+        <li>Lower values smooth more, higher values respond faster.</li>
+      </ul>
+
+  controls.forecasting.hyperparams.models.ts_ridge.alpha:
+    title: "Alpha (time series ridge)"
+    short: "Regularization strength for ridge regression in time series."
+    body: |
+      <p>Higher alpha shrinks coefficients and reduces overfitting.</p>
+
+  controls.forecasting.hyperparams.models.ts_ridge.window_length:
+    title: "Window length (time series ridge)"
+    short: "Number of past steps used as features."
+    body: |
+      <p>Longer windows capture more history but increase model size.</p>
+
+  controls.forecasting.hyperparams.models.ts_ridge.strategy:
+    title: "Strategy (time series ridge)"
+    short: "How multi-step forecasts are generated."
+    body: |
+      <p>Choose between recursive, direct, or multioutput strategies.</p>
+      <ul>
+        <li><b>recursive</b>: one-step model iterated forward.</li>
+        <li><b>direct</b>: separate model per horizon step.</li>
+        <li><b>multioutput</b>: single model predicts all steps.</li>
+      </ul>
+
+  controls.forecasting.hyperparams.models.ts_lasso.alpha:
+    title: "Alpha (time series lasso)"
+    short: "Regularization strength for lasso regression."
+    body: |
+      <p>Higher alpha encourages sparse coefficients.</p>
+
+  controls.forecasting.hyperparams.models.ts_lasso.window_length:
+    title: "Window length (time series lasso)"
+    short: "Number of lagged steps used as input features."
+    body: |
+      <p>Increase to capture longer temporal dependencies.</p>
+
+  controls.forecasting.hyperparams.models.ts_lasso.strategy:
+    title: "Strategy (time series lasso)"
+    short: "Approach for multi-step forecasting."
+    body: |
+      <p>Recursive, direct, or multioutput behavior for generating horizons.</p>
+
+  controls.forecasting.hyperparams.models.ts_random_forest.n_estimators:
+    title: "Estimators (time series random forest)"
+    short: "Number of trees in the forest."
+    body: |
+      <p>More trees improve stability but increase runtime.</p>
+
+  controls.forecasting.hyperparams.models.ts_random_forest.max_depth:
+    title: "Max depth (time series random forest)"
+    short: "Maximum depth of each tree."
+    body: |
+      <p>Use <b>None</b> to allow trees to expand fully.</p>
+
+  controls.forecasting.hyperparams.models.ts_random_forest.window_length:
+    title: "Window length (time series random forest)"
+    short: "Number of historical steps turned into features."
+    body: |
+      <p>Larger windows capture more history but can add noise.</p>
+
+  controls.forecasting.hyperparams.models.ts_random_forest.strategy:
+    title: "Strategy (time series random forest)"
+    short: "How the model produces multi-step forecasts."
+    body: |
+      <p>Select recursive, direct, or multioutput forecasting.</p>
+
+  controls.forecasting.hyperparams.models.ts_random_forest.random_state:
+    title: "Random state (time series random forest)"
+    short: "Seed for the random forest training process."
+    body: |
+      <p>Set a fixed seed to make runs reproducible.</p>
+
+  controls.forecasting.hyperparams.models.ts_gradient_boosting.n_estimators:
+    title: "Estimators (time series gradient boosting)"
+    short: "Number of boosting stages."
+    body: |
+      <p>More stages can improve accuracy but increase risk of overfitting.</p>
+
+  controls.forecasting.hyperparams.models.ts_gradient_boosting.max_depth:
+    title: "Max depth (time series gradient boosting)"
+    short: "Depth of individual regression trees."
+    body: |
+      <p>Shallower trees generalize better on noisy data.</p>
+
+  controls.forecasting.hyperparams.models.ts_gradient_boosting.learning_rate:
+    title: "Learning rate (time series gradient boosting)"
+    short: "Shrinkage applied to each boosting step."
+    body: |
+      <p>Smaller values require more estimators but often generalize better.</p>
+
+  controls.forecasting.hyperparams.models.ts_gradient_boosting.window_length:
+    title: "Window length (time series gradient boosting)"
+    short: "Number of lagged steps used as input features."
+    body: |
+      <p>Increase to capture longer temporal patterns.</p>
+
+  controls.forecasting.hyperparams.models.ts_gradient_boosting.strategy:
+    title: "Strategy (time series gradient boosting)"
+    short: "Multi-step forecasting method for gradient boosting."
+    body: |
+      <p>Choose between recursive, direct, or multioutput forecasting.</p>
+
+  controls.forecasting.hyperparams.models.ts_gradient_boosting.random_state:
+    title: "Random state (time series gradient boosting)"
+    short: "Seed for model training randomness."
+    body: |
+      <p>Set to ensure reproducible results across runs.</p>
+
+  controls.forecasting.hyperparams.models.ts_mlp.hidden_layer_sizes:
+    title: "Layers (time series MLP)"
+    short: "Hidden layer sizes for the MLP regressor."
+    body: |
+      <p>Enter comma-separated sizes, e.g. <b>64,32,16</b>.</p>
+      <p>More layers increase capacity but also training time.</p>
+
+  controls.forecasting.hyperparams.models.ts_mlp.activation:
+    title: "Activation (time series MLP)"
+    short: "Activation function in hidden layers."
+    body: |
+      <p><b>relu</b> is a good default; <b>tanh</b> can smooth outputs.</p>
+
+  controls.forecasting.hyperparams.models.ts_mlp.solver:
+    title: "Solver (time series MLP)"
+    short: "Optimizer for MLP training."
+    body: |
+      <p><b>adam</b> works well for most datasets.</p>
+      <p><b>lbfgs</b> can be faster on smaller datasets.</p>
+
+  controls.forecasting.hyperparams.models.ts_mlp.alpha:
+    title: "Alpha (time series MLP)"
+    short: "L2 regularization strength."
+    body: |
+      <p>Higher values apply more weight decay to reduce overfitting.</p>
+
+  controls.forecasting.hyperparams.models.ts_mlp.learning_rate:
+    title: "Learning rate (time series MLP)"
+    short: "Learning rate schedule."
+    body: |
+      <p><b>constant</b> keeps a fixed rate.</p>
+      <p><b>adaptive</b> reduces the rate when learning stalls.</p>
+
+  controls.forecasting.hyperparams.models.ts_mlp.max_iter:
+    title: "Max iterations (time series MLP)"
+    short: "Maximum training epochs."
+    body: |
+      <p>Increase if the model fails to converge.</p>
+
+  controls.forecasting.hyperparams.models.ts_mlp.window_length:
+    title: "Window length (time series MLP)"
+    short: "Number of lagged steps used as features."
+    body: |
+      <p>Longer windows capture more history but increase model size.</p>
+
+  controls.forecasting.hyperparams.models.ts_mlp.strategy:
+    title: "Strategy (time series MLP)"
+    short: "How the MLP produces multi-step forecasts."
+    body: |
+      <p>Recursive, direct, or multioutput forecasting.</p>
+
+  controls.forecasting.hyperparams.models.ts_mlp.random_state:
+    title: "Random state (time series MLP)"
+    short: "Seed for weight initialization."
+    body: |
+      <p>Set to ensure reproducible results.</p>

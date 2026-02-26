@@ -1,0 +1,95 @@
+entries:
+  controls.regression.target:
+    title: "Target feature"
+    short: "Choose the numeric column you want the models to predict."
+    body: |
+      <p>Select exactly one <b>target feature</b>. The algorithms will try to predict this value from the input features.</p>
+      <ul>
+        <li>Only one target can be active at a time; use the dropdown to switch quickly.</li>
+        <li>Pick a continuous column (price, temperature, throughput) for best results.</li>
+        <li>Changing the target automatically updates default stratification choices where possible.</li>
+      </ul>
+
+  controls.regression.feature_selection:
+    title: "Feature selection"
+    short: "Optionally enable automatic selectors before training."
+    body: |
+      <p>Feature selectors reduce the input columns to the most informative subset.</p>
+      <ul>
+        <li>Choose one or more selectors to compare, or leave all unchecked to train with every selected feature.</li>
+        <li>Each selector may expose hyperparameters in the <b>Hyperparameters</b> section below.</li>
+        <li>Combining selectors and models multiplies the number of experiment runs.</li>
+      </ul>
+
+  controls.regression.dimensionality_reduction:
+    title: "Dimensionality reduction"
+    short: "Optionally project features into a lower-dimensional representation before modeling."
+    body: |
+      <p>Dimensionality-reduction methods transform your selected input features before the regression model is trained.</p>
+      <ul>
+        <li>You can select multiple methods; each selected method multiplies the total number of runs.</li>
+        <li>Methods run after feature selection and before the regression model.</li>
+        <li>Use this when you have many correlated or noisy inputs, or when you want a compact representation.</li>
+      </ul>
+
+  controls.regression.reducers.pca:
+    title: "PCA"
+    short: "Linear projection that keeps directions with the highest variance."
+    body: |
+      <p><b>PCA</b> transforms correlated features into orthogonal components that preserve as much variance as possible.</p>
+      <ul>
+        <li>Good baseline reducer for high-dimensional, correlated input sets.</li>
+        <li>Improves numerical stability for some regressors.</li>
+        <li>Component axes are not directly interpretable as original features.</li>
+      </ul>
+
+  controls.regression.reducers.pls_regression:
+    title: "PLSRegression"
+    short: "Supervised projection that uses both inputs and target to build latent variables."
+    body: |
+      <p><b>PLSRegression</b> finds latent components that maximize covariance between features and the target.</p>
+      <ul>
+        <li>Useful when predictors are highly collinear and target signal is weak.</li>
+        <li>Unlike PCA, it is supervised and can focus on prediction-relevant structure.</li>
+      </ul>
+
+  controls.regression.reducers.fast_ica:
+    title: "FastICA"
+    short: "Independent component analysis for separating non-Gaussian latent sources."
+    body: |
+      <p><b>FastICA</b> estimates statistically independent components instead of variance-maximizing ones.</p>
+      <ul>
+        <li>Can help when signal sources are mixed and non-Gaussian.</li>
+        <li>More sensitive to scaling and solver settings than PCA.</li>
+      </ul>
+
+  controls.regression.reducers.factor_analysis:
+    title: "FactorAnalysis"
+    short: "Latent-factor model that explains observed variables through shared factors plus noise."
+    body: |
+      <p><b>FactorAnalysis</b> models each feature as a combination of latent factors and feature-specific noise.</p>
+      <ul>
+        <li>Useful for denoising and identifying compact latent structure.</li>
+        <li>Common in domains where measurement noise is significant.</li>
+      </ul>
+
+  controls.regression.reducers.truncated_svd:
+    title: "TruncatedSVD"
+    short: "Low-rank SVD projection that works well with sparse or large matrices."
+    body: |
+      <p><b>TruncatedSVD</b> projects features onto a smaller number of singular vectors without centering.</p>
+      <ul>
+        <li>Efficient for large feature spaces and sparse data.</li>
+        <li>Often used as a scalable alternative to PCA in high dimensions.</li>
+      </ul>
+
+  controls.regression.models:
+    title: "Regression models"
+    short: "Pick the algorithms to evaluate for this experiment."
+    body: |
+      <p>Select one or more models to train on the same dataset and compare their results.</p>
+      <ul>
+        <li>Toggle multiple options to run them in parallel; results appear in the runs table, predictions table, and charts.</li>
+        <li>Model-specific settings are available under <b>Hyperparameters → Models</b>.</li>
+        <li>For quick baselines keep a simple model (e.g., Linear Regression) alongside more complex methods.</li>
+      </ul>

@@ -1,0 +1,30 @@
+entries:
+  tab.forecasting:
+    title: "Forecasting"
+    short: "Create time-series forecasts from historical data."
+    body: |
+      <p>The <b>Forecasting</b> tab focuses on time-aware modeling.</p>
+      <ul>
+        <li>Configure horizons, frequency settings, and train/test splits for temporal data.</li>
+        <li>Train forecasting models powered by scikit-learn and compare error metrics.</li>
+        <li>Visualize predicted vs. actual values to validate performance.</li>
+      </ul>
+      <p>Choose this tab for scenarios like demand planning, capacity prediction, or financial projections.</p>
+    aliases: ["forecasting.tab", "Forecasting"]
+
+  app.forecasting:
+    title: "Time Series Forecasting"
+    short: "Predict future values based on historical time series data."
+    body: |
+      <p><b>Forecasting</b> analyzes time-ordered data to predict future values.</p>
+      <p>Key concepts in time series forecasting:</p>
+      <ul>
+        <li><b>Trend</b> - Long-term increase or decrease in the data</li>
+        <li><b>Seasonality</b> - Regular patterns that repeat over fixed periods</li>
+        <li><b>Lag Features</b> - Past values used to predict future ones</li>
+        <li><b>Rolling Statistics</b> - Moving averages and other window-based features</li>
+      </ul>
+      <p>FastData uses <code>scikit-learn</code> models for forecasting, with manual time-series feature engineering and split strategies.</p>
+      <p>The previous <code>sktime</code> version is kept as a non-active reference in <code>backend/services/legacy_forecasting/forecasting_service_sktime.py</code>.</p>
+      <p>Common use cases: sales forecasting, demand prediction, financial projections.</p>
+    aliases: ["timeseries", "forecast.tab"]

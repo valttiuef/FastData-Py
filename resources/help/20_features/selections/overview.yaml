@@ -1,0 +1,16 @@
+entries:
+  tab.selections:
+    title: "Selections"
+    short: "Create reusable feature selections and filter presets."
+    body: |
+      <p>The <b>Selections</b> tab lets you curate which features to keep for downstream tasks.</p>
+      <ul>
+        <li>Toggle columns on or off to build a focused feature set.</li>
+        <li>Right-click a saved feature to convert its measurement values into database groups.</li>
+        <li>Use <b>Reload features</b> to restore the table from the database and discard unsaved edits.</li>
+        <li>Apply saved filters to limit rows before modeling.</li>
+        <li>Store multiple presets and quickly switch between them for experimentation.</li>
+        <li>Export or import selection databases to share with teammates.</li>
+      </ul>
+      <p>Adjusting selections here keeps your preprocessing and modeling steps consistent.</p>
+    aliases: ["selections.tab", "Selections"]

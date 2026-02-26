@@ -1,0 +1,17 @@
+{
+  "app_name": "FastData",
+  "product_name": "FastData",
+  "company_name": "Valtteri Tiitta",
+  "description": "Process data analysis and modeling tool",
+  "version": "0.1.0",
+  "build": "",
+  "icon_windows": "resources/icons/fastdata_icon.ico",
+  "icon_linux": null,
+  "identifier": "com.visima.fastdata",
+
+  "repo_url": "https://github.com/valttiuef/process-desktopapp",
+  "issues_url": "https://github.com/valttiuef/process-desktopapp/issues",
+  "releases_url": "https://github.com/valttiuef/process-desktopapp/releases",
+  "license": "MIT",
+  "build_channel": "release"
+}

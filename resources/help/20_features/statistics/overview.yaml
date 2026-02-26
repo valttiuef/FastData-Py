@@ -1,0 +1,13 @@
+entries:
+  tab.statistics:
+    title: "Statistics"
+    short: "Review derived statistics and prepared measurements."
+    body: |
+      <p>The <b>Statistics</b> tab focuses on validating the numbers produced from your data.</p>
+      <ul>
+        <li>Preview aggregated measurements and sanity-check values before saving them.</li>
+        <li>See how filters and preprocessing settings shape the resulting metrics.</li>
+        <li>Confirm column names, units, and sampling windows prior to exporting.</li>
+      </ul>
+      <p>This tab highlights the statistical outputs themselves, while the preprocessing widget controls how they are generated.</p>
+    aliases: ["tab.preprocessing", "preprocessing.tab", "Pre-processing"]

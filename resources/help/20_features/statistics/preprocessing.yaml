@@ -1,0 +1,66 @@
+entries:
+  app.preprocessing:
+    title: "Data Preprocessing"
+    short: "Clean and transform data before analysis."
+    body: |
+      <p><b>Preprocessing</b> is the critical step of preparing raw data for machine learning models.</p>
+      <p>Common preprocessing operations in FastData:</p>
+      <ul>
+        <li><b>Missing Value Handling</b> - Impute or remove rows with missing data</li>
+        <li><b>Normalization/Scaling</b> - Standardize feature ranges (e.g., StandardScaler, MinMaxScaler)</li>
+        <li><b>Encoding</b> - Convert categorical variables to numeric (one-hot, label encoding)</li>
+        <li><b>Outlier Removal</b> - Filter extreme values that may skew results</li>
+        <li><b>Feature Engineering</b> - Create new derived features from existing ones</li>
+      </ul>
+      <p>Proper preprocessing often has more impact on model performance than algorithm selection.</p>
+    aliases: ["preprocessing.widget", "data.cleaning"]
+
+  controls.preprocessing.timestep:
+    title: "Timestep"
+    short: "Resample data to a fixed interval or leave it on auto."
+    body: |
+      <p>Choose the interval used to resample incoming measurements.</p>
+      <ul>
+        <li><b>auto</b> keeps the native spacing of the data.</li>
+        <li>Preset values such as <b>1 minute</b> or <b>1 hour</b> resample the series to an even grid.</li>
+        <li>Enter a custom number of seconds to match an exact cadence.</li>
+      </ul>
+      <p>Resampling can make downstream statistics and charts easier to compare.</p>
+
+  controls.preprocessing.moving_average:
+    title: "Moving average"
+    short: "Smooth measurements with an optional rolling window."
+    body: |
+      <p>Applies a rolling mean over the selected window to reduce noise.</p>
+      <ul>
+        <li><b>none</b> leaves the data untouched.</li>
+        <li>Preset windows (e.g., <b>5 minutes</b>) smooth short-term spikes.</li>
+        <li>Type a custom window in seconds for finer control.</li>
+      </ul>
+      <p>Use smoothing when charts or models are sensitive to rapid fluctuations.</p>
+
+  controls.preprocessing.fill:
+    title: "Fill empty"
+    short: "Choose how to handle missing timestamps after resampling."
+    body: |
+      <p>Determines how gaps created during resampling are filled.</p>
+      <ul>
+        <li><b>none</b> leaves gaps as-is.</li>
+        <li><b>zero</b> inserts 0 for missing values.</li>
+        <li><b>prev</b> carries the previous value forward.</li>
+        <li><b>next</b> uses the next known value.</li>
+      </ul>
+      <p>Forward or backward filling is useful when signals change slowly and occasional gaps appear.</p>
+
+  controls.preprocessing.aggregation:
+    title: "Aggregation"
+    short: "Summarize multiple points that fall within a timestep."
+    body: |
+      <p>When multiple measurements land in the same resampled bucket, aggregation decides how they are combined.</p>
+      <ul>
+        <li><b>avg</b> (default) computes the mean value.</li>
+        <li><b>min</b>/<b>max</b> keep the extremes.</li>
+        <li><b>first</b>/<b>last</b> preserve ordering-sensitive data.</li>
+        <li><b>median</b> is robust against outliers.</li>
+      </ul>
+      <p>Pick the method that best matches how you would summarize overlapping readings.</p>

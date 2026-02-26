@@ -1,0 +1,180 @@
+entries:
+  controls.import.system_name:
+    title: "System name"
+    short: "Label the imported data with a system name."
+    body: |
+      <p>Choose the <b>system</b> that owns the data you are importing.</p>
+      <ul>
+        <li>Existing systems appear in the list; you can type a new name to create one.</li>
+        <li>The system is used to organize datasets and imports in the database.</li>
+      </ul>
+
+  controls.import.dataset_name:
+    title: "Dataset name"
+    short: "Attach the data to a specific dataset."
+    body: |
+      <p>Pick a <b>dataset</b> that belongs to the selected system.</p>
+      <ul>
+        <li>Use the dropdown to pick an existing dataset or type a new one.</li>
+        <li><i>&lt;Use sheet name&gt;</i> uses the Excel sheet name as the dataset value.</li>
+      </ul>
+
+  controls.import.excel_header_rows:
+    title: "Header row amount"
+    short: "Number of header rows in Excel files."
+    body: |
+      <p>Define how many rows at the top of the sheet are header rows.</p>
+      <ul>
+        <li>Use <b>0</b> if the sheet has no header row.</li>
+        <li>This setting is only used for Excel-style files.</li>
+      </ul>
+
+  controls.import.header_delimiter:
+    title: "Header delimiter"
+    short: "Split multi-part headers by a delimiter."
+    body: |
+      <p>Split header text into multiple parts using a delimiter (for example <b>"_"</b> or <b>" | "</b>).</p>
+      <ul>
+        <li>Use this when the header contains concatenated fields (e.g., <i>Temp_Outdoor_C</i>).</li>
+        <li>Leave empty to keep the header text as-is.</li>
+      </ul>
+
+  controls.import.header_base_name:
+    title: "Base name row"
+    short: "Choose which header row contains the base feature name."
+    body: |
+      <p>Select the header row that contains the base feature name (e.g., <i>Temperature</i>).</p>
+      <ul>
+        <li>Set to <b>None</b> if the file does not contain that row.</li>
+        <li>Combine with the header delimiter to split values into parts.</li>
+      </ul>
+
+  controls.import.header_stream:
+    title: "Source row"
+    short: "Select the header row for source/series labels."
+    body: |
+      <p>Use this when a header row identifies the source or series for a feature.</p>
+      <ul>
+        <li>Examples: phase identifiers or channel names.</li>
+        <li>Leave unset if the file does not include source rows.</li>
+      </ul>
+
+  controls.import.header_unit:
+    title: "Unit row"
+    short: "Select the header row containing units."
+    body: |
+      <p>Point to the header row that contains measurement units (e.g., <i>°C</i>, <i>kW</i>).</p>
+      <ul>
+        <li>Units are stored with the feature metadata.</li>
+        <li>Leave unset if units are already embedded in names.</li>
+      </ul>
+
+  controls.import.header_qualifier:
+    title: "Type row"
+    short: "Select the header row for qualifiers or annotations."
+    body: |
+      <p>Qualifiers capture extra descriptors like <i>min/max</i>, <i>status</i>, or <i>quality</i>.</p>
+      <ul>
+        <li>Use when headers include additional descriptors beyond base name and unit.</li>
+        <li>Leave unset if not applicable.</li>
+      </ul>
+
+  controls.import.force_meta_columns:
+    title: "Force meta columns"
+    short: "Treat specific columns as metadata (not measurements)."
+    body: |
+      <p>Comma-separated list of column names to force into metadata.</p>
+      <ul>
+        <li>Use this to prevent ID or label columns from becoming features.</li>
+        <li>Matching is case-insensitive.</li>
+      </ul>
+
+  controls.import.ignore_column_prefixes:
+    title: "Ignore column prefixes"
+    short: "Skip columns that start with listed prefixes."
+    body: |
+      <p>Comma-separated prefixes to ignore when importing columns.</p>
+      <ul>
+        <li>Example: <i>Time, AE_</i> will ignore columns starting with those values.</li>
+        <li>Use this to exclude helper columns from imports.</li>
+      </ul>
+
+  controls.import.date_column:
+    title: "Date column"
+    short: "Choose which column contains timestamps."
+    body: |
+      <p>Select the column that holds datetime values.</p>
+      <ul>
+        <li>Leave as <b>auto</b> to let the importer detect a timestamp column.</li>
+        <li>Set explicitly if the detection picks the wrong column.</li>
+      </ul>
+
+  controls.import.assume_dayfirst:
+    title: "Assume day-first dates"
+    short: "Interpret 03/04 as 3 April instead of 4 March."
+    body: |
+      <p>Enable this if your date strings use <b>day/month</b> order.</p>
+      <ul>
+        <li>Useful for European date formats.</li>
+        <li>Disable for US month-first formats.</li>
+      </ul>
+
+  controls.import.dot_time_as_colon:
+    title: "Dot time formatting"
+    short: "Parse 9.00 as 09:00."
+    body: |
+      <p>Convert dot-separated times to colon-separated times while parsing.</p>
+      <ul>
+        <li>Example: <i>13.47</i> becomes <i>13:47:00</i>.</li>
+        <li>Disable if dots are not used as time separators.</li>
+      </ul>
+
+  controls.import.datetime_formats:
+    title: "Datetime formats"
+    short: "Provide explicit datetime formats (optional)."
+    body: |
+      <p>Comma-separated list of strftime-compatible formats.</p>
+      <ul>
+        <li>Use <b>auto</b> to let the importer guess formats.</li>
+        <li>Supplying formats can speed up parsing and avoid ambiguities.</li>
+      </ul>
+
+  controls.import.csv_delimiter:
+    title: "CSV delimiter"
+    short: "Character used to separate CSV columns."
+    body: |
+      <p>Set the delimiter between columns (for example <b>,</b> or <b>;</b>).</p>
+      <ul>
+        <li>Leave as <b>auto</b> to let the importer detect the delimiter.</li>
+        <li>Overrides the quick guess if you enter a value.</li>
+      </ul>
+
+  controls.import.csv_decimal:
+    title: "CSV decimal"
+    short: "Decimal separator for numeric values."
+    body: |
+      <p>Specify the decimal character for numeric values.</p>
+      <ul>
+        <li>Common values are <b>.</b> and <b>,</b>.</li>
+        <li>Leave as <b>auto</b> to use the default parser behavior.</li>
+      </ul>
+
+  controls.import.csv_encoding:
+    title: "CSV encoding"
+    short: "Text encoding for CSV files."
+    body: |
+      <p>Provide an encoding name (for example <i>utf-8</i> or <i>latin-1</i>).</p>
+      <ul>
+        <li>Leave as <b>auto</b> to try common encodings automatically.</li>
+        <li>Set explicitly when you see garbled characters.</li>
+      </ul>
+
+  controls.import.use_duckdb_csv_import:
+    title: "Use DuckDB CSV import"
+    short: "Load large CSVs with DuckDB's fast parser."
+    body: |
+      <p>Enable DuckDB's CSV import pipeline for large files.</p>
+      <ul>
+        <li>Recommended for very large CSVs (100MB+).</li>
+        <li>Disable if you need strict pandas-style parsing behavior.</li>
+      </ul>

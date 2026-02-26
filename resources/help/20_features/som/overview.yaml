@@ -1,0 +1,30 @@
+entries:
+  tab.som:
+    title: "SOM"
+    short: "Explore data structure with Self-Organizing Maps."
+    body: |
+      <p>The <b>SOM</b> tab visualizes high-dimensional data on a 2D grid.</p>
+      <ul>
+        <li>Train self-organizing maps to cluster similar observations.</li>
+        <li>Inspect component planes and distance maps to spot patterns.</li>
+        <li>Experiment with map sizes and training parameters.</li>
+      </ul>
+      <p>Use this view for exploratory analysis and for identifying interesting cohorts.</p>
+    aliases: ["som.tab", "SOM"]
+
+  app.som:
+    title: "Self-Organizing Maps (SOM)"
+    short: "Unsupervised neural network for data visualization and clustering."
+    body: |
+      <p><b>Self-Organizing Maps</b> (also called Kohonen maps) are a type of artificial neural network
+      trained using unsupervised learning to produce a low-dimensional representation of the input space.</p>
+      <p>Key features:</p>
+      <ul>
+        <li><b>Dimensionality Reduction</b> - Projects high-dimensional data onto a 2D grid</li>
+        <li><b>Topology Preservation</b> - Similar data points are mapped to nearby locations</li>
+        <li><b>Clustering</b> - Automatically groups similar observations</li>
+        <li><b>Anomaly Detection</b> - Outliers appear in distant or sparse regions</li>
+      </ul>
+      <p>SOMs are particularly useful for exploratory data analysis and pattern recognition.</p>
+      <p>FastData uses the <code>MiniSom</code> library for efficient SOM computation.</p>
+    aliases: ["som.maps", "kohonen", "clustering.som"]

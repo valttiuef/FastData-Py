@@ -1,0 +1,70 @@
+entries:
+  controls.regression.cv.strategy:
+    title: "Cross-validation strategy"
+    short: "Pick how training/validation folds are built."
+    body: |
+      <p>Cross-validation helps estimate how well a model generalises. Choose a strategy that matches your data.</p>
+      <ul>
+        <li><b>No cross-validation</b>: train once on the full training set.</li>
+        <li><b>K-Fold</b>: split rows into <i>k</i> equal parts and rotate the holdout fold.</li>
+        <li><b>Stratified K-Fold</b>: like K-Fold but keeps the class/bin distribution of the chosen stratify feature.</li>
+        <li><b>Time series split</b>: preserves order by using earlier rows for training and later rows for validation.</li>
+        <li><b>Group K-Fold</b>: keep all rows from the same group in the same fold to prevent leakage.</li>
+      </ul>
+      <p>Time-series splits build expanding/rolling windows in chronological order, ignore shuffling, and can use a time gap to reduce leakage.</p>
+
+  controls.regression.cv.folds:
+    title: "Folds"
+    short: "Set how many slices to use when performing K-Fold style validation."
+    body: |
+      <p>The number of <b>folds</b> controls how many train/validation rotations are executed.</p>
+      <ul>
+        <li>Common choices are 5 or 10; higher values increase runtime but give smoother estimates.</li>
+        <li>For very small datasets keep folds low so each validation set still contains enough samples.</li>
+        <li>Time series splits always step forward through the ordered data regardless of the fold count.</li>
+      </ul>
+
+  controls.regression.cv.shuffle:
+    title: "Shuffle folds"
+    short: "Randomly reshuffle rows before forming non-time-series folds."
+    body: |
+      <p>Enable shuffling to randomise the order of records before K-Fold or Stratified K-Fold splits.</p>
+      <ul>
+        <li>Recommended when data has any temporal or grouped ordering that could bias folds.</li>
+        <li>Automatically disabled for time series validation to preserve chronological order.</li>
+        <li>Pair with a fixed random state in model parameters when you need repeatable runs.</li>
+      </ul>
+
+  controls.regression.cv.time_gap:
+    title: "Time gap"
+    short: "Skip recent observations between training and validation windows."
+    body: |
+      <p>When using the <b>Time series split</b> strategy, the gap adds a buffer between the end of the training window and the start of the validation window.</p>
+      <ul>
+        <li>Use a positive gap to avoid leakage when measurements have autocorrelation.</li>
+        <li>Set to 0 to use adjacent windows.</li>
+        <li>Time series splits never shuffle; they always move forward in time.</li>
+        <li>This setting is ignored for non-time-series strategies.</li>
+      </ul>
+
+  controls.regression.cv.stratify:
+    title: "Stratify by"
+    short: "Balance folds by matching the distribution of a feature."
+    body: |
+      <p>Select a categorical feature or the target to <b>stratify</b> K-Fold splits.</p>
+      <ul>
+        <li>Stratification keeps each fold representative when the target has few unique values or strong grouping.</li>
+        <li>Works with Stratified K-Fold and test split stratification; ignored for time series validation.</li>
+        <li>Leave empty to let the system choose the most suitable option or disable stratification.</li>
+      </ul>
+
+  controls.regression.cv.group:
+    title: "Group"
+    short: "Choose the group label used for Group K-Fold."
+    body: |
+      <p>Select a <b>group kind</b> so all rows from the same group stay in the same fold.</p>
+      <ul>
+        <li>Use this when data points are clustered by equipment, batch, site, or other group labels.</li>
+        <li>If the selected group has too few unique labels, the run falls back to K-Fold.</li>
+        <li>Only used with Group K-Fold.</li>
+      </ul>

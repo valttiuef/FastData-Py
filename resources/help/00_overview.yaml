@@ -1,0 +1,15 @@
+version: 2
+metadata:
+  app: "FastData"
+  updated: "2026-01-01"
+  description: "Context-sensitive help entries for FastData application"
+entries:
+  app.overview:
+    title: "FastData Help"
+    short: "How this help system is organized."
+    body: |
+      <p>This help content is organized to match how you work in the app.</p>
+      <ul>
+        <li><b>Basics</b> covers core concepts and definitions.</li>
+        <li><b>Features</b> groups each major workflow area and its related controls.</li>
+      </ul>

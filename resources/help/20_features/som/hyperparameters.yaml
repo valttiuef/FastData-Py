@@ -1,0 +1,77 @@
+entries:
+  controls.som.hyperparams.map_width:
+    title: "Map width"
+    short: "Horizontal size of the SOM grid (auto if left blank)."
+    body: |
+      <p><b>Map width</b> controls how many neurons the map has along the X-axis.</p>
+      <ul>
+        <li>Leave the field empty to let FastData pick a balanced width based on your dataset size (roughly <code>sqrt(5 * sqrt(N))</code>).</li>
+        <li>Enter an integer to force a specific width. Values below 2 are clamped to a minimum grid size.</li>
+        <li>Wider maps expose more local structure but require more samples to train well.</li>
+      </ul>
+
+  controls.som.hyperparams.map_height:
+    title: "Map height"
+    short: "Vertical size of the SOM grid (auto if left blank)."
+    body: |
+      <p><b>Map height</b> controls how many neurons the map has along the Y-axis.</p>
+      <ul>
+        <li>Leave it empty to reuse the automatic heuristic used for width.</li>
+        <li>Specify a value to make rectangular maps (e.g., wider than tall) when you expect directional structure.</li>
+        <li>Both width and height must be positive; the UI enforces a minimum of 2.</li>
+      </ul>
+
+  controls.som.hyperparams.sigma:
+    title: "Sigma"
+    short: "Initial neighborhood radius for SOM training."
+    body: |
+      <p><b>Sigma</b> sets how far the learning influence of a winning neuron spreads across the grid at the start of training.</p>
+      <ul>
+        <li>Larger values encourage smoother, more global organization early on.</li>
+        <li>Smaller values keep neighborhoods tight, emphasizing local differences.</li>
+        <li>The value decays during training; 6.0 is a sensible default for most datasets.</li>
+      </ul>
+
+  controls.som.hyperparams.learning_rate:
+    title: "Learning rate"
+    short: "Step size used when updating SOM weights."
+    body: |
+      <p><b>Learning rate</b> controls how quickly the map adapts to each sample.</p>
+      <ul>
+        <li>Higher values (e.g., 0.5) converge faster but can overshoot fine structure.</li>
+        <li>Lower values make training steadier at the cost of more iterations.</li>
+        <li>Learning rate decays over epochs to stabilize the final map.</li>
+      </ul>
+
+  controls.som.hyperparams.epochs:
+    title: "Epochs"
+    short: "How many training passes to run (defaults to 100)."
+    body: |
+      <p><b>Epochs</b> determines how many times the algorithm sweeps through your data.</p>
+      <ul>
+        <li>Leave at <code>0</code> or empty to use the default of 100 epochs.</li>
+        <li>More epochs improve convergence but increase training time.</li>
+        <li>If training stalls, try a few extra epochs together with a smaller learning rate.</li>
+      </ul>
+
+  controls.som.hyperparams.normalisation:
+    title: "Normalisation"
+    short: "How features are scaled before training."
+    body: |
+      <p>Scaling features keeps each variable on a comparable range.</p>
+      <ul>
+        <li><b>Z-score</b> (default) standardizes to zero mean and unit variance—best general choice.</li>
+        <li><b>Min-max</b> rescales each column to [0, 1] to preserve relative spacing.</li>
+        <li><b>None</b> skips scaling; use only when your inputs are already normalized.</li>
+      </ul>
+
+  controls.som.hyperparams.training_mode:
+    title: "Training mode"
+    short: "Choose between batch and random SOM updates."
+    body: |
+      <p>Pick the strategy used to present samples during training.</p>
+      <ul>
+        <li><b>Batch</b> (default) updates the entire map per epoch for stable, reproducible results.</li>
+        <li><b>Random</b> feeds one sample at a time in random order, which can discover sharp local structures.</li>
+        <li>If results look noisy, switch back to batch mode or increase sigma.</li>
+      </ul>

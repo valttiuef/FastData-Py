@@ -1,0 +1,123 @@
+entries:
+  app.imports:
+    title: "Files and Sheets (Imports)"
+    short: "Files/sheets are stored as imports; for users these are effectively the same thing."
+    body: |
+      <p>The first concept is the <b>import</b>. In practice, users select files and sheets, and each selected
+      file/sheet becomes an import.</p>
+      <p>Technically, an import is represented as a database table. From the user perspective, it is fine to think
+      of <b>file/sheet = import</b>.</p>
+      <p>Typical import sources:</p>
+      <ul>
+        <li>CSV files</li>
+        <li>Excel files and individual sheets</li>
+        <li>Other supported tabular sources</li>
+      </ul>
+      <p>Imports are the atomic source units that later get grouped into datasets.</p>
+    aliases: ["file.import", "imports.panel", "source.files", "files.sheets"]
+
+  app.dataset:
+    title: "Datasets"
+    short: "A dataset is a collection of one or more imports used together for analysis."
+    body: |
+      <p>A <b>dataset</b> groups related imports into one analysis scope.</p>
+      <p>One dataset can contain many imports (for example, multiple files/sheets from the same process).</p>
+      <p>The active dataset drives most work in the app: filtering, preprocessing, visualization, and modeling.</p>
+      <p>Use datasets to separate contexts like production lines, time periods, or raw vs cleaned data.</p>
+    aliases: ["dataset.panel", "data.source"]
+
+  app.system:
+    title: "Systems"
+    short: "A system contains multiple datasets and its own feature set."
+    body: |
+      <p>A <b>system</b> is a higher-level container above datasets.</p>
+      <p>Each system can hold multiple datasets, and each system owns its own feature set.</p>
+      <p>This means feature definitions are managed in system context, even when data is split across multiple
+      datasets in that same system.</p>
+      <p>Use systems to separate fundamentally different processes, plants, machines, or product families.</p>
+    aliases: ["systems", "system.scope", "data.system"]
+
+  app.features:
+    title: "Features"
+    short: "Features are columns used for analysis and modeling inside a system."
+    body: |
+      <p><b>Features</b> are the measurable variables (columns) used as model inputs or analysis dimensions.</p>
+      <p>Because systems own feature sets, feature metadata is managed consistently across datasets within the same
+      system.</p>
+      <p>For each feature, users should understand at least:</p>
+      <ul>
+        <li><b>Source</b>: where the measurement comes from (sensor, calculated field, instrument, etc.)</li>
+        <li><b>Unit</b>: physical/logical unit (for example C, bar, kg/h, %)</li>
+        <li><b>Type</b>: value type like how it was measured (statistical, raw, etc.)</li>
+      </ul>
+      <p>Clear feature metadata improves filtering, preprocessing, model quality, and interpretation.</p>
+    aliases: ["features.list", "columns", "variables"]
+
+  app.tags:
+    title: "Tags"
+    short: "Tags label features for organization, filtering, and workflow clarity."
+    body: |
+      <p><b>Tags</b> are lightweight labels you assign to features (and optionally other entities) to keep large
+      models understandable.</p>
+      <p>Typical tag examples: <i>target</i>, <i>input</i>, <i>quality</i>, <i>temperature</i>, <i>critical</i>, <i>lab</i>, <i>calculated</i>.</p>
+      <p>Use tags to:</p>
+      <ul>
+        <li>Group related features quickly</li>
+        <li>Filter feature lists for modeling or monitoring</li>
+        <li>Keep naming simple while still preserving context</li>
+      </ul>
+      <p>Tags are metadata only. They do not change raw measured values.</p>
+    aliases: ["tagging", "labels", "metadata.tags"]
+
+  app.data.flow:
+    title: "Data Flow"
+    short: "Canonical structure: files/sheets -> datasets -> systems -> features -> tags."
+    body: |
+      <p>The conceptual model is:</p>
+      <ol>
+        <li><b>Files/Sheets</b> are ingested as imports (database tables)</li>
+        <li><b>Datasets</b> group one or many imports</li>
+        <li><b>Systems</b> group multiple datasets and own feature definitions</li>
+        <li><b>Features</b> define the usable variables with source/unit/type metadata</li>
+        <li><b>Tags</b> label features for organization and filtering</li>
+      </ol>
+      <p>Operationally, you import files first, assign/group them into datasets, work inside a system context,
+      then manage features and tags for efficient analysis.</p>
+    aliases: ["data.pipeline", "workflow", "dataset.flow"]
+
+  app.target:
+    title: "Target Variable"
+    short: "The variable you want to predict or model."
+    body: |
+      <p>The <b>Target Variable</b> (also called the dependent variable or label) is what your model
+      is trying to predict.</p>
+      <p>Examples:</p>
+      <ul>
+        <li>In a sales forecasting model, the target is <i>sales amount</i></li>
+        <li>In a classification problem, the target is the <i>category or class</i></li>
+        <li>In regression, the target is a <i>continuous numeric value</i></li>
+      </ul>
+      <p>The target variable should be clearly defined before beginning model training.</p>
+    aliases: ["target.variable", "label", "dependent.variable"]
+
+  feature:*:
+    title: "Imported Feature"
+    short: "A feature column with source, unit, type, and optional tags."
+    body: |
+      <p>This is a <b>feature column</b> available in the current system/dataset context.</p>
+      <p>Check and maintain feature metadata:</p>
+      <ul>
+        <li><b>Source</b> - Origin of this feature value</li>
+        <li><b>Unit</b> - Unit of the feature value (e.g., %, $, °C)</li>
+        <li><b>Type</b> - How the feature value was measured (e.g., raw, normalized, statistical)</li>
+        <li><b>Tags</b> - Labels for grouping and filtering</li>
+      </ul>
+      <p>To use this feature effectively:</p>
+      <ul>
+        <li>Check for missing values and outliers</li>
+        <li>Understand its distribution and data type</li>
+        <li>Consider if preprocessing (scaling, encoding) is needed</li>
+        <li>Evaluate its correlation with the target variable</li>
+      </ul>
+      <p>You can view detailed statistics and visualizations for this feature in the data exploration tab.</p>
+    aliases: ["column:*", "field:*"]

@@ -1,0 +1,54 @@
+entries:
+  controls.som.timeline.chart:
+    title: "Cluster Timeline"
+    short: "Shows BMU/cluster states over time, with optional selected-feature overlays."
+    body: |
+      <p>This chart plots timeline layers selected in <b>Display</b>.</p>
+      <ul>
+        <li><b>BMU</b> shows the raw winning neuron index over time.</li>
+        <li><b>Neuron clusters</b> shows clustered neuron IDs after clustering.</li>
+        <li><b>Selected features</b> overlays scaled feature traces on top of the timeline.</li>
+        <li>Use this to spot regime shifts and align feature changes with BMU/cluster transitions.</li>
+      </ul>
+
+  controls.som.timeline.display:
+    title: "Timeline Display Layers"
+    short: "Select one or more layers: BMU, neuron clusters, and selected features."
+    body: |
+      <p>Use the Display multi-select control to choose timeline layers:</p>
+      <ul>
+        <li><b>BMU</b>: shows the raw winning neuron index over time.</li>
+        <li><b>Neuron clusters</b>: shows clustered neuron IDs after clustering.</li>
+        <li><b>Selected features</b>: overlays feature traces for currently selected features.</li>
+      </ul>
+
+  controls.som.timeline.data:
+    title: "Data Table"
+    short: "Row-level BMU assignments used by the timeline."
+    body: |
+      <p>This table lists BMU assignments for each data row.</p>
+      <ul>
+        <li>Select rows to highlight their neurons on the cluster map.</li>
+        <li>Use it to inspect specific time ranges in detail.</li>
+      </ul>
+
+  controls.som.timeline.cluster_map:
+    title: "Cluster Map"
+    short: "Neuron grid colored by cluster assignment."
+    body: |
+      <p>The cluster map colors each neuron by its cluster ID.</p>
+      <ul>
+        <li>Use it to see spatial structure in the clustering.</li>
+        <li>Click neurons to inspect specific cluster groups.</li>
+      </ul>
+
+  controls.som.timeline.save_as_timeframes:
+    title: "Save as timeframes"
+    short: "Store contiguous cluster runs as start/end ranges instead of single points."
+    body: |
+      <p>When saving timeline clusters, this option controls how group assignments are stored.</p>
+      <ul>
+        <li><b>Enabled</b>: consecutive rows with the same cluster label are merged into one timeframe range.</li>
+        <li><b>Disabled</b>: each timeline row is saved as an individual timestamp assignment.</li>
+        <li>Timeframe mode improves readability in statistics and group-based analysis by preserving segment boundaries.</li>
+      </ul>

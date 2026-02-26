@@ -1,0 +1,58 @@
+entries:
+  controls.regression.test.enable:
+    title: "Hold-out test set"
+    short: "Reserve part of the data for final evaluation."
+    body: |
+      <p>Enable the <b>test set</b> to keep a portion of data untouched during training and cross-validation.</p>
+      <ul>
+        <li>Disable when you want to use every row for cross-validation only.</li>
+        <li>Keep it enabled to report unbiased metrics on unseen data.</li>
+        <li>The reserved rows are excluded from model fitting.</li>
+      </ul>
+
+  controls.regression.test.size:
+    title: "Test size"
+    short: "Choose the fraction or fixed number of records set aside for testing."
+    body: |
+      <p>The <b>test size</b> sets how much of the dataset is held out.</p>
+      <ul>
+        <li>Use fractions like 0.2 to reserve 20% of rows.</li>
+        <li>Use integers like 200 to reserve a fixed number of rows.</li>
+        <li>Typical fractional values range from 0.2 to 0.3 for balanced datasets.</li>
+        <li>Use a smaller fraction when data is scarce, or larger when you expect heavy model tuning.</li>
+        <li>Values outside the slider range can be typed directly when necessary.</li>
+      </ul>
+
+  controls.regression.test.strategy:
+    title: "Test split strategy"
+    short: "Control how rows are separated into train and test sets."
+    body: |
+      <p>Pick a strategy that matches the nature of your data.</p>
+      <ul>
+        <li><b>Random</b>: shuffle rows before splitting into train/test according to the chosen size.</li>
+        <li><b>Time ordered</b>: keep chronological order by placing the earliest rows in training and later rows in testing.</li>
+        <li><b>Stratified</b>: preserve the distribution of the selected stratify feature in both sets.</li>
+      </ul>
+      <p>Strategies that rely on stratification will use the selected feature and binning settings below.</p>
+
+  controls.regression.test.stratify:
+    title: "Test stratification"
+    short: "Balance the test split using a target or helper feature."
+    body: |
+      <p>Select a feature to <b>stratify</b> the test split when using the Stratified strategy.</p>
+      <ul>
+        <li>Use the target for imbalanced regression targets or choose another categorical field.</li>
+        <li>Continuous targets are discretised into bins using the setting below before splitting.</li>
+        <li>Leave empty to disable stratification even if the strategy allows it.</li>
+      </ul>
+
+  controls.regression.test.bins:
+    title: "Stratify bins"
+    short: "Set how many buckets to create when stratifying continuous values."
+    body: |
+      <p>When the stratify field contains continuous numbers, the values are bucketed into <b>bins</b> to enable stratified sampling.</p>
+      <ul>
+        <li>Higher bin counts capture more detail but require larger datasets to keep buckets populated.</li>
+        <li>Start with 5 bins for most targets; increase if you have plenty of records.</li>
+        <li>Has no effect when stratifying by categorical features.</li>
+      </ul>

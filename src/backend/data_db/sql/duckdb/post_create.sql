@@ -1,0 +1,2 @@
+-- backend/sql/duckdb/post_create.sql
+-- Intentionally left minimal; add optional pragmas here if needed.

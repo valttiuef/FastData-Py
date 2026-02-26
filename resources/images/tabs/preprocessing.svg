@@ -1,0 +1,9 @@
+<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <title>Preprocessing</title>
+  <path d="M5 7H19" stroke="#2563EB" stroke-width="1.6" stroke-linecap="round"/>
+  <path d="M5 12H19" stroke="#0EA5E9" stroke-width="1.6" stroke-linecap="round"/>
+  <path d="M5 17H19" stroke="#F59E0B" stroke-width="1.6" stroke-linecap="round"/>
+  <circle cx="9" cy="7" r="2.05" fill="#DBEAFE" stroke="#2563EB" stroke-width="1.2"/>
+  <circle cx="14.2" cy="12" r="2.05" fill="#E0F2FE" stroke="#0EA5E9" stroke-width="1.2"/>
+  <circle cx="11.2" cy="17" r="2.05" fill="#FEF3C7" stroke="#F59E0B" stroke-width="1.2"/>
+</svg>

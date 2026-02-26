@@ -1,0 +1,71 @@
+entries:
+  controls.statistics.actions:
+    title: "Statistics actions"
+    short: "Run the computation and store results when you are happy with them."
+    body: |
+      <p>Use these buttons to generate and persist the statistics previewed in this tab.</p>
+      <ul>
+        <li><b>Gather statistics</b> executes the selected statistics with the current filters, mode, and preprocessing settings.</li>
+        <li><b>Save to database</b> writes the last computed preview into the database so it can be reused in other tabs.</li>
+        <li>Run again any time you tweak filters, periods, or selected statistics to refresh the preview.</li>
+      </ul>
+
+  controls.statistics.metrics:
+    title: "Statistics to compute"
+    short: "Pick the summary measures calculated for each time bucket or group."
+    body: |
+      <p>Select one or more statistics to include in the output. Each choice adds a column to the preview and saved results.</p>
+      <ul>
+        <li><b>Average</b> (avg/mean): mean value of the samples.</li>
+        <li><b>Minimum</b> / <b>Maximum</b>: smallest or largest observation.</li>
+        <li><b>Median</b>: middle value that is robust to outliers.</li>
+        <li><b>Std Dev</b>: spread of the samples around the mean.</li>
+        <li><b>Sum</b>: total of all values in the bucket.</li>
+        <li><b>Count</b>: number of rows contributing to the statistic.</li>
+        <li><b>Interquartile Range</b> (IQR): difference between the 75th and 25th percentiles.</li>
+        <li><b>Outliers (3σ %)</b>: percentage of points that land three standard deviations from the mean.</li>
+        <li><b>Max derivative</b>: largest absolute change between consecutive samples.</li>
+      </ul>
+      <p>Pick only what you need to keep previews fast; you can always rerun with more metrics.</p>
+
+  controls.statistics.mode:
+    title: "Aggregation mode"
+    short: "Choose whether to aggregate over time or by a specific column."
+    body: |
+      <ul>
+        <li><b>Time based</b> groups measurements into regular periods using the <b>Statistics period</b> setting.</li>
+        <li><b>Group by column</b> ignores time buckets and instead aggregates by the values of the chosen <b>Group column</b>.</li>
+      </ul>
+      <p>Switching modes changes how the preview table and chart summarize your data.</p>
+
+  controls.statistics.group_column:
+    title: "Group column"
+    short: "Pick the categorical column that defines each group in column mode."
+    body: |
+      <p>Available options come from the dataset and only apply when <b>Group by column</b> is selected.</p>
+      <ul>
+        <li>Choose identifiers like <b>system</b>, <b>dataset</b>, or any other categorical field.</li>
+        <li>Each distinct value becomes its own row or bar in the preview.</li>
+        <li>Leave the dropdown empty in time-based mode—the control is disabled automatically.</li>
+      </ul>
+
+  controls.statistics.period:
+    title: "Statistics period"
+    short: "Define the window used for time-based aggregation."
+    body: |
+      <p>Time-based mode buckets records into regular windows before applying your chosen statistics.</p>
+      <ul>
+        <li><b>hourly</b>, <b>daily</b>, <b>weekly</b>, <b>monthly</b>: convenient presets that translate to fixed second intervals.</li>
+        <li><b>custom</b>: enter a number of seconds in <b>Custom period (s)</b> to match your own cadence.</li>
+        <li>Pick a shorter window for fine-grained trends or a longer one for smoother, aggregate views.</li>
+      </ul>
+
+  controls.statistics.separate_timeframes:
+    title: "Separate timeframes"
+    short: "Choose whether group-kind statistics are split by each saved timeframe segment."
+    body: |
+      <p>This setting applies when using <b>Group by column</b> with a database group kind (for example <b>group:som_cluster</b>).</p>
+      <ul>
+        <li><b>Enabled</b>: each saved timeframe segment is treated as its own group bucket.</li>
+        <li><b>Disabled</b>: all rows with the same group label are merged into one bucket, regardless of timeframe segments.</li>
+      </ul>

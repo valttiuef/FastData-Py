@@ -1,0 +1,14 @@
+entries:
+  tab.data:
+    title: "Data"
+    short: "Load datasets and browse their contents."
+    body: |
+      <p>The <b>Data</b> tab is the starting point for working with FastData.</p>
+      <ul>
+        <li>Connect to DuckDB/DB files and pick the active table.</li>
+        <li>Preview rows with paging to verify that the dataset loaded correctly.</li>
+        <li>Inspect schema information such as column names, data types, and row counts.</li>
+        <li>Refresh or swap datasets without restarting the application.</li>
+      </ul>
+      <p>Use this tab to confirm your source data looks correct before you create selections or train models.</p>
+    aliases: ["data.tab", "Data"]

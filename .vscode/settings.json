@@ -1,0 +1,75 @@
+{
+  // =============================
+  // FILE & SEARCH EXCLUDES
+  // =============================
+  "files.exclude": {
+    "**/.venv-linux": true,
+    "**/.venv-windows": true,
+    "**/.venv-osx": true,
+    "**/env": true,
+    "**/__pycache__": true,
+    "**/.vs": true,
+    "**/build": true
+  },
+
+  "search.exclude": {
+    "**/.venv-linux": true,
+    "**/.venv-windows": true,
+    "**/.venv-osx": true,
+    "**/env": true,
+    "**/__pycache__": true,
+    "**/.vs": true,
+    "**/dist": true,
+    "**/build": true
+  },
+
+  "python.analysis.exclude": [
+    "**/.venv-linux",
+    "**/.venv-windows",
+    "**/.venv-osx",
+    "**/env",
+    "**/__pycache__",
+    "**/.vs",
+    "**/assets",
+    "**/dist",
+    "**/build"
+  ],
+
+  // =============================
+  // PYTHON ENVIRONMENT SETTINGS
+  // =============================
+  "python.terminal.activateEnvironment": true,
+
+  // Default for Linux/macOS
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv-linux/bin/python",
+
+  // Platform-specific override for Windows
+  "[windows]": {
+    "python.defaultInterpreterPath": "${workspaceFolder}\\.venv-windows\\Scripts\\python.exe"
+  },
+  
+  "[osx]": {
+    "python.defaultInterpreterPath": "${workspaceFolder}/.venv-osx/bin/python"
+  },
+
+  // =============================
+  // EDITOR / FORMATTER SETTINGS
+  // =============================
+  "[python]": {
+    "editor.defaultFormatter": "ms-python.python",
+    "editor.formatOnSave": true,
+    "editor.formatOnPaste": true,
+    "editor.codeActionsOnSave": {
+      "source.organizeImports": "always"
+    }
+  },
+
+  // =============================
+  // LINTING & TESTING
+  // =============================
+  "python.linting.enabled": true,
+  "python.linting.pylintEnabled": true,
+  "python.testing.pytestEnabled": true,
+  "python.testing.unittestEnabled": false,
+  "python-envs.pythonProjects": [],
+}

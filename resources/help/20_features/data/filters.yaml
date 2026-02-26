@@ -1,0 +1,66 @@
+entries:
+  app.filters:
+    title: "Data Filters"
+    short: "Apply conditions to subset your dataset."
+    body: |
+      <p><b>Filters</b> allow you to select specific rows from your dataset based on conditions.</p>
+      <p>Use filters to:</p>
+      <ul>
+        <li>Focus on specific time periods</li>
+        <li>Exclude outliers or invalid data</li>
+        <li>Analyze specific categories or groups</li>
+        <li>Compare subsets of data</li>
+      </ul>
+      <p>Filters can be combined using AND/OR logic for complex queries.</p>
+      <p>Filtered data is used for all downstream analysis and visualizations.</p>
+    aliases: ["filter.widget", "data.filter"]
+
+  controls.filters.systems_datasets:
+    title: "Systems and datasets"
+    short: "Scope results by system and dataset in one place."
+    body: |
+      <p>Use these selectors together to narrow the data to specific systems and the datasets they contain.</p>
+      <ul>
+        <li>Check multiple systems or datasets to compare them side by side.</li>
+        <li>Leave either list empty to include every option for that category.</li>
+        <li>Combine both filters to isolate behavior for chosen datasets within selected systems.</li>
+      </ul>
+
+  controls.filters.date_range:
+    title: "Date range"
+    short: "Limit data between a start and end timestamp."
+    body: |
+      <p>Pick a starting and ending date/time to bound the records that are loaded, previewed, and charted.</p>
+      <ul>
+        <li>Set only the start to include everything after that point.</li>
+        <li>Set only the end to include everything up to that timestamp.</li>
+        <li>Leave both empty to include the full available history.</li>
+      </ul>
+
+  controls.filters.months_groups:
+    title: "Months and groups"
+    short: "Filter by calendar months and predefined groups."
+    body: |
+      <p>Select calendar months to focus on seasonal patterns, and choose database groups to restrict which entities are processed.</p>
+      <ul>
+        <li>Pick multiple months to compare seasons such as winter vs. summer.</li>
+        <li>Combine month and group filters to study specific cohorts during chosen periods.</li>
+        <li>Leave a list empty to include all options for that filter.</li>
+      </ul>
+
+  controls.filters.imports_tags:
+    title: "Imports and tags"
+    short: "Filter by selected imports and feature tags together."
+    body: |
+      <p>Use <b>Imports</b> to restrict data to specific ingestion events in the currently selected dataset.</p>
+      <ul>
+        <li>Each import entry corresponds to a file ingestion (file name + import timestamp).</li>
+        <li>Select one or many imports to compare runs or isolate a single load.</li>
+        <li>Leave imports empty to include all imports in scope.</li>
+      </ul>
+      <p>Use <b>Tags</b> to filter which features are available/selected for analysis.</p>
+      <ul>
+        <li>Tags are feature metadata labels (for example, domain or equipment class).</li>
+        <li>Select multiple tags to include features that match those labels.</li>
+        <li>Combine imports + tags to narrow both rows (data provenance) and columns (feature set).</li>
+      </ul>

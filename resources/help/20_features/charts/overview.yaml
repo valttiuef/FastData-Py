@@ -1,0 +1,15 @@
+entries:
+  tab.charts:
+    title: "Charts"
+    short: "Visualize your dataset with quick plots."
+    body: |
+      <p>The <b>Charts</b> tab provides fast visual feedback on your data.</p>
+      <ul>
+        <li>Create common plots such as histograms, scatter plots, and correlations.</li>
+        <li>Use selections and filters to focus charts on specific subsets.</li>
+        <li>Pick a target feature and run <b>Find feature correlations</b> to auto-build:
+          a top-20 correlation bar chart plus 3 scatter charts for the strongest matches.</li>
+        <li>Compare relationships between variables before modeling.</li>
+      </ul>
+      <p>Use charts to spot trends, outliers, and data quality issues early.</p>
+    aliases: ["charts.tab", "Charts"]

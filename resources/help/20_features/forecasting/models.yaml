@@ -1,0 +1,32 @@
+entries:
+  controls.forecasting.models:
+    title: "Forecasting models"
+    short: "Pick one or more algorithms to run for each selected feature."
+    body: |
+      <p>Select the models to include in the experiment. Each option offers different strengths:</p>
+      <ul>
+        <li><b>Naive</b> – simple baselines using the last value, mean, or drift trend.</li>
+        <li><b>Theta</b> – decomposes the series and extrapolates a flexible trend component.</li>
+        <li><b>Exponential Smoothing</b> – configurable trend/seasonality smoothing (additive or multiplicative).</li>
+        <li><b>Polynomial Trend</b> – fits a low-degree polynomial to capture smooth long-term movements.</li>
+        <li><b>BATS</b> – Box-Cox transform with ARMA errors, trend, and seasonality support.</li>
+        <li><b>TBATS</b> – BATS extended with multiple seasonal periods and trigonometric components.</li>
+        <li><b>Croston</b> – designed for intermittent demand with sporadic non-zero observations.</li>
+        <li><b>Time Series Ridge/Lasso Regression</b> – reduction to tabular regression with sliding windows.</li>
+        <li><b>Time Series Random Forest</b> – ensemble of decision trees for non-linear relationships.</li>
+        <li><b>Time Series Gradient Boosting</b> – boosted trees for strong accuracy on complex patterns.</li>
+        <li><b>Time Series MLP</b> – neural network regressor for nonlinear temporal patterns.</li>
+      </ul>
+      <p>Run several models together to compare metrics and pick the best-performing approach.</p>
+
+  controls.forecasting.target:
+    title: "Target feature"
+    short: "Optional exogenous target for time series regression models."
+    body: |
+      <p>Select a target feature when using regression-based forecasters (ridge, lasso, random forest, gradient boosting).</p>
+      <ul>
+        <li>Leave blank for univariate forecasts where each feature predicts itself.</li>
+        <li>Choose a single target to train models that learn relationships from multiple inputs to one output.</li>
+        <li>The target is included in preprocessing so scaling or filtering stays consistent.</li>
+      </ul>
+      <p>Only one target can be active at a time; deselect it to return to univariate mode.</p>

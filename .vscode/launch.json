@@ -1,0 +1,18 @@
+{
+  "version": "0.1.0",
+  "configurations": [
+    {
+      "name": "Debug FastData",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/app.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "justMyCode": true,
+      "env": { "QT_DEVICE_PIXEL_RATIO": "auto" },
+      "linux":   { "python": "${workspaceFolder}/.venv-linux/bin/python" },
+      "osx":     { "python": "${workspaceFolder}/.venv-osx/bin/python" },
+      "windows": { "python": "${workspaceFolder}\\.venv-windows\\Scripts\\python.exe" }
+    }
+  ]
+}

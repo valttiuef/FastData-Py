@@ -1,0 +1,648 @@
+entries:
+  controls.regression.hyperparams.models.linear_regression.fit_intercept:
+    title: "Fit intercept"
+    short: "Include an intercept term in the linear regression model."
+    body: |
+      <p>When enabled, the model learns a bias term in addition to feature weights.</p>
+      <ul>
+        <li>Disable only when your features are already centered around zero.</li>
+        <li>The intercept shifts predictions up or down without changing slopes.</li>
+      </ul>
+
+  controls.regression.hyperparams.models.linear_regression.positive:
+    title: "Positive coefficients"
+    short: "Constrain coefficients to be non-negative."
+    body: |
+      <p>Forces all learned weights to be positive, which can help with interpretability.</p>
+      <ul>
+        <li>Use when negative contributions are not meaningful for your data.</li>
+        <li>Constraint can reduce flexibility and slightly slow down fitting.</li>
+      </ul>
+
+  controls.regression.hyperparams.models.ridge.alpha:
+    title: "Alpha (ridge)"
+    short: "Regularization strength for ridge regression."
+    body: |
+      <p>Higher values apply stronger L2 penalty and reduce coefficient magnitude.</p>
+      <ul>
+        <li>Start small and increase if the model overfits.</li>
+        <li>Very large values can underfit by shrinking weights too much.</li>
+      </ul>
+
+  controls.regression.hyperparams.models.ridge.solver:
+    title: "Ridge solver"
+    short: "Numerical method used to fit ridge regression."
+    body: |
+      <p>Select a solver to match dataset size and stability requirements.</p>
+      <ul>
+        <li>auto chooses a sensible default.</li>
+        <li>svd and cholesky are good for dense data.</li>
+        <li>lsqr, sparse_cg, sag, and saga handle large datasets.</li>
+        <li>lbfgs supports constrained or sparse scenarios.</li>
+        <li>sag and saga typically benefit from standardized features.</li>
+      </ul>
+
+  controls.regression.hyperparams.models.ridge.random_state:
+    title: "Random state (ridge)"
+    short: "Seed for solver randomness where applicable."
+    body: |
+      <p>Set a fixed value to make the ridge solution reproducible.</p>
+      <p>Only affects solvers that rely on stochastic optimization.</p>
+
+  controls.regression.hyperparams.models.lasso.alpha:
+    title: "Alpha (lasso)"
+    short: "Regularization strength for lasso regression."
+    body: |
+      <p>Higher values apply stronger L1 penalty and promote sparsity.</p>
+      <p>Too much regularization can drive useful coefficients to zero.</p>
+
+  controls.regression.hyperparams.models.lasso.max_iter:
+    title: "Max iterations (lasso)"
+    short: "Maximum optimizer steps before stopping."
+    body: |
+      <p>Increase if you see convergence warnings or unstable results.</p>
+      <p>Larger datasets or high regularization may require more iterations.</p>
+
+  controls.regression.hyperparams.models.lasso.random_state:
+    title: "Random state (lasso)"
+    short: "Seed for solver randomness."
+    body: |
+      <p>Fix this value to make lasso results repeatable.</p>
+      <p>Applies when the optimizer uses random coordinate selection.</p>
+
+  controls.regression.hyperparams.models.elastic_net.alpha:
+    title: "Alpha (elastic net)"
+    short: "Regularization strength for elastic net."
+    body: |
+      <p>Controls the combined L1/L2 penalty magnitude.</p>
+      <p>Increase to shrink coefficients more aggressively.</p>
+
+  controls.regression.hyperparams.models.elastic_net.l1_ratio:
+    title: "L1 ratio"
+    short: "Balance between L1 and L2 penalties."
+    body: |
+      <p>0.0 is pure ridge (L2), 1.0 is pure lasso (L1).</p>
+      <p>Intermediate values blend sparsity with coefficient shrinkage.</p>
+
+  controls.regression.hyperparams.models.elastic_net.max_iter:
+    title: "Max iterations (elastic net)"
+    short: "Maximum optimizer steps before stopping."
+    body: |
+      <p>Increase if convergence is slow or unstable.</p>
+      <p>Higher values can improve accuracy on large feature sets.</p>
+
+  controls.regression.hyperparams.models.elastic_net.random_state:
+    title: "Random state (elastic net)"
+    short: "Seed for solver randomness."
+    body: |
+      <p>Fix this value to reproduce elastic net results.</p>
+      <p>Only relevant when the optimizer is stochastic.</p>
+
+  controls.regression.hyperparams.models.polynomial_regression.degree:
+    title: "Polynomial degree"
+    short: "Degree of polynomial features."
+    body: |
+      <p>Higher degrees allow more complex curves but can overfit.</p>
+      <p>Degrees 2-3 are common starting points for nonlinear trends.</p>
+
+  controls.regression.hyperparams.models.polynomial_regression.fit_intercept:
+    title: "Fit intercept (polynomial)"
+    short: "Include a bias term in the polynomial model."
+    body: |
+      <p>Enable unless your features are centered around zero.</p>
+      <p>Disable if you already include a bias feature in preprocessing.</p>
+
+  controls.regression.hyperparams.models.random_forest.n_estimators:
+    title: "Number of trees (random forest)"
+    short: "How many trees to build in the forest."
+    body: |
+      <p>More trees improve stability but increase runtime.</p>
+      <p>Accuracy gains diminish once the forest is large enough.</p>
+
+  controls.regression.hyperparams.models.random_forest.max_depth:
+    title: "Max depth (random forest)"
+    short: "Limit the depth of each tree."
+    body: |
+      <p>Use <b>None</b> to expand until all leaves are pure or minimal.</p>
+      <p>Shallower trees reduce variance but may underfit.</p>
+
+  controls.regression.hyperparams.models.random_forest.min_samples_split:
+    title: "Min samples split (random forest)"
+    short: "Minimum samples required to split a node."
+    body: |
+      <p>Higher values reduce overfitting.</p>
+      <p>Set as a count or fraction of the training samples.</p>
+
+  controls.regression.hyperparams.models.random_forest.min_samples_leaf:
+    title: "Min samples leaf (random forest)"
+    short: "Minimum samples required in a leaf node."
+    body: |
+      <p>Higher values smooth the model and reduce variance.</p>
+      <p>Set as a count or fraction for larger datasets.</p>
+
+  controls.regression.hyperparams.models.random_forest.random_state:
+    title: "Random state (random forest)"
+    short: "Seed for the bootstrap and feature selection."
+    body: |
+      <p>Fix this value for repeatable forests.</p>
+      <p>Helps compare runs when tuning other parameters.</p>
+
+  controls.regression.hyperparams.models.extra_trees.n_estimators:
+    title: "Number of trees (extra trees)"
+    short: "How many extra trees to build."
+    body: |
+      <p>More trees improve stability but increase runtime.</p>
+      <p>Extra Trees are more randomized, so more estimators help.</p>
+
+  controls.regression.hyperparams.models.extra_trees.max_depth:
+    title: "Max depth (extra trees)"
+    short: "Limit the depth of each tree."
+    body: |
+      <p>Use <b>None</b> to expand until all leaves are pure or minimal.</p>
+      <p>Lower depths reduce variance and improve generalization.</p>
+
+  controls.regression.hyperparams.models.extra_trees.min_samples_split:
+    title: "Min samples split (extra trees)"
+    short: "Minimum samples required to split a node."
+    body: |
+      <p>Higher values reduce overfitting.</p>
+      <p>Set as a count or fraction of the training samples.</p>
+
+  controls.regression.hyperparams.models.extra_trees.min_samples_leaf:
+    title: "Min samples leaf (extra trees)"
+    short: "Minimum samples required in a leaf node."
+    body: |
+      <p>Higher values smooth the model and reduce variance.</p>
+      <p>Larger leaves can help with noisy measurements.</p>
+
+  controls.regression.hyperparams.models.extra_trees.random_state:
+    title: "Random state (extra trees)"
+    short: "Seed for randomized splits."
+    body: |
+      <p>Fix this value for repeatable results.</p>
+      <p>Controls the randomness of feature and split selection.</p>
+
+  controls.regression.hyperparams.models.gradient_boosting.n_estimators:
+    title: "Boosting stages"
+    short: "Number of boosting stages to perform."
+    body: |
+      <p>More stages can improve accuracy but raise risk of overfitting.</p>
+      <p>Pair with a smaller learning rate for smoother training.</p>
+
+  controls.regression.hyperparams.models.gradient_boosting.learning_rate:
+    title: "Learning rate (gradient boosting)"
+    short: "Shrinkage applied to each boosting step."
+    body: |
+      <p>Smaller values require more estimators but can generalize better.</p>
+      <p>Larger values converge faster but risk overshooting.</p>
+
+  controls.regression.hyperparams.models.gradient_boosting.max_depth:
+    title: "Max depth (gradient boosting)"
+    short: "Depth of individual regression trees."
+    body: |
+      <p>Shallow trees reduce variance but may underfit.</p>
+      <p>Depth 2-4 is common for stable boosting models.</p>
+
+  controls.regression.hyperparams.models.gradient_boosting.min_samples_split:
+    title: "Min samples split (gradient boosting)"
+    short: "Minimum samples required to split a node."
+    body: |
+      <p>Higher values reduce model variance.</p>
+      <p>Set as a count or fraction of the training samples.</p>
+
+  controls.regression.hyperparams.models.gradient_boosting.min_samples_leaf:
+    title: "Min samples leaf (gradient boosting)"
+    short: "Minimum samples required in a leaf node."
+    body: |
+      <p>Higher values improve generalization on noisy data.</p>
+      <p>Larger leaves produce smoother predictions.</p>
+
+  controls.regression.hyperparams.models.gradient_boosting.random_state:
+    title: "Random state (gradient boosting)"
+    short: "Seed for the boosting process."
+    body: |
+      <p>Fix this value for repeatable results.</p>
+      <p>Ensures the same subsampling order where applicable.</p>
+
+  controls.regression.hyperparams.models.adaboost.n_estimators:
+    title: "Number of estimators (AdaBoost)"
+    short: "Number of weak learners to combine."
+    body: |
+      <p>More estimators can improve accuracy but increase runtime.</p>
+      <p>Too many stages can overfit noisy data.</p>
+
+  controls.regression.hyperparams.models.adaboost.learning_rate:
+    title: "Learning rate (AdaBoost)"
+    short: "Contribution of each weak learner."
+    body: |
+      <p>Lower values require more estimators to reach the same performance.</p>
+      <p>Higher values can overemphasize errors and reduce stability.</p>
+
+  controls.regression.hyperparams.models.adaboost.random_state:
+    title: "Random state (AdaBoost)"
+    short: "Seed for boosting randomness."
+    body: |
+      <p>Fix this value for repeatable results.</p>
+      <p>Helps compare parameter tweaks consistently.</p>
+
+  controls.regression.hyperparams.models.svr.kernel:
+    title: "Kernel (SVR)"
+    short: "Kernel function used by support vector regression."
+    body: |
+      <p>Choose the kernel that best matches the data shape.</p>
+      <ul>
+        <li>rbf for nonlinear relationships.</li>
+        <li>linear for linear trends.</li>
+        <li>poly for polynomial curves.</li>
+        <li>sigmoid for neural-like boundaries.</li>
+        <li>Scale features when using rbf, poly, or sigmoid kernels.</li>
+      </ul>
+
+  controls.regression.hyperparams.models.svr.c:
+    title: "Regularization (C)"
+    short: "Penalty for errors in SVR."
+    body: |
+      <p>Higher values fit the training data more closely.</p>
+      <p>Too high can overfit; too low can underfit.</p>
+
+  controls.regression.hyperparams.models.svr.epsilon:
+    title: "Epsilon (SVR)"
+    short: "Margin of tolerance in the loss function."
+    body: |
+      <p>Higher values ignore small errors and create a smoother fit.</p>
+      <p>Larger epsilon usually yields fewer support vectors.</p>
+
+  controls.regression.hyperparams.models.knn.n_neighbors:
+    title: "Number of neighbors (KNN)"
+    short: "How many neighbors to average for predictions."
+    body: |
+      <p>Lower values fit locally; higher values smooth predictions.</p>
+      <p>Odd numbers can reduce tie votes in classification-like data.</p>
+
+  controls.regression.hyperparams.models.knn.weights:
+    title: "Weights (KNN)"
+    short: "Weighting strategy for neighbors."
+    body: |
+      <ul>
+        <li>uniform treats all neighbors equally.</li>
+        <li>distance gives closer neighbors more influence.</li>
+        <li>Distance weighting benefits from scaled features.</li>
+      </ul>
+
+  controls.regression.hyperparams.models.knn.algorithm:
+    title: "Algorithm (KNN)"
+    short: "Search algorithm for nearest neighbors."
+    body: |
+      <ul>
+        <li>auto selects based on data size.</li>
+        <li>ball_tree and kd_tree are optimized for structured data.</li>
+        <li>brute checks all points directly.</li>
+        <li>High-dimensional data often defaults to brute force.</li>
+      </ul>
+
+  controls.regression.hyperparams.models.decision_tree.max_depth:
+    title: "Max depth (decision tree)"
+    short: "Limit the depth of the tree."
+    body: |
+      <p>Use <b>None</b> to expand until all leaves are pure or minimal.</p>
+      <p>Shallower trees are easier to interpret but may underfit.</p>
+
+  controls.regression.hyperparams.models.decision_tree.min_samples_split:
+    title: "Min samples split (decision tree)"
+    short: "Minimum samples required to split a node."
+    body: |
+      <p>Higher values reduce overfitting.</p>
+      <p>Set as a count or fraction of the training samples.</p>
+
+  controls.regression.hyperparams.models.decision_tree.min_samples_leaf:
+    title: "Min samples leaf (decision tree)"
+    short: "Minimum samples required in a leaf node."
+    body: |
+      <p>Higher values smooth predictions and improve generalization.</p>
+      <p>Use larger leaves for noisy or sparse datasets.</p>
+
+  controls.regression.hyperparams.models.decision_tree.random_state:
+    title: "Random state (decision tree)"
+    short: "Seed for randomized splits."
+    body: |
+      <p>Fix this value for repeatable trees.</p>
+      <p>Useful when comparing depth or split settings.</p>
+
+  controls.regression.hyperparams.models.mlp.hidden_layer_sizes:
+    title: "Layers (MLP)"
+    short: "Sizes of the hidden layers for the neural network."
+    body: |
+      <p>Enter comma-separated sizes, e.g. <b>64,32,16</b> for three layers.</p>
+      <p>More layers and neurons increase capacity but can overfit.</p>
+
+  controls.regression.hyperparams.models.mlp.activation:
+    title: "Activation (MLP)"
+    short: "Activation function used in hidden layers."
+    body: |
+      <p><b>relu</b> is a strong default; <b>tanh</b> can help with bounded data.</p>
+
+  controls.regression.hyperparams.models.mlp.solver:
+    title: "Solver (MLP)"
+    short: "Optimizer used to train the network."
+    body: |
+      <p><b>adam</b> is robust for most datasets.</p>
+      <p><b>lbfgs</b> can converge faster on smaller datasets.</p>
+
+  controls.regression.hyperparams.models.mlp.alpha:
+    title: "Alpha (MLP)"
+    short: "L2 regularization strength for the network."
+    body: |
+      <p>Higher values apply stronger weight decay.</p>
+
+  controls.regression.hyperparams.models.mlp.learning_rate:
+    title: "Learning rate schedule (MLP)"
+    short: "How the learning rate evolves during training."
+    body: |
+      <p><b>constant</b> uses a fixed rate.</p>
+      <p><b>adaptive</b> reduces the rate when progress stalls.</p>
+
+  controls.regression.hyperparams.models.mlp.max_iter:
+    title: "Max iterations (MLP)"
+    short: "Maximum training epochs."
+    body: |
+      <p>Increase if the model stops before converging.</p>
+
+  controls.regression.hyperparams.models.mlp.random_state:
+    title: "Random state (MLP)"
+    short: "Seed for weight initialization."
+    body: |
+      <p>Fix this value for repeatable runs.</p>
+
+  controls.regression.hyperparams.selectors.variance_threshold.threshold:
+    title: "Variance threshold"
+    short: "Remove features with variance below this threshold."
+    body: |
+      <p>Use higher values to drop low-variance features.</p>
+      <p>A threshold of 0 removes only constant features.</p>
+
+  controls.regression.hyperparams.selectors.select_k_best.k:
+    title: "Number of features (Select K Best)"
+    short: "Pick the top K features by score."
+    body: |
+      <p>Choose <b>All</b> to keep every feature.</p>
+      <p>Lower values enforce more aggressive feature selection.</p>
+
+  controls.regression.hyperparams.selectors.mutual_info.k:
+    title: "Number of features (Mutual Info)"
+    short: "Pick the top K features by mutual information."
+    body: |
+      <p>Choose <b>All</b> to keep every feature.</p>
+      <p>Use smaller K to focus on the strongest nonlinear signals.</p>
+
+  controls.regression.hyperparams.selectors.mutual_info.random_state:
+    title: "Random state (Mutual Info)"
+    short: "Seed for mutual information estimation."
+    body: |
+      <p>Fix this value for repeatable scores.</p>
+      <p>Important when comparing ranking stability.</p>
+
+  controls.regression.hyperparams.selectors.random_forest_importance.threshold:
+    title: "Importance threshold (Random Forest)"
+    short: "Minimum importance required to keep a feature."
+    body: |
+      <p>Use <b>median</b>, <b>mean</b>, or a numeric value.</p>
+      <p>Features below the threshold are removed from the dataset.</p>
+
+  controls.regression.hyperparams.selectors.random_forest_importance.n_estimators:
+    title: "Number of trees (RF importance)"
+    short: "How many trees to build for importance scores."
+    body: |
+      <p>More trees give more stable importance estimates.</p>
+      <p>Smaller values run faster but increase variance.</p>
+
+  controls.regression.hyperparams.selectors.random_forest_importance.random_state:
+    title: "Random state (RF importance)"
+    short: "Seed for the importance estimator."
+    body: |
+      <p>Fix this value for repeatable importances.</p>
+      <p>Useful when comparing thresholds.</p>
+
+  controls.regression.hyperparams.selectors.extra_trees_importance.threshold:
+    title: "Importance threshold (Extra Trees)"
+    short: "Minimum importance required to keep a feature."
+    body: |
+      <p>Use <b>median</b>, <b>mean</b>, or a numeric value.</p>
+      <p>Higher thresholds keep only the most influential features.</p>
+
+  controls.regression.hyperparams.selectors.extra_trees_importance.n_estimators:
+    title: "Number of trees (Extra Trees importance)"
+    short: "How many trees to build for importance scores."
+    body: |
+      <p>More trees give more stable importance estimates.</p>
+      <p>Extra Trees are noisy, so more estimators help stability.</p>
+
+  controls.regression.hyperparams.selectors.extra_trees_importance.random_state:
+    title: "Random state (Extra Trees importance)"
+    short: "Seed for the importance estimator."
+    body: |
+      <p>Fix this value for repeatable importances.</p>
+      <p>Helps compare threshold values consistently.</p>
+
+  controls.regression.hyperparams.selectors.gradient_boosting_importance.threshold:
+    title: "Importance threshold (Gradient Boosting)"
+    short: "Minimum importance required to keep a feature."
+    body: |
+      <p>Use <b>median</b>, <b>mean</b>, or a numeric value.</p>
+      <p>Higher values prune more aggressive feature sets.</p>
+
+  controls.regression.hyperparams.selectors.gradient_boosting_importance.n_estimators:
+    title: "Number of estimators (GB importance)"
+    short: "How many estimators to build for importance scores."
+    body: |
+      <p>More estimators give more stable importance estimates.</p>
+      <p>Pair with smaller learning rates for stability.</p>
+
+  controls.regression.hyperparams.selectors.gradient_boosting_importance.random_state:
+    title: "Random state (GB importance)"
+    short: "Seed for the importance estimator."
+    body: |
+      <p>Fix this value for repeatable importances.</p>
+      <p>Use when comparing thresholds across runs.</p>
+
+  controls.regression.hyperparams.selectors.rfe_ridge.n_features_to_select:
+    title: "Features to select (RFE)"
+    short: "Target number of features to keep."
+    body: |
+      <p>Use <b>None</b> to keep half the features by default.</p>
+      <p>Smaller targets yield more aggressive reduction.</p>
+
+  controls.regression.hyperparams.selectors.rfe_ridge.step:
+    title: "Features removed per step (RFE)"
+    short: "How many features to eliminate each iteration."
+    body: |
+      <p>Smaller steps are more precise but take longer.</p>
+      <p>Use larger steps for faster but coarser selection.</p>
+
+  controls.regression.hyperparams.selectors.rfe_ridge.random_state:
+    title: "Random state (RFE)"
+    short: "Seed for randomized estimator behavior."
+    body: |
+      <p>Fix this value for repeatable selection.</p>
+      <p>Helps verify if rankings are stable across runs.</p>
+
+  controls.regression.hyperparams.reducers.pca.n_components:
+    title: "PCA components"
+    short: "How many principal components to keep."
+    body: |
+      <p>Use <b>None</b> to keep all components.</p>
+      <p>Lower values reduce dimensionality more aggressively.</p>
+
+  controls.regression.hyperparams.reducers.pca.svd_solver:
+    title: "PCA solver"
+    short: "Algorithm used to compute principal components."
+    body: |
+      <p><b>auto</b> picks a reasonable solver based on data shape.</p>
+      <p><b>full</b> uses a deterministic full SVD.</p>
+      <p><b>arpack</b> computes a truncated decomposition.</p>
+      <p><b>randomized</b> is faster for large datasets but stochastic.</p>
+
+  controls.regression.hyperparams.reducers.pca.whiten:
+    title: "Whiten components"
+    short: "Scale components to unit variance."
+    body: |
+      <p>Whitening can help some models but may amplify noise.</p>
+      <p>Keep it off unless you have a specific reason to enable it.</p>
+
+  controls.regression.hyperparams.reducers.pca.random_state:
+    title: "Random state (PCA)"
+    short: "Seed for randomized PCA behavior."
+    body: |
+      <p>Fix this value when using the randomized solver to reproduce results.</p>
+
+  controls.regression.hyperparams.reducers.pls_regression.n_components:
+    title: "Components (PLSRegression)"
+    short: "Number of latent variables to keep."
+    body: |
+      <p>Higher values capture more signal but increase model complexity.</p>
+      <p>Keep this below the effective rank of your input data.</p>
+
+  controls.regression.hyperparams.reducers.pls_regression.scale:
+    title: "Scale data (PLSRegression)"
+    short: "Standardize X and y inside the PLS step."
+    body: |
+      <p>Enable in most cases unless inputs are already consistently scaled.</p>
+
+  controls.regression.hyperparams.reducers.pls_regression.max_iter:
+    title: "Max iterations (PLSRegression)"
+    short: "Maximum iterations for the NIPALS solver."
+    body: |
+      <p>Increase if convergence warnings occur.</p>
+
+  controls.regression.hyperparams.reducers.pls_regression.tol:
+    title: "Tolerance (PLSRegression)"
+    short: "Convergence tolerance for iterative updates."
+    body: |
+      <p>Lower tolerance can improve precision but may require more iterations.</p>
+
+  controls.regression.hyperparams.reducers.fast_ica.n_components:
+    title: "Components (FastICA)"
+    short: "Number of independent components to estimate."
+    body: |
+      <p>Use <b>None</b> to infer based on feature count.</p>
+
+  controls.regression.hyperparams.reducers.fast_ica.algorithm:
+    title: "Algorithm (FastICA)"
+    short: "Parallel or deflation update strategy."
+    body: |
+      <p><b>parallel</b> estimates components together; <b>deflation</b> extracts one by one.</p>
+
+  controls.regression.hyperparams.reducers.fast_ica.whiten:
+    title: "Whiten mode (FastICA)"
+    short: "Whitening behavior before ICA optimization."
+    body: |
+      <p><b>unit-variance</b> is a robust default for regression pipelines.</p>
+
+  controls.regression.hyperparams.reducers.fast_ica.fun:
+    title: "Contrast function (FastICA)"
+    short: "Nonlinearity used to estimate non-Gaussian components."
+    body: |
+      <p><b>logcosh</b> is usually stable; try others when decomposition quality is poor.</p>
+
+  controls.regression.hyperparams.reducers.fast_ica.max_iter:
+    title: "Max iterations (FastICA)"
+    short: "Maximum iterations before stopping."
+    body: |
+      <p>Increase if ICA fails to converge.</p>
+
+  controls.regression.hyperparams.reducers.fast_ica.tol:
+    title: "Tolerance (FastICA)"
+    short: "Stopping tolerance for ICA updates."
+    body: |
+      <p>Lower values enforce stricter convergence.</p>
+
+  controls.regression.hyperparams.reducers.fast_ica.random_state:
+    title: "Random state (FastICA)"
+    short: "Seed for ICA initialization."
+    body: |
+      <p>Fix this value for reproducible components.</p>
+
+  controls.regression.hyperparams.reducers.factor_analysis.n_components:
+    title: "Components (FactorAnalysis)"
+    short: "Number of latent factors."
+    body: |
+      <p>Use <b>None</b> to infer from input dimensionality.</p>
+
+  controls.regression.hyperparams.reducers.factor_analysis.svd_method:
+    title: "SVD method (FactorAnalysis)"
+    short: "Backend used during factor estimation."
+    body: |
+      <p><b>randomized</b> is faster on large data; <b>lapack</b> is deterministic.</p>
+
+  controls.regression.hyperparams.reducers.factor_analysis.iterated_power:
+    title: "Iterated power (FactorAnalysis)"
+    short: "Power iterations used in randomized SVD."
+    body: |
+      <p>Higher values can improve approximation quality.</p>
+
+  controls.regression.hyperparams.reducers.factor_analysis.rotation:
+    title: "Rotation (FactorAnalysis)"
+    short: "Optional factor rotation for interpretability."
+    body: |
+      <p>Use <b>None</b> for unrotated factors, or <b>varimax/quartimax</b> for rotated solutions.</p>
+
+  controls.regression.hyperparams.reducers.factor_analysis.tol:
+    title: "Tolerance (FactorAnalysis)"
+    short: "Convergence tolerance."
+    body: |
+      <p>Lower values require stricter convergence.</p>
+
+  controls.regression.hyperparams.reducers.factor_analysis.random_state:
+    title: "Random state (FactorAnalysis)"
+    short: "Seed for randomized solver components."
+    body: |
+      <p>Set for reproducible randomized runs.</p>
+
+  controls.regression.hyperparams.reducers.truncated_svd.n_components:
+    title: "Components (TruncatedSVD)"
+    short: "Number of singular vectors to keep."
+    body: |
+      <p>Higher values preserve more information but reduce compression.</p>
+
+  controls.regression.hyperparams.reducers.truncated_svd.algorithm:
+    title: "Algorithm (TruncatedSVD)"
+    short: "Solver for truncated decomposition."
+    body: |
+      <p><b>randomized</b> is efficient for large matrices; <b>arpack</b> can be more precise.</p>
+
+  controls.regression.hyperparams.reducers.truncated_svd.n_iter:
+    title: "Power iterations (TruncatedSVD)"
+    short: "Additional iterations for randomized solver accuracy."
+    body: |
+      <p>Increase when singular value gaps are small.</p>
+
+  controls.regression.hyperparams.reducers.truncated_svd.tol:
+    title: "Tolerance (TruncatedSVD)"
+    short: "Convergence tolerance for ARPACK solver."
+    body: |
+      <p>Mostly relevant when using <b>arpack</b>.</p>
+
+  controls.regression.hyperparams.reducers.truncated_svd.random_state:
+    title: "Random state (TruncatedSVD)"
+    short: "Seed for randomized solver."
+    body: |
+      <p>Fix to make randomized decompositions reproducible.</p>

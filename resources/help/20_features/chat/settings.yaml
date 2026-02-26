@@ -1,0 +1,41 @@
+entries:
+  chat.settings.provider:
+    title: "LLM provider"
+    short: "Choose the backend that powers chat replies."
+    body: |
+      <p>Select which provider handles the chat requests sent from the chat window.</p>
+      <ul>
+        <li><b>ChatGPT (OpenAI)</b> uses OpenAI-hosted models and requires an API key.</li>
+        <li><b>Ollama (Local)</b> runs models on your machine without an API key.</li>
+      </ul>
+      <p>Helpful links:</p>
+      <ul>
+        <li><a href="https://chat.openai.com/">ChatGPT</a> and <a href="https://platform.openai.com/">OpenAI API</a></li>
+        <li><a href="https://ollama.com/">Ollama</a> and <a href="https://ollama.com/download">install instructions</a></li>
+      </ul>
+      <p>If you want more guidance, use <b>Ask from AI</b> below to send this topic to the chat window.</p>
+
+  chat.settings.model_name:
+    title: "Model name"
+    short: "Enter the model identifier for the selected provider."
+    body: |
+      <p>Provide the exact model name your provider expects.</p>
+      <ul>
+        <li>OpenAI examples: <code>gpt-4o-mini</code>, <code>gpt-4o</code>, <code>gpt-3.5-turbo</code></li>
+        <li>Ollama examples: <code>llama3.2</code>, <code>mistral</code>, <code>codellama</code></li>
+      </ul>
+      <p>Browse model lists:</p>
+      <ul>
+        <li><a href="https://platform.openai.com/docs/models">OpenAI model catalog</a></li>
+        <li><a href="https://ollama.com/library">Ollama model library</a></li>
+      </ul>
+      <p>You can click <b>Ask from AI</b> below for help choosing a model.</p>
+
+  chat.settings.api_key:
+    title: "OpenAI API key"
+    short: "Add your OpenAI key for ChatGPT/OpenAI access."
+    body: |
+      <p>This key is only required for the ChatGPT (OpenAI) provider.</p>
+      <p>Create or manage keys at <a href="https://platform.openai.com/api-keys">OpenAI API keys</a>.</p>
+      <p>If you do not have a key yet, sign in and generate one, then paste it here.</p>
+      <p>Use <b>Ask from AI</b> below if you want step-by-step guidance.</p>

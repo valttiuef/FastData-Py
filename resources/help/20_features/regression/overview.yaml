@@ -1,0 +1,29 @@
+entries:
+  tab.regression:
+    title: "Regression"
+    short: "Build and evaluate regression models."
+    body: |
+      <p>The <b>Regression</b> tab guides you through training models for continuous targets.</p>
+      <ul>
+        <li>Select algorithms, hyperparameters, and cross-validation settings.</li>
+        <li>Train models on the current selection and preprocessing pipeline.</li>
+        <li>Review metrics and compare runs to pick the best performer.</li>
+      </ul>
+      <p>Use this tab when predicting numeric outcomes such as prices, temperatures, or measurements.</p>
+    aliases: ["regression.tab", "Regression"]
+
+  app.regression:
+    title: "Regression Analysis"
+    short: "Build predictive models to estimate continuous values."
+    body: |
+      <p><b>Regression</b> is a statistical method for modeling the relationship between a dependent variable 
+      and one or more independent variables (features).</p>
+      <p>FastData supports multiple regression algorithms including:</p>
+      <ul>
+        <li><b>Linear Regression</b> - Simple, interpretable baseline</li>
+        <li><b>Ridge/Lasso</b> - Regularized linear models to prevent overfitting</li>
+        <li><b>Random Forest</b> - Ensemble method for complex non-linear relationships</li>
+        <li><b>Gradient Boosting</b> - Advanced ensemble technique for best performance</li>
+      </ul>
+      <p>Use regression when your target variable is continuous (e.g., price, temperature, sales volume).</p>
+    aliases: ["model.regression", "regression.tab"]

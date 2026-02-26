@@ -1,0 +1,18 @@
+entries:
+  app.model.selection:
+    title: "Model Selection"
+    short: "Choose the best algorithm for your prediction task."
+    body: |
+      <p><b>Model Selection</b> is the process of choosing the most appropriate machine learning
+      algorithm for your specific problem.</p>
+      <p>Key considerations:</p>
+      <ul>
+        <li><b>Problem Type</b> - Regression, classification, clustering, or forecasting?</li>
+        <li><b>Data Size</b> - Some algorithms work better with small vs. large datasets</li>
+        <li><b>Interpretability</b> - Do you need to explain predictions? (Linear models > Neural networks)</li>
+        <li><b>Performance Metrics</b> - Use cross-validation to compare models objectively</li>
+        <li><b>Training Time</b> - Balance accuracy vs. computational cost</li>
+      </ul>
+      <p>FastData provides automatic model selection tools to help you find the best fit.</p>
+    aliases: ["model.choice", "algorithm.selection"]
+

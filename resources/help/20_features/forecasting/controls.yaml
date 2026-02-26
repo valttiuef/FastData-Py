@@ -1,0 +1,36 @@
+entries:
+  controls.forecasting.horizon:
+    title: "Forecast horizon"
+    short: "How many future time steps to predict in each run."
+    body: |
+      <p>The <b>horizon</b> sets how far ahead each model predicts.</p>
+      <ul>
+        <li>Use a small horizon (e.g., 1–24 steps) for near-term monitoring.</li>
+        <li>Larger horizons extend the forecast further but usually increase uncertainty.</li>
+        <li>Match the value to your reporting cadence (steps follow the dataset's sampling).</li>
+      </ul>
+      <p>Models will generate this many points for every feature you selected.</p>
+
+  controls.forecasting.window_strategy:
+    title: "Window strategy"
+    short: "Pick how training and validation windows move through the series."
+    body: |
+      <p>Choose the cross-validation style used while fitting time-series models.</p>
+      <ul>
+        <li><b>Single Train/Test Split</b> – one hold-out split; fastest baseline.</li>
+        <li><b>Sliding Window</b> – fixed-size training window that slides forward to mimic rolling forecasts.</li>
+        <li><b>Expanding Window</b> – training window grows over time to reuse all past observations.</li>
+      </ul>
+      <p>Sliding windows are good when concept drift is likely; expanding windows favor stability.</p>
+
+  controls.forecasting.initial_window:
+    title: "Initial window size"
+    short: "Length of the first training window (auto when set to Auto)."
+    body: |
+      <p>Controls how many observations are used before the first forecast window.</p>
+      <ul>
+        <li><b>Auto</b> picks a reasonable size based on the horizon and model defaults.</li>
+        <li>Provide a positive integer to force a specific training length.</li>
+        <li>Use smaller windows for rapidly changing signals; larger windows for long-term patterns.</li>
+      </ul>
+      <p>This applies to sliding and expanding strategies; the single split uses the full training span.</p>

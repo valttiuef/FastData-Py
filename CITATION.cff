@@ -1,0 +1,46 @@
+cff-version: 1.2.0
+title: "FastData"
+message: "If you use this software in research, please cite it. FastData relies on established scientific Python libraries for machine learning and self-organizing maps; please cite them separately where appropriate."
+type: software
+
+authors:
+  - family-names: "Tiitta"
+    given-names: "Valtteri"
+    email: "valtti@uef.fi"
+
+version: "0.1.0"
+date-released: "2026-02-06"
+
+repository-code: "https://github.com/valttiuef/process-desktopapp"
+url: "https://github.com/valttiuef/process-desktopapp"
+
+keywords:
+  - Data Analysis
+  - PySide6
+  - DuckDB
+  - SQLite
+  - scikit-learn
+  - MiniSom
+  - SOM
+  - Regression
+  - Machine Learning
+
+references:
+  - type: software
+    title: "scikit-learn: Machine Learning in Python"
+    authors:
+      - family-names: "Pedregosa"
+        given-names: "Fabian"
+    year: 2011
+    url: "https://scikit-learn.org"
+
+  - type: software
+    title: "MiniSom: minimalistic and NumPy-based implementation of the Self Organizing Map"
+    authors:
+      - family-names: "Vettigli"
+        given-names: "Giuseppe"
+    url: "https://github.com/JustGlowing/minisom"
+
+  - type: other
+    title: "Visima project (context where the software was developed; no endorsement implied)"
+    institution: "University of Eastern Finland"

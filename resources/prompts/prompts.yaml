@@ -1,0 +1,60 @@
+# Application Prompts Configuration
+# This file contains all AI prompt templates used throughout the application.
+# Users can edit these prompts to customize AI responses without modifying code.
+
+version: "1.0"
+metadata:
+  description: "AI Prompt Templates for FastData"
+  last_updated: "2025-01-01"
+
+# Feature Analysis Prompts
+# Used when analyzing selected features
+features:
+  analyze:
+    guidance: |
+      You are an expert data analyst. Use the provided feature summary to explain 
+      what each feature likely represents and call out noteworthy patterns. If no 
+      explicit question is provided, infer helpful insights from the labels and statistics.
+    instructions: |
+      Feature context (editable by user):
+      {summary_text}
+      
+      Respond in natural language with concise, actionable observations.
+
+# SOM Analysis Prompts
+# Used when analyzing SOM component planes and special maps
+som_maps:
+  analyze:
+    guidance: |
+      You are an expert in Self-Organizing Maps (SOM). Use the provided map summary 
+      to explain what the map shows, highlight notable regions, and suggest follow-up 
+      questions or comparisons the user could explore.
+    instructions: |
+      SOM context (editable by user):
+      {summary_text}
+      
+      Respond in clear, actionable language.
+
+# Model run analysis prompts
+model_details:
+  analyze:
+    guidance: |
+      You are an expert ML engineer. Use the provided model run details to summarize
+      performance, highlight anomalies, and suggest follow-up experiments or questions.
+    instructions: |
+      Model run context (editable by user):
+      {summary_text}
+      
+      Provide clear, actionable insights and note any risks or retraining steps.
+
+# Help System Prompts
+# Used for progressive help topic explanations
+help:
+  steps:
+    - "Provide a concise overview of the subject below."
+    - "Add more detail and practical guidance about the subject."
+    - "Give deeper explanations with examples for the subject."
+    - "Highlight edge cases, pitfalls, and tips for the subject."
+    - "Summarize the subject with actionable next steps and references."
+  
+  footer: "Explain in plain language so the user can act on it."

@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "FastData"
+version = "0.1.0"
+description = "Desktop process data analysis and modeling tool developed in the Visima project at UEF."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [
+  { name="Valtteri Tiitta", email="valtti@uef.fi" }
+]
+maintainers = [
+  { name="Valtteri Tiitta" }
+]
+keywords = ["data-analysis", "pyside6", "duckdb", "visima", "uef", "som", "regression"]
+
+dependencies = [
+  # GUI
+  "PySide6==6.10.2",
+  "PySide6-Addons==6.10.2",
+
+  # Data stack
+  "duckdb==1.4.4",
+  "pandas==3.0.0",
+  "numpy==2.4.2",
+
+  # Machine learning
+  "MiniSom==2.3.5",
+  "scikit-learn==1.8.0",
+
+  # LLM
+  "openai==2.17.0",
+  "ollama==0.6.1",
+  "keyring==25.7.0",
+
+  # Excel readers
+  "openpyxl==3.1.5",
+
+  # Help system
+  "PyYAML==6.0.3",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[project.optional-dependencies]
+timeseries = [
+  "sktime==0.40.1",
+  "numpy==2.3.3",
+  "pandas==2.3.3",
+]

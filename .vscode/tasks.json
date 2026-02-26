@@ -1,0 +1,161 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build EXE with Spec File",
+      "type": "shell",
+      "windows": {
+        "command": "${workspaceFolder}\\.venv-windows\\Scripts\\pyinstaller.exe"
+      },
+      "linux": {
+        "command": "${workspaceFolder}/.venv-linux/bin/pyinstaller"
+      },
+      "osx": {
+        "command": "${workspaceFolder}/.venv-osx/bin/pyinstaller"
+      },
+      "args": [
+        "--noconfirm",
+        "--clean",
+        "--distpath", "${workspaceFolder}\\dist",
+        "--workpath", "${workspaceFolder}\\build",
+        "main.spec"
+      ],
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": [],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared",
+        "close": true
+      }
+    },
+    {
+      "label": "Setup Python env",
+      "type": "process",
+      "windows": {
+        "command": "pwsh",
+        "args": [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          "${workspaceFolder}\\scripts\\setup.ps1"
+        ]
+      },
+      "linux": { "command": "./scripts/setup.sh" },
+      "osx": { "command": "./scripts/setup.sh" },
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Build Installer (Inno Setup)",
+      "type": "process",
+      "windows": {
+        "command": "pwsh",
+        "args": [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          "${workspaceFolder}\\scripts\\build-windows-installer.ps1"
+        ]
+      },
+      "options": { "cwd": "${workspaceFolder}" },
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Build App + Installer (Windows)",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "Generate Third-Party Licenses",
+        "Build EXE with Spec File",
+        "Build Installer (Inno Setup)"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Generate Third-Party Licenses",
+      "type": "shell",
+      "windows": {
+        "command": "${workspaceFolder}\\.venv-windows\\Scripts\\python.exe",
+        "args": [
+          "-m","piplicenses",
+          "--format=html",
+          "--with-authors","--with-urls","--with-license-file","--no-license-path",
+          "--output-file","${workspaceFolder}\\resources\\licenses\\third_party_licenses.html"
+        ]
+      },
+      "linux": {
+        "command": "${workspaceFolder}/.venv-linux/bin/python",
+        "args": [
+          "-m","piplicenses",
+          "--format=html",
+          "--with-authors","--with-urls","--with-license-file","--no-license-path",
+          "--output-file","${workspaceFolder}/resources/licenses/third_party_licenses.html"
+        ]
+      },
+      "osx": {
+        "command": "${workspaceFolder}/.venv-osx/bin/python",
+        "args": [
+          "-m","piplicenses",
+          "--format=html",
+          "--with-authors","--with-urls","--with-license-file","--no-license-path",
+          "--output-file","${workspaceFolder}/resources/licenses/third_party_licenses.html"
+        ]
+      },
+      "options": { "cwd": "${workspaceFolder}" },
+      "presentation": { "reveal": "always", "panel": "shared", "close": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "Generate Help Docs",
+      "type": "shell",
+      "windows": {
+        "command": "${workspaceFolder}\\.venv-windows\\Scripts\\python.exe",
+        "args": [
+          "${workspaceFolder}\\scripts\\build_help_docs.py"
+        ]
+      },
+      "linux": {
+        "command": "${workspaceFolder}/.venv-linux/bin/python",
+        "args": [
+          "${workspaceFolder}/scripts/build_help_docs.py"
+        ]
+      },
+      "osx": {
+        "command": "${workspaceFolder}/.venv-osx/bin/python",
+        "args": [
+          "${workspaceFolder}/scripts/build_help_docs.py"
+        ]
+      },
+      "options": { "cwd": "${workspaceFolder}" },
+      "presentation": { "reveal": "always", "panel": "shared", "close": true },
+      "problemMatcher": []
+    },
+    {
+          "label": "🚀 Create GitHub Release",
+          "type": "shell",
+          "command": "${workspaceFolder}/scripts/release-windows.ps1",
+          "group": {
+              "kind": "build",
+              "isDefault": true
+          },
+          "presentation": {
+              "echo": true,
+              "reveal": "always",
+              "focus": true,
+              "panel": "dedicated",
+              "showReuseMessage": true,
+              "clear": true
+          },
+          "problemMatcher": [],
+          "dependsOn": []
+      }
+  ]
+}

@@ -1,0 +1,21 @@
+entries:
+  chat.overview:
+    title: "Overview"
+    short: "Ask the built-in assistant and keep a record of conversations."
+    body: |
+      <p>The chat window lets you send questions to the assistant and keeps a history in the log database.</p>
+      <ul>
+        <li>Chat messages are saved automatically with the log database.</li>
+        <li>Clearing chat history removes conversations but keeps other log entries.</li>
+        <li>Resetting the log database clears chat history too.</li>
+      </ul>
+
+  chat.clear_history:
+    title: "Clear history"
+    short: "Remove chat transcripts without deleting logs."
+    body: |
+      <p>Use the chat window to clear the current chat history.</p>
+      <ul>
+        <li>This only removes chat messages; other logs remain.</li>
+        <li>Resetting the log database clears both logs and chats.</li>
+      </ul>

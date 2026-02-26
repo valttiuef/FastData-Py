@@ -1,0 +1,278 @@
+/* Dark theme stylesheet */
+
+/* ---------- Global ---------- */
+QWidget {
+    font-family: "Segoe UI";
+    font-size: 8pt;
+}
+
+/* GroupBox */
+QGroupBox {
+    border: 1px solid #3a3a3a;
+    border-radius: 6px;
+    margin-top: 10px; /* space for title */
+    padding: 4px 6px;
+}
+
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 8px;
+    padding: 0 4px;
+    color: #dddddd;
+    background-color: transparent;
+}
+
+/* ---------- Menus & Toolbars ---------- */
+QMenuBar {
+    background-color: #2d2d2d;
+    color: #dddddd;
+}
+QMenuBar::item {
+    background: transparent;
+    padding: 4px 8px;
+}
+QMenuBar::item:selected {
+    background: #4a4a4a;
+    color: #dddddd;
+}
+
+QMenu {
+    background-color: #3a3a3a;
+    color: #dddddd;
+}
+QMenu::item {
+    padding: 6px 18px 6px 28px;
+}
+QMenu::item:selected {
+    background-color: #505050;
+    color: #dddddd;
+}
+QMenu::separator {
+    height: 1px;
+    background: #555555;
+    margin: 4px 6px;
+}
+
+/* ---------- StatusBar ---------- */
+QStatusBar {
+    background: #3a3a3a;
+    color: #dddddd;
+    border-top: 1px solid #3a3a3a;
+}
+
+/* ---------- Tabs ---------- */
+/* Stop Qt from drawing the white baseline under the tabs */
+QTabBar {
+    qproperty-drawBase: 0;
+}
+
+/* PANE: visible frame, no top edge, rounded corners, inner spacing */
+QTabWidget::pane {
+    border: 1px solid #3a3a3a;
+    border-top: none;             /* no line under the tabs */
+    background: #2d2d2d;
+    border-radius: 6px;
+
+    /* Create space so the page doesn't cover the border/corners */
+    padding: 8px;                 /* inner space between frame and page */
+    /* If you still want the overlap trick, use a tiny lift only */
+    top: -1px;                    /* keep small; large values can look odd */
+}
+
+/* Tabs: keep consistent sizing so they don't jump */
+QTabBar::tab {
+    background: #3a3a3a;
+    color: #dddddd;
+    border: 1px solid #3a3a3a;
+    border-bottom: none;        /* tab looks attached to pane */
+    border-top-left-radius: 2px;
+    border-top-right-radius: 8px;
+    padding: 6px 10px;
+
+    /* Prevent height changes when selecting/hovering */
+    min-height: 28px;           /* pick a value that fits your font/metrics */
+}
+
+/* Selected tab: overlap the pane’s top border to remove the line under it */
+QTabBar::tab:selected, QTabBar::tab:selected:hover {
+    background: #2d2d2d;
+    margin-bottom: -1px;        /* covers the pane border under the selected tab */
+    border-color: #3a3a3a;
+}
+/* Hover: don’t change border thickness or bottom border */
+QTabBar::tab:hover {
+    background: #4a4a4a;
+    border-color: #4a4a4a;      /* same width; keeps size stable */
+    color: #dddddd;
+}
+
+/* Optional polish: keep unselected tabs slightly “lower” for depth */
+QTabBar::tab:!selected {
+    /* no margin change needed; leaving here in case you later want :selected { top: 1px } */
+}
+
+/* Keep your shared style, then specialize QToolButton */
+QPushButton, QToolButton {
+    background-color: #3a3a3a;
+    color: #dddddd;
+    border: 1px solid #4a4a4a;
+    border-radius: 4px;
+    padding: 4px 8px;      /* symmetric */
+}
+
+QToolButton {
+    padding: 4px 0px;      /* smaller */
+}
+
+QPushButton:hover, QToolButton:hover   { background-color: #4a4a4a; }
+QPushButton:pressed, QToolButton:pressed { background-color: #2d2d2d; }
+QPushButton:disabled, QToolButton:disabled,
+QToolButton:disabled {
+    background-color: #2a2a2a;
+    color: #777777;
+    border: 1px dashed #555555;
+}
+
+/* ---------- ProgressBar ---------- */
+QProgressBar {
+    background: #1e1e1e;
+    color: #dddddd;
+    border: 1px solid #3a3a3a;
+    border-radius: 4px;
+    text-align: center;
+}
+QProgressBar::chunk {
+    background: #505050;
+    margin: 0px;
+    border-radius: 4px;
+}
+
+QHeaderView::section {
+    background: #3a3a3a;
+    color: #dddddd;
+    border: 1px solid #3a3a3a;
+    padding: 4px 6px;
+}
+QTableCornerButton::section {
+    background: #3a3a3a;   /* same as header */
+    border: 1px solid #3a3a3a;
+}
+QTableView {
+    gridline-color: #3a3a3a;
+    border-radius: 4px;
+    font-size: 8pt;
+}
+QTableView::item:selected {
+    background-color: #505050;
+}
+
+/* ---------- Tooltips ---------- */
+QToolTip {
+    color: #dddddd;
+    background-color: #3a3a3a;
+    border: 1px solid #3a3a3a;
+    padding: 4px 6px;
+    border-radius: 4px;
+}
+
+/* ---------- MessageBox buttons (inherit QPushButton) ---------- */
+QMessageBox {
+    background: #2d2d2d;
+    color: #dddddd;
+}
+
+/* =========================
+   Global text + selection
+   ========================= */
+QWidget { color: #dddddd; }
+QAbstractItemView {
+    color: #dddddd;
+    selection-background-color: #505050;
+    selection-color: #dddddd;     /* ensure contrast vs SEL_BG in your palette */
+}
+
+/* =========================
+   Tables & headers (context)
+   ========================= */
+QHeaderView::section {
+    background: #3a3a3a;
+    color: #dddddd;
+    border: 1px solid #3a3a3a;
+    padding: 4px 6px;
+}
+QTableCornerButton::section {
+    background: #3a3a3a;
+    border: 1px solid #3a3a3a;
+}
+QTableView {
+    background: #2d2d2d;
+    gridline-color: #3a3a3a;
+    border-radius: 4px;
+    font-size: 8pt;
+}
+QTableView::item:selected {
+    background: #505050;
+    color: #dddddd;
+}
+
+/* =========================
+   Lists / Trees specifics
+   ========================= */
+QListView, QListWidget, QTreeView {
+    background: #2d2d2d;
+    alternate-background-color: #3a3a3a;
+    outline: none;
+}
+
+/* =========================
+   Splitters
+   ========================= */
+QSplitter {
+    background: #2d2d2d;
+    /* optional: border around entire splitter area
+    border: 1px solid #3a3a3a;
+    */
+}
+QSplitter::handle {
+    background: #3a3a3a;              /* base handle fill */
+    border: 1px solid #3a3a3a;       /* subtle edge to separate panes */
+    margin: 0;
+}
+QSplitter::handle:hover {
+    background: #4a4a4a;
+    border-color: #4a4a4a;
+}
+QSplitter::handle:pressed {
+    background: #3a3a3a;
+    border-color: #444444;
+}
+
+/* =========================
+   Group headers in lists (if you keep them enabled)
+   ========================= */
+/* If your header items are enabled (but not selectable), you can still
+   give them a distinct look via palette roles from code, or use a style
+   objectName and target it here. Example if you set objectName="groupHeader":
+#groupHeader {
+    color: #dddddd;
+    font-weight: bold;
+    background: transparent;
+}
+*/
+
+/* =========================
+   Chart Cards
+   ========================= */
+QWidget#chartCard {
+    background-color: #2d2d2d;
+    border: 1px solid #4a4a4a;
+    border-radius: 10px;
+}
+
+QWidget#chartCard[selectedTarget="true"] {
+    background-color: #2d2d2d;
+    border-color: #5a5a5a;
+}
+
+
+

@@ -1,0 +1,113 @@
+entries:
+  controls.som.features.model:
+    title: "Feature clustering model"
+    short: "Pick the algorithm used to group feature planes."
+    body: |
+      <p>Choose how features are grouped based on their component planes.</p>
+      <ul>
+        <li><b>K-Means / Mini-Batch K-Means</b> – fast centroids, works well as a default.</li>
+        <li><b>Agglomerative</b> – hierarchical merges; good when you expect nested structure.</li>
+        <li><b>Spectral</b> – uses graph cuts; handles complex shapes but needs a few more samples.</li>
+      </ul>
+      <p>All options support automatic K search when allowed by the method.</p>
+
+  controls.som.features.k:
+    title: "Max K & Clusters"
+    short: "Control the cluster search range or pin a fixed number."
+    body: |
+      <p>These two fields work together:</p>
+      <ul>
+        <li><b>Max K</b> sets the upper bound for automatic K search (min is 2).</li>
+        <li><b>Clusters</b> overrides auto-search when set; 0 or "Auto" falls back to scoring.</li>
+        <li>If the dataset has few samples, the system trims the range to stay valid.</li>
+      </ul>
+
+  controls.som.features.score:
+    title: "Scoring metric"
+    short: "Metric used to pick the best K during auto-search."
+    body: |
+      <p>Scores compare candidate clusterings:</p>
+      <ul>
+        <li><b>Silhouette</b> – balances cohesion and separation; good general-purpose metric.</li>
+        <li><b>Calinski-Harabasz</b> – favors compact, well-separated clusters; fast to compute.</li>
+        <li><b>Davies-Bouldin</b> – lower is better; sensitive to overlapping clusters.</li>
+      </ul>
+      <p>Only used when <b>Clusters</b> is set to Auto.</p>
+
+  controls.som.features.cluster_button:
+    title: "Cluster features"
+    short: "Group SOM component planes into feature clusters."
+    body: |
+      <p>Runs clustering on the trained SOM component planes.</p>
+      <ul>
+        <li>Requires a trained SOM model; train first if the button is disabled.</li>
+        <li>Outputs cluster labels you can inspect on the feature map tab.</li>
+        <li>Use the scoring metric to automatically select K when <b>Clusters</b> is Auto.</li>
+      </ul>
+
+  controls.som.features.auto_cluster:
+    title: "Auto cluster features"
+    short: "Automatically run feature clustering after SOM training."
+    body: |
+      <p>When enabled, feature clustering starts automatically each time a SOM model finishes training.</p>
+      <ul>
+        <li>Uses the current Feature clustering settings (model, Max K, Clusters, Score).</li>
+        <li>Runs in the background, the same as clicking <b>Cluster features</b> manually.</li>
+        <li>Disable this if you only want to train SOM maps without updating feature clusters.</li>
+      </ul>
+
+  controls.som.neurons.model:
+    title: "Neuron clustering model"
+    short: "Pick the algorithm used to group SOM neurons."
+    body: |
+      <p>The same clustering algorithms are available for neurons as for features:</p>
+      <ul>
+        <li><b>K-Means / Mini-Batch K-Means</b> – fast, dependable defaults.</li>
+        <li><b>Agglomerative</b> – builds a hierarchy of regions on the map.</li>
+        <li><b>Spectral</b> – can separate winding or non-convex neuron regions.</li>
+      </ul>
+      <p>Choose the method that matches how you expect neurons to organize across the grid.</p>
+
+  controls.som.neurons.k:
+    title: "Max K & Clusters (neurons)"
+    short: "Set the range or fixed count for neuron groups."
+    body: |
+      <p>Configure how many neuron groups to consider:</p>
+      <ul>
+        <li><b>Max K</b> caps the auto-search; higher values explore finer partitions.</li>
+        <li><b>Clusters</b> locks in an exact count when set to a value &gt; 0.</li>
+        <li>If the SOM grid is small, the available K values are trimmed to remain valid.</li>
+      </ul>
+
+  controls.som.neurons.score:
+    title: "Scoring metric (neurons)"
+    short: "Metric used when auto-selecting neuron clusters."
+    body: |
+      <p>Uses the same metrics as feature clustering:</p>
+      <ul>
+        <li><b>Silhouette</b> – balanced, works well on most maps.</li>
+        <li><b>Calinski-Harabasz</b> – rewards tight neuron groups.</li>
+        <li><b>Davies-Bouldin</b> – lower is better; highlights overlapping groups.</li>
+      </ul>
+
+  controls.som.neurons.cluster_button:
+    title: "Cluster neurons"
+    short: "Partition the SOM grid into neuron clusters."
+    body: |
+      <p>Runs clustering on the neurons themselves, using their codebook vectors.</p>
+      <ul>
+        <li>Requires a trained SOM model before it can run.</li>
+        <li>Results can be visualized on the maps to highlight regional patterns.</li>
+        <li>Use <b>Max K</b>, <b>Clusters</b>, and <b>Score</b> to tune how fine-grained the regions are.</li>
+      </ul>
+
+  controls.som.neurons.auto_cluster_timeline:
+    title: "Auto cluster timeline"
+    short: "Automatically run neuron clustering after SOM training."
+    body: |
+      <p>When enabled, neuron clustering starts automatically after each SOM training run.</p>
+      <ul>
+        <li>Uses the current Neuron clustering settings (model, Max K, Clusters, Score).</li>
+        <li>Keeps timeline cluster mode and cluster map ready without a separate manual step.</li>
+        <li>Disable this if you want manual control over when timeline clusters are recalculated.</li>
+      </ul>
