@@ -113,7 +113,7 @@ class RegressionResultsPanel(Panel):
             editable=False,
             initial_uniform_column_widths=True,
             initial_uniform_column_count=5,
-            sorting_enabled=False,
+            sorting_enabled=True,
         )
         self.predictions_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._predictions_columns = [tr("Date"), tr("Prediction"), tr("Reference"), tr("Error"), tr("Split")]

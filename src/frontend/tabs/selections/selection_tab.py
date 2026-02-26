@@ -2,14 +2,14 @@
 from __future__ import annotations
 from typing import List, Optional
 
-from PySide6.QtCore import QSortFilterProxyModel, Qt, QTimer
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QAbstractItemView, QInputDialog, QLineEdit, QMessageBox, QWidget
 from ...localization import tr
 
 from ...models.database_model import DatabaseModel
 from ...utils import toast_error, toast_info, toast_success
 from ...models.selection_settings import SelectionSettingsPayload
-from ...widgets.fast_table import FastTable
+from ...widgets.fast_table import FastPandasProxyModel, FastTable
 from ...widgets.panel import Panel
 from ..tab_widget import TabWidget
 from .models import FeatureSelectionTableModel
@@ -19,53 +19,6 @@ from .viewmodel import SelectionsViewModel
 import logging
 
 logger = logging.getLogger(__name__)
-
-
-
-class _SelectionSortProxy(QSortFilterProxyModel):
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
-        self._search_text = ""
-        self._search_terms: tuple[str, ...] = ()
-
-    def set_search_text(self, text: str) -> None:
-        raw = (text or "").strip().lower()
-        terms = tuple(part.strip() for part in raw.split(",") if part.strip())
-        if raw == self._search_text and terms == self._search_terms:
-            return
-        self._search_text = raw
-        self._search_terms = terms
-        self.invalidateFilter()
-
-    def filterAcceptsRow(self, source_row, source_parent):  # noqa: N802
-        if not self._search_terms:
-            return True
-        source = self.sourceModel()
-        if source is None:
-            return False
-        col_count = source.columnCount(source_parent)
-        for col in range(col_count):
-            idx = source.index(source_row, col, source_parent)
-            value = source.data(idx, Qt.ItemDataRole.DisplayRole)
-            text = str(value or "").lower()
-            if any(term in text for term in self._search_terms):
-                return True
-        return False
-
-    def lessThan(self, left, right):  # noqa: N802
-        left_data = self.sourceModel().data(left, Qt.ItemDataRole.EditRole)
-        right_data = self.sourceModel().data(right, Qt.ItemDataRole.EditRole)
-        try:
-            if left_data in (None, "") and right_data not in (None, ""):
-                return True
-            if right_data in (None, "") and left_data not in (None, ""):
-                return False
-            left_num = float(left_data)
-            right_num = float(right_data)
-            return left_num < right_num
-        except Exception:
-            return str(left_data) < str(right_data)
-
 
 class SelectionsTab(TabWidget):
     def __init__(self, database_model: DatabaseModel, parent: Optional[QWidget] = None) -> None:
@@ -105,6 +58,8 @@ class SelectionsTab(TabWidget):
         self._search_edit.setClearButtonEnabled(True)
         self._search_edit.setPlaceholderText(tr("Search features…"))
         layout.addWidget(self._search_edit)
+        self._proxy_model = FastPandasProxyModel(self)
+        self._proxy_model.setSourceModel(self._table_model)
         self.features_table = FastTable(
             select="items",
             single_selection=False,
@@ -121,12 +76,6 @@ class SelectionsTab(TabWidget):
             QAbstractItemView.EditTrigger.EditKeyPressed
             | QAbstractItemView.EditTrigger.DoubleClicked
         )
-        self.features_table.set_stretch_column(-1)
-        self._proxy_model = _SelectionSortProxy(self)
-        self._proxy_model.setSourceModel(self._table_model)
-        self._proxy_model.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
-        # Keep sorting stable while cell editors are committing values.
-        self._proxy_model.setDynamicSortFilter(False)
         self.features_table.setModel(self._proxy_model)
         self.features_table.sortByColumn(1, Qt.SortOrder.AscendingOrder)  # Id
         layout.addWidget(self.features_table, 1)
@@ -152,8 +101,11 @@ class SelectionsTab(TabWidget):
         self.sidebar.load_db_button.clicked.connect(self._on_load_settings_database)
         self.sidebar.save_db_button.clicked.connect(self._on_save_settings_database)
         self.sidebar.reset_db_button.clicked.connect(self._on_reset_settings_database)
-        self._search_edit.textChanged.connect(self._proxy_model.set_search_text)
+        self._search_edit.textChanged.connect(self._on_search_text_changed)
         self._table_model.dataChanged.connect(self._on_table_data_changed)
+
+    def _on_search_text_changed(self, text: str) -> None:
+        self._proxy_model.set_filter(text, columns=None, case_sensitive=False, debounce_ms=0)
 
     def _invoke_main_window_action(self, method_name: str) -> None:
         win = self.window() or self.parent()

@@ -41,7 +41,15 @@ class FeatureSelectionTableModel(QAbstractTableModel):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._rows: List[Dict[str, Any]] = []
+        self._df = pd.DataFrame(columns=[key for key, _label in self.COLUMN_DEFINITIONS])
         self._last_selection_key: tuple | None = None
+
+    def _rebuild_df_cache(self) -> None:
+        keys = [key for key, _label in self.COLUMN_DEFINITIONS]
+        if not self._rows:
+            self._df = pd.DataFrame(columns=keys)
+            return
+        self._df = pd.DataFrame([{key: row.get(key) for key in keys} for row in self._rows], columns=keys)
 
     # --- Qt model API ---------------------------------------------------
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: N802
@@ -106,6 +114,8 @@ class FeatureSelectionTableModel(QAbstractTableModel):
         if not index.isValid():
             return False
         row = self._rows[index.row()]
+        row_idx = index.row()
+        col_idx = index.column()
         key = self.COLUMN_DEFINITIONS[index.column()][0]
         if key in {"selected", "filter_global"}:
             if role == Qt.CheckStateRole:
@@ -114,10 +124,14 @@ class FeatureSelectionTableModel(QAbstractTableModel):
                 except Exception:
                     state = Qt.CheckState.Checked if bool(value) else Qt.CheckState.Unchecked
                 row[key] = state == Qt.CheckState.Checked
+                if 0 <= row_idx < len(self._df.index):
+                    self._df.iat[row_idx, col_idx] = row.get(key)
                 self.dataChanged.emit(index, index, [Qt.CheckStateRole, Qt.DisplayRole])
                 return True
             if role == Qt.EditRole:
                 row[key] = bool(value)
+                if 0 <= row_idx < len(self._df.index):
+                    self._df.iat[row_idx, col_idx] = row.get(key)
                 self.dataChanged.emit(index, index, [Qt.CheckStateRole, Qt.DisplayRole])
                 return True
             return False
@@ -139,10 +153,14 @@ class FeatureSelectionTableModel(QAbstractTableModel):
                 row[key] = 0
         elif key == "tags":
             row["tags"] = self._coerce_tags(value)
+            if 0 <= row_idx < len(self._df.index):
+                self._df.iat[row_idx, col_idx] = row.get("tags")
             self.dataChanged.emit(index, index, [Qt.DisplayRole, Qt.EditRole])
             return True
         else:
             row[key] = "" if value is None else str(value)
+        if 0 <= row_idx < len(self._df.index):
+            self._df.iat[row_idx, col_idx] = row.get(key)
         self.dataChanged.emit(index, index, [Qt.DisplayRole, Qt.EditRole])
         return True
 
@@ -181,6 +199,7 @@ class FeatureSelectionTableModel(QAbstractTableModel):
             self.endInsertRows()
 
         self._rows = rows
+        self._rebuild_df_cache()
         self._last_selection_key = None
         if new_count > 0:
             self.dataChanged.emit(
@@ -248,6 +267,7 @@ class FeatureSelectionTableModel(QAbstractTableModel):
                 row["filter_min"] = None
                 row["filter_max"] = None
                 row["filter_global"] = True
+        self._rebuild_df_cache()
         self.dataChanged.emit(top_left, bottom_right)
 
     def _selection_key(self, payload: Optional[SelectionSettingsPayload], *, select_all_by_default: bool) -> tuple:
@@ -302,6 +322,7 @@ class FeatureSelectionTableModel(QAbstractTableModel):
         self.beginInsertRows(QModelIndex(), position, position)
         self._rows.append(row)
         self.endInsertRows()
+        self._rebuild_df_cache()
         return position
 
     def remove_rows(self, rows: List[int]) -> List[Dict[str, Any]]:
@@ -312,6 +333,8 @@ class FeatureSelectionTableModel(QAbstractTableModel):
             self.beginRemoveRows(QModelIndex(), row_index, row_index)
             removed.append(self._rows.pop(row_index))
             self.endRemoveRows()
+        if removed:
+            self._rebuild_df_cache()
         return removed
 
     def feature_changes(self) -> Tuple[List[Dict[str, Any]], List[Tuple[int, Dict[str, Any]]]]:
@@ -391,6 +414,8 @@ class FeatureSelectionTableModel(QAbstractTableModel):
             if 0 <= row_index < len(self._rows):
                 if self._rows[row_index].get("selected") != bool(enabled):
                     self._rows[row_index]["selected"] = bool(enabled)
+                    if 0 <= row_index < len(self._df.index):
+                        self._df.iat[row_index, selected_col] = bool(enabled)
                     idx = self.index(row_index, selected_col)
                     self.dataChanged.emit(idx, idx, [Qt.CheckStateRole, Qt.DisplayRole])
 
