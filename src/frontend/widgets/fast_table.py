@@ -232,15 +232,27 @@ class FastPandasProxyModel(QAbstractProxyModel):
             series = df.iloc[rows, c]
 
             numeric = pd.to_numeric(series, errors="coerce")
-            sort_key = numeric if bool(numeric.notna().any()) else series.astype("string")
+            if bool(numeric.notna().any()):
+                sort_key = numeric
+            else:
+                text_key = series.astype("string")
+                # Case-insensitive alphabetical ordering for text columns.
+                sort_key = text_key.str.casefold()
 
             try:
-                order_idx = sort_key.sort_values(
-                    ascending=ascending,
-                    kind="mergesort",
-                    na_position="last",
-                ).index
-                rows = order_idx.to_numpy(dtype=np.int64, copy=False)
+                # Sort by relative positions within the current visible subset.
+                # Using label indexes from sort_values() can break row mapping
+                # when the source DataFrame index is non-contiguous.
+                rel_order = (
+                    sort_key.reset_index(drop=True)
+                    .sort_values(
+                        ascending=ascending,
+                        kind="mergesort",
+                        na_position="last",
+                    )
+                    .index.to_numpy(dtype=np.int64, copy=False)
+                )
+                rows = rows[rel_order]
             except Exception:
                 pass
 

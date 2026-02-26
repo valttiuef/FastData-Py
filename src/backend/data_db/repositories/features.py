@@ -238,7 +238,7 @@ class FeaturesRepository:
                 GROUP BY ft.feature_id
             ) tags ON tags.feature_id = f.id
             {where_sql}
-            ORDER BY f.name NULLS LAST, f.source NULLS LAST, f.unit NULLS LAST
+            ORDER BY f.id ASC
         """
         return con.execute(sql, params).df()
 
