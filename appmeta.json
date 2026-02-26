@@ -9,9 +9,9 @@
   "icon_linux": null,
   "identifier": "com.visima.fastdata",
 
-  "repo_url": "https://github.com/valttiuef/process-desktopapp",
-  "issues_url": "https://github.com/valttiuef/process-desktopapp/issues",
-  "releases_url": "https://github.com/valttiuef/process-desktopapp/releases",
+  "repo_url": "https://github.com/valttiuef/FastData-Py",
+  "issues_url": "https://github.com/valttiuef/FastData-Py/issues",
+  "releases_url": "https://github.com/valttiuef/FastData-Py/releases",
   "license": "MIT",
   "build_channel": "release"
 }
