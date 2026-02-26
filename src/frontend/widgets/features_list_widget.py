@@ -364,18 +364,12 @@ class FeaturesListWidget(QGroupBox):
                 selection_restored = self._restore_selection(previously_selected_ids)
 
             # If there was a previous explicit selection but none of those features exist anymore,
-            # keep the selection empty and notify the user instead of silently selecting row 0.
+            # keep the selection empty.
             if (
                 previously_selected_ids
                 and not selection_restored
             ):
-                try:
-                    toast_error(
-                        tr("A previously selected feature is no longer available. Please select a feature again."),
-                        title=tr("Features"),
-                    )
-                except Exception:
-                    logger.warning("Exception in _apply_dataframe", exc_info=True)
+                pass
             # For first-time loads (no previous explicit selection), keep legacy auto-select behavior.
             elif (
                 not self._suppress_autoselect
