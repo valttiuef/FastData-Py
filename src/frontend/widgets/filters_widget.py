@@ -28,7 +28,7 @@ from ..threading.runner import run_in_thread
 from ..threading.utils import run_in_main_thread
 from ..utils import toast_error, toast_success
 from .help_widgets import InfoButton
-from ..viewmodels.help_viewmodel import HelpViewModel, get_help_viewmodel
+from ..viewmodels.help_viewmodel import HelpViewModel
 
 
 
@@ -248,7 +248,9 @@ class FiltersWidget(CollapsibleSection):
     ):
         super().__init__(tr(title), collapsed=collapsed, parent=parent)
 
-        self._help_viewmodel = help_viewmodel or self._resolve_help_viewmodel()
+        self._help_viewmodel = help_viewmodel
+        if self._help_viewmodel is None:
+            logger.warning("FiltersWidget initialised without help_viewmodel.")
 
         grid = QGridLayout()
         grid.setContentsMargins(4, 4, 4, 4)
@@ -524,6 +526,28 @@ class FiltersWidget(CollapsibleSection):
         tags = state.get("tags") or []
         self.tags_combo.set_selected_values(tags)
 
+    def get_settings(self) -> dict:
+        return self.filter_state()
+
+    def set_settings(self, settings: dict | None) -> None:
+        widgets = [
+            self,
+            self.dt_from,
+            self.dt_to,
+            self.systems_combo,
+            self.datasets_combo,
+            self.imports_combo,
+            self.months_combo,
+            self.group_combo,
+            self.tags_combo,
+        ]
+        previous_states = [(widget, widget.blockSignals(True)) for widget in widgets]
+        try:
+            self.apply_filter_state(settings or {})
+        finally:
+            for widget, was in reversed(previous_states):
+                widget.blockSignals(was)
+
     # ------------------------------------------------------------------
     def start_timestamp(self) -> pd.Timestamp | None:
         return _parse_qdatetime(self.dt_from.dateTime())
@@ -540,12 +564,6 @@ class FiltersWidget(CollapsibleSection):
         if help_key and self._help_viewmodel is not None:
             return InfoButton(help_key, self._help_viewmodel)
         return None
-
-    def _resolve_help_viewmodel(self) -> Optional[HelpViewModel]:
-        try:
-            return get_help_viewmodel()
-        except Exception:
-            return None
 
 
 def _parse_qdatetime(qdt: QDateTime) -> pd.Timestamp | None:

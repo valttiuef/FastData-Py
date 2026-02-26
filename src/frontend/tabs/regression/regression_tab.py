@@ -23,7 +23,6 @@ from ...widgets.export_dialog import ExportOption, ExportSelectionDialog
 from ...widgets.model_details_dialog import ModelDetailsDialog
 from ...widgets.save_predictions_dialog import SavePredictionsDialog
 from .viewmodel import RegressionViewModel
-from ...viewmodels.help_viewmodel import get_help_viewmodel
 
 from .results_panel import RegressionResultsPanel
 from .sidebar import RegressionSidebar
@@ -84,9 +83,10 @@ class RegressionTab(TabWidget):
 
     # ------------------------------------------------------------------
     def _create_sidebar(self) -> QWidget:
+        help_viewmodel = getattr(self.window(), "help_viewmodel", None)
         self.sidebar = RegressionSidebar(
             view_model=self._view_model,
-            help_viewmodel=get_help_viewmodel(),
+            help_viewmodel=help_viewmodel,
             parent=self,
         )
         return self.sidebar

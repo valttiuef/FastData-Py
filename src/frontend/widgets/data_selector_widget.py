@@ -15,7 +15,7 @@ from ..threading.utils import run_in_main_thread
 from .features_list_widget import FeaturesListWidget
 from .filters_widget import FiltersWidget
 from .preprocessing_widget import PreprocessingWidget
-from ..viewmodels.help_viewmodel import HelpViewModel, get_help_viewmodel
+from ..viewmodels.help_viewmodel import HelpViewModel
 import logging
 
 logger = logging.getLogger(__name__)
@@ -148,8 +148,10 @@ class DataSelectorViewModel(QObject):
         self._widget.preprocessing_changed.connect(self.preprocessing_changed)
         self._widget.features_selection_changed.connect(self.features_selection_changed)
         self._widget.data_requirements_changed.connect(self.data_requirements_changed)
-        self._widget.filters_widget.filters_refreshed.connect(self._apply_selection_state_after_filters_refresh)
-        self._widget.features_widget.features_reloaded.connect(self._on_features_reloaded)
+        if self._widget.filters_widget is not None:
+            self._widget.filters_widget.filters_refreshed.connect(self._apply_selection_state_after_filters_refresh)
+        if self._widget.features_widget is not None:
+            self._widget.features_widget.features_reloaded.connect(self._on_features_reloaded)
         self._data_model = data_model
         if self._data_model is not None:
             self._data_model.database_changed.connect(self._on_database_changed)
@@ -158,42 +160,54 @@ class DataSelectorViewModel(QObject):
 
     def refresh_from_model(self) -> None:
         """Refresh filter choices and feature list from the current model."""
-        try:
-            self._widget.filters_widget.refresh_filters()
-        except Exception:
-            logger.warning("Exception in refresh_from_model", exc_info=True)
+        if self._widget.filters_widget is not None:
+            try:
+                self._widget.filters_widget.refresh_filters()
+            except Exception:
+                logger.warning("Exception in refresh_from_model", exc_info=True)
         try:
             self._apply_selection_state_to_widget()
         except Exception:
             logger.warning("Exception in refresh_from_model", exc_info=True)
-        try:
-            self._widget.features_widget.reload_features()
-        except Exception:
-            logger.warning("Exception in refresh_from_model", exc_info=True)
+        if self._widget.features_widget is not None:
+            try:
+                self._widget.features_widget.reload_features()
+            except Exception:
+                logger.warning("Exception in refresh_from_model", exc_info=True)
 
     def _on_database_changed(self, *_args) -> None:
         if self._selection_refresh_pending:
             self._finish_selection_refresh()
-        try:
-            self._widget.features_widget.clear_selection_and_suppress_autoselect()
-        except Exception:
-            logger.warning("Exception in _on_database_changed", exc_info=True)
+        if self._widget.features_widget is not None:
+            try:
+                self._widget.features_widget.clear_selection_and_suppress_autoselect()
+            except Exception:
+                logger.warning("Exception in _on_database_changed", exc_info=True)
 
     def _on_selection_state_changed(self) -> None:
         """Apply saved selection filters/preprocessing and refresh affected widgets."""
+        already_pending = self._selection_refresh_pending
         self._selection_refresh_pending = True
         self._selection_refresh_waiting_features_reload = False
-        self._widget.begin_data_requirements_batch()
-        try:
-            self._widget.filters_widget.refresh_filters()
-        except Exception:
-            logger.warning("Exception in _on_selection_state_changed", exc_info=True)
+        if not already_pending:
+            self._widget.begin_feature_reload_batch()
+            self._widget.begin_data_requirements_batch()
+        if self._widget.filters_widget is not None:
+            try:
+                self._widget.filters_widget.refresh_filters()
+            except Exception:
+                logger.warning("Exception in _on_selection_state_changed", exc_info=True)
+                self._apply_selection_state_after_filters_refresh()
+        else:
             self._apply_selection_state_after_filters_refresh()
 
     def _apply_selection_state_after_filters_refresh(self) -> None:
         if not self._selection_refresh_pending:
             return
         self._apply_selection_state_to_widget()
+        if self._widget.features_widget is None:
+            self._finish_selection_refresh()
+            return
         if self._widget.features_widget.use_selection_filter:
             # Selection-filtered feature lists are refreshed through selected_features_changed.
             self._finish_selection_refresh()
@@ -215,6 +229,7 @@ class DataSelectorViewModel(QObject):
             return
         self._selection_refresh_pending = False
         self._selection_refresh_waiting_features_reload = False
+        self._widget.end_feature_reload_batch(trigger_reload=False)
         self._widget.end_data_requirements_batch()
 
     def _apply_selection_state_to_widget(self) -> None:
@@ -231,11 +246,13 @@ class DataSelectorViewModel(QObject):
             preprocessing_state = {}
 
         try:
-            self._widget.filters_widget.apply_filter_state(filters_state)
-        except Exception:
-            logger.warning("Exception in _apply_selection_state_to_widget", exc_info=True)
-        try:
-            self._widget.preprocessing_widget.set_parameters(preprocessing_state)
+            self._widget.apply_settings(
+                {
+                    "filters": filters_state,
+                    "preprocessing": preprocessing_state,
+                },
+                reload_features=False,
+            )
         except Exception:
             logger.warning("Exception in _apply_selection_state_to_widget", exc_info=True)
 
@@ -292,63 +309,74 @@ class DataSelectorWidget(QGroupBox):
         parent=None,
         data_model: Optional[HybridPandasModel] = None,
         help_viewmodel: Optional[HelpViewModel] = None,
+        show_preprocessing: bool = True,
+        show_filters: bool = True,
         show_features_list: bool = True,
     ) -> None:
         super().__init__(tr(title), parent)
         self._data_model = data_model
-        self._help_viewmodel = help_viewmodel or self._resolve_help_viewmodel()
+        self._help_viewmodel = help_viewmodel
+        if self._data_model is None:
+            logger.warning("DataSelectorWidget initialised without data_model.")
+        if self._help_viewmodel is None:
+            logger.warning("DataSelectorWidget initialised without help_viewmodel.")
         self._feature_dialog: FeaturesInfoDialog | None = None
         self._requirements_batch_depth = 0
         self._requirements_emit_pending = False
+        self._feature_reload_batch_depth = 0
+        self._feature_reload_pending = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
 
-        self.preprocessing_widget = PreprocessingWidget(
-            collapsed=True,
-            parent=self,
-            help_viewmodel=self._help_viewmodel,
-        )
-        layout.addWidget(self.preprocessing_widget)
+        self.preprocessing_widget: PreprocessingWidget | None = None
+        self.filters_widget: FiltersWidget | None = None
+        self.features_widget: FeaturesListWidget | None = None
 
-        self.filters_widget = FiltersWidget(
-            parent=self,
-            model=data_model,
-            help_viewmodel=self._help_viewmodel,
-        )
-        layout.addWidget(self.filters_widget)
+        if show_preprocessing:
+            self.preprocessing_widget = PreprocessingWidget(
+                collapsed=True,
+                parent=self,
+                help_viewmodel=self._help_viewmodel,
+            )
+            layout.addWidget(self.preprocessing_widget)
 
-        self.features_widget = FeaturesListWidget(
-            parent=self,
-            data_model=data_model,
-        )
-        self.features_widget.setVisible(bool(show_features_list))
-        layout.addWidget(self.features_widget, 1 if show_features_list else 0)
+        if show_filters:
+            self.filters_widget = FiltersWidget(
+                parent=self,
+                model=data_model,
+                help_viewmodel=self._help_viewmodel,
+            )
+            layout.addWidget(self.filters_widget)
 
-        self.features_widget.details_requested.connect(self._show_features_info_dialog)
+        if show_features_list:
+            self.features_widget = FeaturesListWidget(
+                parent=self,
+                data_model=data_model,
+            )
+            self.features_widget.setVisible(True)
+            layout.addWidget(self.features_widget, 1)
+            self.features_widget.details_requested.connect(self._show_features_info_dialog)
 
         # Wire inner widget signals to the composite signals
-        self.preprocessing_widget.parameters_changed.connect(self._on_preprocessing_changed)
-        # Connect to specific filter signals that affect features (systems, datasets, tags)
-        self.filters_widget.systems_changed.connect(self._on_feature_affecting_filters_changed)
-        self.filters_widget.datasets_changed.connect(self._on_feature_affecting_filters_changed)
-        self.filters_widget.imports_changed.connect(self._on_feature_affecting_filters_changed)
-        self.filters_widget.tags_changed.connect(self._on_feature_affecting_filters_changed)
-        # Connect to all filter changes for general notification (without reloading features)
-        self.filters_widget.filters_changed.connect(self._on_filters_changed)
-        self.features_widget.selection_changed.connect(self._on_features_selection_changed)
+        if self.preprocessing_widget is not None:
+            self.preprocessing_widget.parameters_changed.connect(self._on_preprocessing_changed)
+        if self.filters_widget is not None:
+            # Connect to specific filter signals that affect features (systems, datasets, tags)
+            self.filters_widget.systems_changed.connect(self._on_feature_affecting_filters_changed)
+            self.filters_widget.datasets_changed.connect(self._on_feature_affecting_filters_changed)
+            self.filters_widget.imports_changed.connect(self._on_feature_affecting_filters_changed)
+            self.filters_widget.tags_changed.connect(self._on_feature_affecting_filters_changed)
+            # Connect to all filter changes for general notification (without reloading features)
+            self.filters_widget.filters_changed.connect(self._on_filters_changed)
+        if self.features_widget is not None:
+            self.features_widget.selection_changed.connect(self._on_features_selection_changed)
 
         self.view_model = DataSelectorViewModel(widget=self, data_model=data_model, parent=self)
 
         # Initial propagation
         self._on_feature_affecting_filters_changed()
-
-    def _resolve_help_viewmodel(self) -> Optional[HelpViewModel]:
-        try:
-            return get_help_viewmodel()
-        except Exception:
-            return None
 
     # ------------------------------------------------------------------
     def _on_preprocessing_changed(self, params: Mapping[str, Any]) -> None:
@@ -358,6 +386,11 @@ class DataSelectorWidget(QGroupBox):
 
     def _on_feature_affecting_filters_changed(self, *_args) -> None:
         """Handle changes to filters that affect the features list (systems, datasets, tags)."""
+        if self.features_widget is None or self.filters_widget is None:
+            return
+        if self._feature_reload_batch_depth > 0:
+            self._feature_reload_pending = True
+            return
         self.features_widget.set_filters(
             systems=self.filters_widget.selected_systems(),
             datasets=self.filters_widget.selected_datasets(),
@@ -368,6 +401,10 @@ class DataSelectorWidget(QGroupBox):
 
     def _on_filters_changed(self, *_args) -> None:
         """Handle all filter changes - emit signals and update data requirements."""
+        if self.filters_widget is None:
+            self.filters_changed.emit({})
+            self._emit_data_requirements()
+            return
         self.filters_changed.emit(self.filters_widget.filter_state())
         self._emit_data_requirements()
 
@@ -382,11 +419,14 @@ class DataSelectorWidget(QGroupBox):
         self._emit_data_requirements_now()
 
     def _emit_data_requirements_now(self) -> None:
+        filters = self.filters_widget.filter_state() if self.filters_widget is not None else {}
+        preprocessing = self.preprocessing_widget.parameters() if self.preprocessing_widget is not None else {}
+        features = self.features_widget.selected_payloads() if self.features_widget is not None else []
         self.data_requirements_changed.emit(
             {
-                "filters": self.filters_widget.filter_state(),
-                "preprocessing": self.preprocessing_widget.parameters(),
-                "features": self.features_widget.selected_payloads(),
+                "filters": filters,
+                "preprocessing": preprocessing,
+                "features": features,
             }
         )
 
@@ -402,8 +442,88 @@ class DataSelectorWidget(QGroupBox):
             self._requirements_emit_pending = False
             self._emit_data_requirements_now()
 
+    def begin_feature_reload_batch(self) -> None:
+        self._feature_reload_batch_depth += 1
+
+    def end_feature_reload_batch(self, *, trigger_reload: bool = True) -> None:
+        if self._feature_reload_batch_depth <= 0:
+            self._feature_reload_batch_depth = 0
+            self._feature_reload_pending = False
+            return
+        self._feature_reload_batch_depth -= 1
+        if self._feature_reload_batch_depth == 0:
+            pending = self._feature_reload_pending
+            self._feature_reload_pending = False
+            if pending and trigger_reload:
+                if self.features_widget is None or self.filters_widget is None:
+                    return
+                self.features_widget.set_filters(
+                    systems=self.filters_widget.selected_systems(),
+                    datasets=self.filters_widget.selected_datasets(),
+                    import_ids=self.filters_widget.selected_import_ids(),
+                    tags=self.filters_widget.selected_tags(),
+                    reload=True,
+                )
+
+    def schedule_data_requirements_emit(self) -> None:
+        self._emit_data_requirements()
+
+    def get_settings(self) -> dict[str, dict]:
+        return {
+            "preprocessing": (
+                self.preprocessing_widget.get_settings()
+                if self.preprocessing_widget is not None
+                else {}
+            ),
+            "filters": (
+                self.filters_widget.get_settings()
+                if self.filters_widget is not None
+                else {}
+            ),
+        }
+
+    def apply_settings(
+        self,
+        settings: Mapping[str, object] | None,
+        *,
+        reload_features: bool = True,
+    ) -> None:
+        payload = dict(settings or {})
+        preprocessing = payload.get("preprocessing")
+        filters = payload.get("filters")
+        self.begin_feature_reload_batch()
+        self.begin_data_requirements_batch()
+        try:
+            if self.preprocessing_widget is not None:
+                self.preprocessing_widget.set_settings(
+                    preprocessing if isinstance(preprocessing, dict) else {}
+                )
+            if self.filters_widget is not None:
+                self.filters_widget.set_settings(
+                    filters if isinstance(filters, dict) else {}
+                )
+            if reload_features and self.features_widget is not None and self.filters_widget is not None:
+                self.features_widget.set_filters(
+                    systems=self.filters_widget.selected_systems(),
+                    datasets=self.filters_widget.selected_datasets(),
+                    import_ids=self.filters_widget.selected_import_ids(),
+                    tags=self.filters_widget.selected_tags(),
+                    reload=True,
+                )
+            self.schedule_data_requirements_emit()
+        finally:
+            self.end_feature_reload_batch(trigger_reload=False)
+            self.end_data_requirements_batch()
+
+    def clear_filters_and_features(self, *, refresh_filter_options: bool = True) -> None:
+        self.apply_settings({"filters": {}}, reload_features=True)
+        if refresh_filter_options and self.filters_widget is not None:
+            self.filters_widget.refresh_filters()
+
     # ------------------------------------------------------------------
     def build_data_filters(self) -> Optional[DataFilters]:
+        if self.features_widget is None or self.filters_widget is None:
+            return None
         payloads = self.features_widget.selected_payloads()
         if not payloads:
             return None
@@ -427,7 +547,7 @@ class DataSelectorWidget(QGroupBox):
         if model is None or filters is None:
             return None
 
-        params = dict(self.preprocessing_widget.parameters())
+        params = dict(self.preprocessing_widget.parameters()) if self.preprocessing_widget is not None else {}
         if preprocessing_override:
             params.update(dict(preprocessing_override))
 
@@ -452,6 +572,8 @@ class DataSelectorWidget(QGroupBox):
         payloads = [dict(p) for p in (feature_payloads or []) if isinstance(p, Mapping)]
         if not payloads:
             return None
+        if self.filters_widget is None:
+            return None
         filters = DataFilters(
             features=[FeatureSelection.from_payload(p) for p in payloads],
             start=self.filters_widget.start_timestamp() if start is None else start,
@@ -465,7 +587,7 @@ class DataSelectorWidget(QGroupBox):
         if model is None or filters is None:
             return None
 
-        params = dict(self.preprocessing_widget.parameters())
+        params = dict(self.preprocessing_widget.parameters()) if self.preprocessing_widget is not None else {}
         if preprocessing_override:
             params.update(dict(preprocessing_override))
 
@@ -528,8 +650,8 @@ class DataSelectorWidget(QGroupBox):
 
         model = self._data_model
         filters = None
-        params = dict(self.preprocessing_widget.parameters())
-        if model is not None:
+        params = dict(self.preprocessing_widget.parameters()) if self.preprocessing_widget is not None else {}
+        if model is not None and self.filters_widget is not None:
             try:
                 filters = DataFilters(
                     features=[FeatureSelection.from_payload(p) for p in payloads],
@@ -549,7 +671,10 @@ class DataSelectorWidget(QGroupBox):
     def show_feature_details(self, payloads: Optional[Sequence[Mapping[str, object]]] = None) -> None:
         resolved_payloads: list[dict] = []
         if payloads is None:
-            resolved_payloads = [dict(p) for p in self.features_widget.selected_payloads()]
+            if self.features_widget is None:
+                resolved_payloads = []
+            else:
+                resolved_payloads = [dict(p) for p in self.features_widget.selected_payloads()]
         else:
             resolved_payloads = [dict(p) for p in payloads if isinstance(p, Mapping)]
         if not resolved_payloads:

@@ -35,7 +35,7 @@ from ...widgets.data_selector_widget import DataSelectorWidget
 from ...widgets.help_widgets import InfoButton
 from ...widgets.multi_check_combo import MultiCheckCombo
 from ...widgets.sidebar_widget import SidebarWidget
-from ...viewmodels.help_viewmodel import HelpViewModel, get_help_viewmodel
+from ...viewmodels.help_viewmodel import HelpViewModel
 from ...param_specs.regression import (
     REGRESSION_MODEL_PARAM_SPECS,
     REGRESSION_SELECTOR_PARAM_SPECS,
@@ -64,7 +64,11 @@ class RegressionSidebar(SidebarWidget):
         super().__init__(title=tr("Regression"), parent=parent)
 
         self._view_model = view_model
-        self._help_viewmodel = help_viewmodel or self._resolve_help_viewmodel()
+        self._help_viewmodel = help_viewmodel
+        if self._view_model is None:
+            logger.warning("RegressionSidebar initialised without view_model.")
+        if self._help_viewmodel is None:
+            logger.warning("RegressionSidebar initialised without help_viewmodel.")
         self._register_help_context()
 
         self._selector_items: list[tuple[str, str, dict[str, object]]] = []
@@ -974,12 +978,6 @@ class RegressionSidebar(SidebarWidget):
                 widget.deleteLater()
             elif child_layout is not None:
                 self._clear_layout(child_layout)  # type: ignore[arg-type]
-
-    def _resolve_help_viewmodel(self) -> Optional[HelpViewModel]:
-        try:
-            return get_help_viewmodel()
-        except Exception:
-            return None
 
 
 __all__ = ["RegressionSidebar"]

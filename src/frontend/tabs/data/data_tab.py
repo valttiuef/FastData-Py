@@ -744,6 +744,7 @@ class DataTab(TabWidget):
                 base_opts,
                 database_model=self._database_model,
                 data_view_model=self._view_model,
+                help_viewmodel=getattr(parent_win, "help_viewmodel", None),
                 parent=parent_win,
             )
             if dlg.exec() != QDialog.DialogCode.Accepted:

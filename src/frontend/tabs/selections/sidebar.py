@@ -16,8 +16,7 @@ from PySide6.QtWidgets import (
 )
 from ...localization import tr
 
-from ...widgets.preprocessing_widget import PreprocessingWidget
-from ...widgets.filters_widget import FiltersWidget
+from ...widgets.data_selector_widget import DataSelectorWidget
 from ...widgets.sidebar_widget import SidebarWidget
 
 
@@ -38,11 +37,16 @@ class Sidebar(SidebarWidget):
         actions_layout.addWidget(self.save_button)
         self.set_sticky_actions(actions)
 
-        self.preprocessing_widget = PreprocessingWidget(collapsed=False, parent=self)
-        layout.addWidget(self.preprocessing_widget)
-
-        self.filters_widget = FiltersWidget(collapsed=False, parent=self, model=model)
-        layout.addWidget(self.filters_widget)
+        self.data_selector = DataSelectorWidget(
+            parent=self,
+            data_model=model,
+            show_preprocessing=True,
+            show_filters=True,
+            show_features_list=False,
+        )
+        layout.addWidget(self.data_selector)
+        self.preprocessing_widget = self.data_selector.preprocessing_widget
+        self.filters_widget = self.data_selector.filters_widget
 
         # Selection settings controls
         settings = QGroupBox(tr("Selection settings"))
@@ -127,25 +131,35 @@ class Sidebar(SidebarWidget):
 
     # --- Filters/preprocessing -------------------------------------------
     def preprocessing_parameters(self) -> dict:
-        return self.preprocessing_widget.parameters()
+        return self.data_selector.get_settings().get("preprocessing", {})
 
     def set_preprocessing_parameters(self, params: dict | None) -> None:
-        self.preprocessing_widget.set_parameters(params or {})
+        self.data_selector.apply_settings({"preprocessing": params or {}, "filters": self.filter_state()})
 
     def filter_state(self) -> dict:
-        return self.filters_widget.filter_state()
+        return self.data_selector.get_settings().get("filters", {})
 
     def apply_filter_state(self, state: dict | None) -> None:
-        self.filters_widget.apply_filter_state(state or {})
+        self.data_selector.apply_settings({"preprocessing": self.preprocessing_parameters(), "filters": state or {}})
+
+    def get_selection_settings(self) -> dict:
+        return self.data_selector.get_settings()
+
+    def apply_selection_settings(self, settings: dict | None) -> None:
+        self.data_selector.apply_settings(settings or {})
 
     def set_systems(self, items: list[tuple[str, object]], *, check_all: bool = True) -> None:
-        self.filters_widget.set_systems(items, check_all=check_all)
+        if self.filters_widget is not None:
+            self.filters_widget.set_systems(items, check_all=check_all)
 
     def set_datasets(self, items: list[tuple[str, object]], *, check_all: bool = True) -> None:
-        self.filters_widget.set_datasets(items, check_all=check_all)
+        if self.filters_widget is not None:
+            self.filters_widget.set_datasets(items, check_all=check_all)
 
     def set_groups(self, df) -> None:
-        self.filters_widget.set_groups(df)
+        if self.filters_widget is not None:
+            self.filters_widget.set_groups(df)
 
     def set_tags(self, items: list[tuple[str, object]], *, check_all: bool = True) -> None:
-        self.filters_widget.set_tags(items, check_all=check_all)
+        if self.filters_widget is not None:
+            self.filters_widget.set_tags(items, check_all=check_all)

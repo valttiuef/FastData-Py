@@ -28,7 +28,7 @@ from ...widgets.sidebar_widget import SidebarWidget
 from ...widgets.multi_check_combo import MultiCheckCombo
 from ...models.log_model import LogModel, get_log_model
 from ...utils import toast_error, toast_info, toast_warn
-from ...viewmodels.help_viewmodel import HelpViewModel, get_help_viewmodel
+from ...viewmodels.help_viewmodel import HelpViewModel
 
 if TYPE_CHECKING:
     from .viewmodel import StatisticsViewModel
@@ -47,12 +47,19 @@ class StatisticsSidebar(SidebarWidget):
         *,
         parent: Optional[QWidget] = None,
         log_model: Optional[LogModel] = None,
+        help_viewmodel: Optional[HelpViewModel] = None,
     ) -> None:
         super().__init__(title=tr("Statistics"), parent=parent)
 
         self._view_model = view_model
         self._log_model = log_model or get_log_model(self)
-        self._help_viewmodel = self._resolve_help_viewmodel()
+        self._help_viewmodel = help_viewmodel
+        if self._view_model is None:
+            logger.warning("StatisticsSidebar initialised without view_model.")
+        if self._log_model is None:
+            logger.warning("StatisticsSidebar initialised without log_model.")
+        if self._help_viewmodel is None:
+            logger.warning("StatisticsSidebar initialised without help_viewmodel.")
 
         controls_layout = self.content_layout()
 
@@ -75,6 +82,7 @@ class StatisticsSidebar(SidebarWidget):
             title=tr("Data selection"),
             parent=self,
             data_model=view_model.data_model,
+            help_viewmodel=self._help_viewmodel,
         )
         try:
             self.data_selector.features_widget.set_use_selection_filter(True)
@@ -340,12 +348,6 @@ class StatisticsSidebar(SidebarWidget):
         layout.addWidget(widget, 1)
         layout.addWidget(info, 0, Qt.AlignmentFlag.AlignRight)
         return container
-
-    def _resolve_help_viewmodel(self) -> Optional[HelpViewModel]:
-        try:
-            return get_help_viewmodel()
-        except Exception:
-            return None
 
     # ------------------------------------------------------------------
     @property

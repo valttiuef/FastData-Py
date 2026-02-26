@@ -26,7 +26,7 @@ from frontend.models.database_model import DatabaseModel
 from ..widgets.fast_table import FastTable
 from ..widgets.dataframe_table_model import DataFrameTableModel
 from ..widgets.help_widgets import InfoButton
-from ..viewmodels.help_viewmodel import HelpViewModel, get_help_viewmodel
+from ..viewmodels.help_viewmodel import HelpViewModel
 from ..threading.runner import run_in_thread
 from ..threading.utils import run_in_main_thread
 from ..tabs.data.import_preview_logic import should_enable_duckdb_csv_import
@@ -463,6 +463,7 @@ class ImportOptionsDialog(QDialog):
         *,
         database_model: DatabaseModel,
         data_view_model: "DataViewModel",
+        help_viewmodel: Optional[HelpViewModel] = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -471,7 +472,13 @@ class ImportOptionsDialog(QDialog):
         self.opts = opts or ImportOptions()
         self._database_model = database_model
         self._data_view_model = data_view_model
-        self._help_viewmodel = self._resolve_help_viewmodel()
+        self._help_viewmodel = help_viewmodel
+        if self._database_model is None:
+            logger.warning("ImportOptionsDialog initialised without database_model.")
+        if self._data_view_model is None:
+            logger.warning("ImportOptionsDialog initialised without data_view_model.")
+        if self._help_viewmodel is None:
+            logger.warning("ImportOptionsDialog initialised without help_viewmodel.")
         self._preview_request_id = 0
         self._choices_request_id = 0
         self._datasets_request_id = 0
@@ -844,12 +851,6 @@ class ImportOptionsDialog(QDialog):
         layout.addWidget(info, 0, Qt.AlignmentFlag.AlignRight)
         return container
 
-    def _resolve_help_viewmodel(self) -> Optional[HelpViewModel]:
-        try:
-            return get_help_viewmodel()
-        except Exception:
-            return None
-
     def _set_preview_loading(self) -> None:
         self._preview_model.set_dataframe(pd.DataFrame([{"Preview": tr("Loading...")}]))
 
@@ -1011,4 +1012,3 @@ class ImportOptionsDialog(QDialog):
         if request_id != self._preview_request_id:
             return
         self._preview_model.set_dataframe(pd.DataFrame([{"Preview error": str(message)}]))
-

@@ -108,11 +108,13 @@ class SomTab(TabWidget):
 
     # ------------------------------------------------------------------
     def _create_sidebar(self) -> QWidget:
+        help_viewmodel = getattr(self.window(), "help_viewmodel", None)
         self.sidebar = SomSidebar(
             view_model=self._view_model,
             clustering_view_model=self._clustering_view_model,
             log_model=self._log_model,
             data_model=self.view_model._data_model,
+            help_viewmodel=help_viewmodel,
             parent=self,
         )
         return self.sidebar
@@ -356,30 +358,17 @@ class SomTab(TabWidget):
         """Release resources held by the SOM view model."""
         self._view_model.close_database()
 
-    def _clear_filters_and_features(self) -> None:
-        if self.sidebar is None:
-            return
-        try:
-            self.sidebar.clear_filter_controls()
-        except Exception:
-            logger.warning("Exception in _clear_filters_and_features", exc_info=True)
-        try:
-            self.sidebar.features_widget.set_filters(
-                systems=None,
-                datasets=None,
-                tags=None,
-                reload=True,
-            )
-        except Exception:
-            logger.warning("Exception in _clear_filters_and_features", exc_info=True)
-
     def _on_database_changed(self, _db) -> None:
         self._result = None
         self._neuron_clusters = None
         self._feature_clusters = None
         self._timeline_display_df = self._empty_timeline_table_dataframe()
         self.metrics_label.setText(tr("No model trained yet."))
-        self._clear_filters_and_features()
+        if self.sidebar is not None:
+            try:
+                self.sidebar.data_selector.clear_filters_and_features(refresh_filter_options=True)
+            except Exception:
+                logger.warning("Exception in _on_database_changed", exc_info=True)
         self._set_training_actions_enabled(False)
         if self.sidebar is not None:
             try:

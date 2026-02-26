@@ -51,10 +51,12 @@ class StatisticsTab(TabWidget):
 
     # ------------------------------------------------------------------
     def _create_sidebar(self) -> QWidget:
+        help_viewmodel = getattr(self.window(), "help_viewmodel", None)
         self._sidebar = StatisticsSidebar(
             self._view_model,
             parent=self,
             log_model=self._log_model,
+            help_viewmodel=help_viewmodel,
         )
         return self._sidebar
 

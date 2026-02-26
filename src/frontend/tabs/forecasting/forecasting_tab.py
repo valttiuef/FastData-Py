@@ -57,8 +57,10 @@ class ForecastingTab(TabWidget):
 
     # ------------------------------------------------------------------
     def _create_sidebar(self) -> QWidget:
+        help_viewmodel = getattr(self.window(), "help_viewmodel", None)
         self.sidebar = ForecastingSidebar(
             view_model=self._view_model,
+            help_viewmodel=help_viewmodel,
             parent=self,
         )
         return self.sidebar

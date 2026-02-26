@@ -42,7 +42,7 @@ from ...models.hybrid_pandas_model import HybridPandasModel
 from .clustering_viewmodel import ClusteringRequest, ClusteringViewModel
 from ...models.log_model import LogModel, get_log_model
 from ...utils import toast_error, toast_info, toast_warn
-from ...viewmodels.help_viewmodel import HelpViewModel, get_help_viewmodel
+from ...viewmodels.help_viewmodel import HelpViewModel
 
 if TYPE_CHECKING:
     from .viewmodel import SomViewModel
@@ -73,13 +73,21 @@ class SomSidebar(SidebarWidget):
     ):
         super().__init__(tr("Settings"), parent=parent)
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+        self._logger = logging.getLogger(__name__)
 
         self._view_model = view_model
         self._clustering_view_model = clustering_view_model
         self._log_model = log_model or get_log_model(parent)
         self._data_model = data_model
-        self._help_viewmodel = help_viewmodel or self._resolve_help_viewmodel()
-        self._logger = logging.getLogger(__name__)
+        self._help_viewmodel = help_viewmodel
+        if self._view_model is None:
+            self._logger.warning("SomSidebar initialised without view_model.")
+        if self._clustering_view_model is None:
+            self._logger.warning("SomSidebar initialised without clustering_view_model.")
+        if self._data_model is None:
+            self._logger.warning("SomSidebar initialised without data_model.")
+        if self._help_viewmodel is None:
+            self._logger.warning("SomSidebar initialised without help_viewmodel.")
         
         self._build_ui()
         self._wire_signals()
@@ -95,12 +103,6 @@ class SomSidebar(SidebarWidget):
                 toast_info(message, title=tr("SOM"), tab_key="som")
         except Exception:
             self._logger.log(level, message)
-
-    def _resolve_help_viewmodel(self) -> Optional[HelpViewModel]:
-        try:
-            return get_help_viewmodel()
-        except Exception:
-            return None
 
     def _make_label(self, text: str) -> QLabel:
         label = QLabel(text, self)
@@ -149,7 +151,11 @@ class SomSidebar(SidebarWidget):
         actions_layout.addWidget(self.export_button)
         self.set_sticky_actions(actions_group)
 
-        self.data_selector = DataSelectorWidget(parent=self, data_model=self._data_model)
+        self.data_selector = DataSelectorWidget(
+            parent=self,
+            data_model=self._data_model,
+            help_viewmodel=self._help_viewmodel,
+        )
         layout.addWidget(self.data_selector, 1)
 
         self.features_widget = self.data_selector.features_widget
@@ -529,13 +535,6 @@ class SomSidebar(SidebarWidget):
             self._view_model.set_selected_feature_payloads(payloads)
         except Exception:
             self._logger.warning("Exception in _on_features_selection_changed", exc_info=True)
-
-    def clear_filter_controls(self) -> None:
-        try:
-            self.data_selector.filters_widget.apply_filter_state({})
-            self.data_selector.filters_widget.refresh_filters()
-        except Exception:
-            self._logger.warning("Exception in clear_filter_controls", exc_info=True)
 
     def auto_cluster_features_enabled(self) -> bool:
         checkbox = getattr(self, "auto_cluster_features_checkbox", None)

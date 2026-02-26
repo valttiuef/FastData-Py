@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 from typing import Any, Optional
+import logging
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
@@ -16,7 +17,7 @@ from ..localization import tr
 
 from .collapsible_section import CollapsibleSection
 from .help_widgets import InfoButton
-from ..viewmodels.help_viewmodel import HelpViewModel, get_help_viewmodel
+from ..viewmodels.help_viewmodel import HelpViewModel
 from ..utils.time_steps import (
     MOVING_AVERAGE_OPTIONS,
     TIMESTEP_OPTIONS,
@@ -29,6 +30,7 @@ class PreprocessingWidget(CollapsibleSection):
 
     parameter_changed = Signal(str, object)
     parameters_changed = Signal(dict)
+    _logger = logging.getLogger(__name__)
 
     def __init__(
         self,
@@ -39,7 +41,9 @@ class PreprocessingWidget(CollapsibleSection):
         help_viewmodel: Optional[HelpViewModel] = None,
     ):
         super().__init__(tr(title), collapsed=collapsed, parent=parent)
-        self._help_viewmodel = help_viewmodel or self._resolve_help_viewmodel()
+        self._help_viewmodel = help_viewmodel
+        if self._help_viewmodel is None:
+            self._logger.warning("PreprocessingWidget initialised without help_viewmodel.")
 
         grid = QGridLayout()
         grid.setContentsMargins(4, 4, 4, 4)
@@ -176,12 +180,6 @@ class PreprocessingWidget(CollapsibleSection):
         if help_key and self._help_viewmodel is not None:
             return InfoButton(help_key, self._help_viewmodel)
         return None
-
-    def _resolve_help_viewmodel(self) -> Optional[HelpViewModel]:
-        try:
-            return get_help_viewmodel()
-        except Exception:
-            return None
 
     def _on_timestep_combo_changed(self) -> None:
         """Handle timestep combo box selection - populate edit field with seconds."""
@@ -360,6 +358,16 @@ class PreprocessingWidget(CollapsibleSection):
 
         self._set_combo_value(self.fill_combo, params.get("fill"))
         self._set_combo_value(self.agg_combo, params.get("agg"))
+
+    def get_settings(self) -> dict[str, Any]:
+        return self.parameters()
+
+    def set_settings(self, settings: dict[str, Any] | None) -> None:
+        was = self.blockSignals(True)
+        try:
+            self.set_parameters(settings or {})
+        finally:
+            self.blockSignals(was)
 
     def _set_combo_value(self, combo: QComboBox, value: Any) -> None:
         if value is None:

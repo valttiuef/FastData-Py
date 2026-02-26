@@ -27,7 +27,7 @@ from ...widgets.data_selector_widget import DataSelectorWidget
 from ...widgets.multi_check_combo import MultiCheckCombo
 from ...widgets.sidebar_widget import SidebarWidget
 from ...widgets.help_widgets import InfoButton
-from ...viewmodels.help_viewmodel import HelpViewModel, get_help_viewmodel
+from ...viewmodels.help_viewmodel import HelpViewModel
 from ...param_specs.forecasting import FORECASTING_MODEL_PARAM_SPECS
 from ...utils import toast_error
 
@@ -46,7 +46,11 @@ class ForecastingSidebar(SidebarWidget):
         super().__init__(title=tr("Forecasting"), parent=parent)
 
         self._view_model = view_model
-        self._help_viewmodel = help_viewmodel or self._resolve_help_viewmodel()
+        self._help_viewmodel = help_viewmodel
+        if self._view_model is None:
+            logger.warning("ForecastingSidebar initialised without view_model.")
+        if self._help_viewmodel is None:
+            logger.warning("ForecastingSidebar initialised without help_viewmodel.")
 
         self._model_items: list[tuple[str, str, dict[str, object]]] = []
         self._model_param_getters: dict[str, dict[str, Callable[[], object]]] = {}
@@ -139,7 +143,7 @@ class ForecastingSidebar(SidebarWidget):
         self.run_button.clicked.connect(self._start_run)
         self.model_combo.selection_changed.connect(self._build_model_param_forms)
         self.target_combo.selection_changed.connect(self._on_target_selection_changed)
-        self._connect_view_model()
+        self._wire_signals()
 
         # Set up features widget connection to update target combo
         try:
@@ -437,12 +441,6 @@ class ForecastingSidebar(SidebarWidget):
             return container
         return widget
 
-    def _resolve_help_viewmodel(self) -> Optional[HelpViewModel]:
-        try:
-            return get_help_viewmodel()
-        except Exception:
-            return None
-
     def _clear_layout(self, layout: QVBoxLayout) -> None:
         while layout.count():
             item = layout.takeAt(0)
@@ -453,7 +451,7 @@ class ForecastingSidebar(SidebarWidget):
             elif child_layout is not None:
                 self._clear_layout(child_layout)  # type: ignore[arg-type]
 
-    def _connect_view_model(self) -> None:
+    def _wire_signals(self) -> None:
         self._view_model.database_changed.connect(lambda _db: self._on_database_changed())
         self._view_model.run_started.connect(lambda *_: self._on_run_started())
         self._view_model.run_finished.connect(lambda *_: self._on_run_finished())

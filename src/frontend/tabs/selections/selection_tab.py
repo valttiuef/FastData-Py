@@ -87,7 +87,8 @@ class SelectionsTab(TabWidget):
         self._view_model = SelectionsViewModel(self._database_model, log_model=self._log_model, parent=self)
 
         self._connect_signals()
-        self.sidebar.filters_widget.refresh_filters()
+        if self.sidebar.filters_widget is not None:
+            self.sidebar.filters_widget.refresh_filters()
         self._view_model.refresh()
 
         self._database_model.database_changed.connect(self._on_database_changed)
@@ -168,14 +169,16 @@ class SelectionsTab(TabWidget):
     # ------------------------------------------------------------------
     # ------------------------------------------------------------------
     def _on_database_changed(self, *_args) -> None:
-        self.sidebar.filters_widget.refresh_filters()
+        if self.sidebar.filters_widget is not None:
+            self.sidebar.filters_widget.refresh_filters()
         self._view_model.refresh()
 
     def _on_selection_database_changed(self, *_args) -> None:
         self._view_model._refresh_settings()
 
     def _on_features_list_changed(self) -> None:
-        self.sidebar.filters_widget.refresh_filters()
+        if self.sidebar.filters_widget is not None:
+            self.sidebar.filters_widget.refresh_filters()
         self._view_model.refresh_features()
 
     def _on_features_changed(self, df) -> None:
@@ -230,8 +233,12 @@ class SelectionsTab(TabWidget):
         self._current_payload = payload
         self._select_all_default = not bool(record and record.get("id"))
         self._table_model.apply_selection(payload, select_all_by_default=self._select_all_default)
-        self.sidebar.set_preprocessing_parameters(payload.preprocessing)
-        self.sidebar.apply_filter_state(payload.filters)
+        self.sidebar.apply_selection_settings(
+            {
+                "preprocessing": dict(payload.preprocessing or {}),
+                "filters": dict(payload.filters or {}),
+            }
+        )
         name = record.get("name") if record else ""
         self.sidebar.set_setting_name(name or "")
         target_id = record.get("id") if record else None
@@ -458,8 +465,9 @@ class SelectionsTab(TabWidget):
     def _gather_payload(self) -> SelectionSettingsPayload:
         selected_features, filters = self._table_model.selection_state()
         selected_labels, label_filters = self._table_model.selection_state_labels()
-        filter_state = self.sidebar.filter_state()
-        preprocessing = self.sidebar.preprocessing_parameters()
+        selector_settings = self.sidebar.get_selection_settings()
+        filter_state = dict(selector_settings.get("filters") or {})
+        preprocessing = dict(selector_settings.get("preprocessing") or {})
         return SelectionSettingsPayload(
             feature_ids=selected_features,
             feature_labels=selected_labels,
