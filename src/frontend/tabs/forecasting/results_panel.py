@@ -1,9 +1,9 @@
+# @ai(gpt-5, codex, refactor, 2026-02-26)
 from typing import Optional
 
 import math
 import pandas as pd
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
 
 
@@ -23,9 +23,6 @@ from backend.services.forecasting_service import ForecastSummary, ForecastRunRes
 from frontend.charts import ProgressChart, TimeSeriesChart, ScatterChart
 from ...widgets.panel import Panel
 from ...widgets.fast_table import FastTable
-
-
-_SORT_ROLE = int(Qt.ItemDataRole.UserRole) + 1
 
 
 
@@ -61,12 +58,13 @@ class ForecastingResultsPanel(Panel):
         runs_box = QGroupBox(tr("Forecasting runs"), self)
         runs_layout = QVBoxLayout(runs_box)
         self.runs_table = FastTable(runs_box, select="rows", single_selection=False, editable=False)
-        self._runs_model = QStandardItemModel(0, len(self._COLUMN_DEFINITIONS), self)
-        self._runs_model.setHorizontalHeaderLabels(
-            [tr(label) for _key, label in self._COLUMN_DEFINITIONS]
+        self._runs_display_columns = [tr(label) for _key, label in self._COLUMN_DEFINITIONS]
+        self._run_key_column = "__run_key"
+        self.runs_table.set_dataframe(
+            pd.DataFrame(columns=self._runs_display_columns + [self._run_key_column]),
+            include_index=False,
         )
-        self._runs_model.setSortRole(_SORT_ROLE)
-        self.runs_table.setModel(self._runs_model)
+        self.runs_table.hideColumn(len(self._runs_display_columns))
         header = self.runs_table.horizontalHeader()
         header.setStretchLastSection(True)
         header.setSectionsClickable(True)
@@ -134,7 +132,7 @@ class ForecastingResultsPanel(Panel):
         self._current_selection_key = None
         self._run_contexts.clear()
         self._active_context = None
-        self._runs_model.removeRows(0, self._runs_model.rowCount())
+        self._refresh_table()
         self.progress_chart.clear()
         self.forecast_chart.clear()
         self.residual_chart.clear()
@@ -240,28 +238,26 @@ class ForecastingResultsPanel(Panel):
 
     # ------------------------------------------------------------------
     def _refresh_table(self) -> None:
-        self._runs_model.removeRows(0, self._runs_model.rowCount())
-        for row, key in enumerate(self._run_order):
+        rows: list[dict[str, object]] = []
+        for key in self._run_order:
             run = self._runs.get(key)
             if run is None:
                 continue
             values = self._row_values_for_run(run)
-            for col, (field_key, _label) in enumerate(self._COLUMN_DEFINITIONS):
+            out_row: dict[str, object] = {}
+            for field_key, label in self._COLUMN_DEFINITIONS:
                 value = values.get(field_key)
+                col_label = tr(label)
                 if field_key in {"rmse", "mae", "mape"}:
                     numeric_value = self._to_float(value)
-                    text = "-" if numeric_value is None else f"{numeric_value:.4f}"
-                    item = QStandardItem(text)
-                    item.setEditable(False)
-                    item.setData(numeric_value if numeric_value is not None else float("-inf"), _SORT_ROLE)
-                    item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                    out_row[col_label] = "-" if numeric_value is None else f"{numeric_value:.4f}"
                 else:
-                    item = QStandardItem(str(value))
-                    item.setEditable(False)
-                    item.setData(str(value), _SORT_ROLE)
-                if col == 0:
-                    item.setData(key, Qt.ItemDataRole.UserRole)
-                self._runs_model.setItem(row, col, item)
+                    out_row[col_label] = str(value)
+            out_row[self._run_key_column] = str(key)
+            rows.append(out_row)
+        frame = pd.DataFrame(rows, columns=self._runs_display_columns + [self._run_key_column])
+        self.runs_table.set_dataframe(frame, include_index=False)
+        self.runs_table.hideColumn(len(self._runs_display_columns))
 
     @staticmethod
     def _to_float(value: Optional[float]) -> Optional[float]:
@@ -316,13 +312,11 @@ class ForecastingResultsPanel(Panel):
         if not keys:
             return
         for key in keys:
-            row = self._find_row_for_key(key)
-            if row is not None:
-                self._runs_model.removeRow(row)
             self._runs.pop(key, None)
             self._run_contexts.pop(key, None)
             if key in self._run_order:
                 self._run_order.remove(key)
+        self._refresh_table()
         self._summary = ForecastSummary(
             runs=[self._runs[k] for k in self._run_order if k in self._runs]
         )
@@ -339,16 +333,23 @@ class ForecastingResultsPanel(Panel):
         selection = self.runs_table.selectionModel()
         if selection is None:
             return keys
+        model = self.runs_table.model()
+        if model is None:
+            return keys
+        key_col = len(self._runs_display_columns)
         for index in selection.selectedRows():
-            key = index.data(Qt.ItemDataRole.UserRole)
+            key = model.index(index.row(), key_col).data(Qt.ItemDataRole.UserRole)
             if key and key not in keys:
                 keys.append(key)
         return keys
 
     def _find_row_for_key(self, key: str) -> Optional[int]:
-        for row in range(self._runs_model.rowCount()):
-            item = self._runs_model.item(row, 0)
-            if item is not None and item.data(Qt.ItemDataRole.UserRole) == key:
+        model = self.runs_table.model()
+        if model is None:
+            return None
+        key_col = len(self._runs_display_columns)
+        for row in range(model.rowCount()):
+            if model.index(row, key_col).data(Qt.ItemDataRole.UserRole) == key:
                 return row
         return None
 
@@ -414,7 +415,8 @@ class ForecastingResultsPanel(Panel):
         )
 
     def _show_context_menu(self, pos) -> None:
-        if not self._runs_model.rowCount():
+        model = self.runs_table.model()
+        if model is None or model.rowCount() <= 0:
             return
         menu = QMenu(self)
         details_action = menu.addAction(tr("Details..."))
@@ -430,3 +432,4 @@ class ForecastingResultsPanel(Panel):
 
 
 __all__ = ["ForecastingResultsPanel"]
+

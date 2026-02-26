@@ -1,5 +1,6 @@
 
 from __future__ import annotations
+# @ai(gpt-5, codex, refactor, 2026-02-26)
 from typing import Optional, Any, List, Tuple, Iterable, Callable
 
 import numpy as np
@@ -32,7 +33,6 @@ from .som_saved_maps_dialog import SomSavedMapsDialog
 from .timeline_cluster_groups_dialog import TimelineClusterGroupsDialog
 from ...utils.som_details import build_som_map_prompt, build_som_map_summary_text
 from ...utils.exporting import export_dataframes
-from ...widgets.dataframe_table_model import DataFrameTableModel
 from ...widgets.export_dialog import ExportOption, ExportSelectionDialog
 from ...utils import toast_error, toast_info, toast_success, toast_warn
 from ...style.cluster_colors import cluster_color_for_label
@@ -83,8 +83,8 @@ class SomTab(TabWidget):
         self.timeline_cluster_panel_stack: Any = None
         self.timeline_cluster_placeholder: Any = None
         self.timeline_cluster_content: Any = None
-        self._feature_table_model: Optional[DataFrameTableModel] = None
-        self._timeline_table_model: Optional[DataFrameTableModel] = None
+        self._feature_table_model: Optional[object] = None
+        self._timeline_table_model: Optional[object] = None
 
         super().__init__(parent)
 
@@ -174,16 +174,13 @@ class SomTab(TabWidget):
     def _init_table_models(self) -> None:
         feature_table = getattr(self, "feature_table", None)
         if feature_table is not None and feature_table.model() is None:
-            self._feature_table_model = DataFrameTableModel(pd.DataFrame(), include_index=False)
-            feature_table.setModel(self._feature_table_model)
+            feature_table.set_dataframe(pd.DataFrame(), include_index=False)
+            self._feature_table_model = feature_table.model()
 
         timeline_table = getattr(self, "timeline_table", None)
         if timeline_table is not None and timeline_table.model() is None:
-            self._timeline_table_model = DataFrameTableModel(
-                self._empty_timeline_table_dataframe(),
-                include_index=False,
-            )
-            timeline_table.setModel(self._timeline_table_model)
+            timeline_table.set_dataframe(self._empty_timeline_table_dataframe(), include_index=False)
+            self._timeline_table_model = timeline_table.model()
 
     # ------------------------------------------------------------------
     def _register_training_widget(self, widget: Any, tooltip: Optional[str] = None) -> None:
@@ -1968,10 +1965,11 @@ class SomTab(TabWidget):
 
     def _fill_table(self, table, df: pd.DataFrame) -> None:
         model = table.model() if table is not None else None
-        if not isinstance(model, DataFrameTableModel):
+        if model is None:
             return
-        model.set_dataframe(df)
+        table.set_dataframe(df, include_index=False)
 
     @staticmethod
     def _empty_timeline_table_dataframe() -> pd.DataFrame:
         return pd.DataFrame(columns=["index", "bmu_x", "bmu_y", "bmu", "cluster"])
+

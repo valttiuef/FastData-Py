@@ -1,5 +1,6 @@
 
 from __future__ import annotations
+# @ai(gpt-5, codex, refactor, 2026-02-26)
 from typing import Iterable, Mapping, Optional
 
 from PySide6.QtCore import Qt, Signal
@@ -19,7 +20,6 @@ from ...localization import tr
 import pandas as pd
 
 from ...widgets.fast_table import FastTable
-from ...widgets.dataframe_table_model import DataFrameTableModel
 
 
 
@@ -60,11 +60,7 @@ class SomSavedMapsDialog(QDialog):
         self._table.set_stretch_column(-1)
         header = self._table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self._table_model = DataFrameTableModel(
-            pd.DataFrame(columns=self._columns),
-            include_index=False,
-        )
-        self._table.setModel(self._table_model)
+        self._table.set_dataframe(pd.DataFrame(columns=self._columns), include_index=False)
         self._table.hideColumn(8)
         self._table.selectionChangedInstant.connect(self._update_action_buttons)
 
@@ -116,9 +112,7 @@ class SomSavedMapsDialog(QDialog):
                     self._columns[8]: int(item.get("model_id")),
                 }
             )
-        self._table_model.set_dataframe(
-            pd.DataFrame(data, columns=self._columns)
-        )
+        self._table.set_dataframe(pd.DataFrame(data, columns=self._columns), include_index=False)
         self._table.hideColumn(8)
         self._update_action_buttons()
 
@@ -158,3 +152,4 @@ class SomSavedMapsDialog(QDialog):
         )
         if confirm == QMessageBox.StandardButton.Yes:
             self.delete_requested.emit(model_id)
+

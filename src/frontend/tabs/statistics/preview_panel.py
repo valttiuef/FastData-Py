@@ -1,9 +1,10 @@
 
 from __future__ import annotations
+# @ai(gpt-5, codex, refactor, 2026-02-26)
 from typing import Optional
 
 import pandas as pd
-from PySide6.QtGui import QResizeEvent, QShowEvent, QStandardItem, QStandardItemModel
+from PySide6.QtGui import QResizeEvent, QShowEvent
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QSplitter, QVBoxLayout, QWidget, QInputDialog
 from PySide6.QtCore import Qt, QItemSelectionModel
 from ...localization import tr
@@ -21,7 +22,6 @@ class StatisticsPreview(Panel):
     """Container for the statistics preview panel."""
     _DEFAULT_NOTES = ""
     _NO_GROUP_LABEL = "No group"
-    _RAW_ROW_ROLE = Qt.ItemDataRole.UserRole + 1
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__("", parent=parent)
@@ -52,6 +52,7 @@ class StatisticsPreview(Panel):
             parent=table_container,
             initial_uniform_column_widths=True,
             context_menu_builder=self._build_table_context_menu,
+            sorting_enabled=False,
         )
         self.preview_table.set_stretch_column(-1)
         table_layout.addWidget(self.preview_table, 1)
@@ -69,7 +70,7 @@ class StatisticsPreview(Panel):
         self._splitter.setSizes([400, 400])
         
         preview_layout.addWidget(self._splitter, 1)
-        self._preview_model: Optional[QStandardItemModel] = None
+        self._preview_model: Optional[object] = None
         self._current_mode: str = "time"
         self._current_group_column: Optional[str] = None
         self._preview_df: Optional[pd.DataFrame] = None
@@ -127,8 +128,9 @@ class StatisticsPreview(Panel):
         if self._preview_df is not None:
             datasets[tr("Raw statistics")] = self._preview_df.copy()
 
-        if self._preview_model is not None:
-            table_df = self._model_to_frame(self._preview_model)
+        model = self.preview_table.model()
+        if model is not None:
+            table_df = self._model_to_frame(model)
             if not table_df.empty:
                 datasets[tr("Summary table")] = table_df
 
@@ -140,7 +142,7 @@ class StatisticsPreview(Panel):
 
         return datasets
 
-    def _model_to_frame(self, model: QStandardItemModel) -> pd.DataFrame:
+    def _model_to_frame(self, model) -> pd.DataFrame:
         headers = [
             str(model.headerData(col, Qt.Orientation.Horizontal, Qt.ItemDataRole.DisplayRole) or "")
             for col in range(model.columnCount())
@@ -157,18 +159,18 @@ class StatisticsPreview(Panel):
         """Return preview dataframe with user-edited metadata applied."""
         if self._preview_df is None:
             return pd.DataFrame()
-        if self._preview_df.empty or self._preview_model is None:
+        model = self.preview_table.model()
+        if self._preview_df.empty or model is None:
             return self._preview_df.copy()
 
         edited = self._preview_df.copy()
-        model = self._preview_model
         row_count = model.rowCount()
         if row_count <= 0:
             return edited
 
         for row_idx in range(row_count):
-            raw = self._raw_row_for_model_row(model, row_idx)
-            if not raw and 0 <= row_idx < len(self._feature_rows):
+            raw = {}
+            if 0 <= row_idx < len(self._feature_rows):
                 raw = dict(self._feature_rows[row_idx] or {})
             if not raw:
                 continue
@@ -214,18 +216,8 @@ class StatisticsPreview(Panel):
             self.preview_chart.clear()
             return
 
-        model = QStandardItemModel(summary.shape[0], summary.shape[1], self.preview_table)
-        model.setHorizontalHeaderLabels([str(c) for c in summary.columns])
-        for row_idx, row in enumerate(summary.itertuples(index=False)):
-            for col_idx, value in enumerate(row):
-                text = "" if pd.isna(value) else str(value)
-                item = QStandardItem(text)
-                item.setEditable(True)
-                if col_idx == 0 and 0 <= row_idx < len(raw_rows):
-                    item.setData(dict(raw_rows[row_idx] or {}), self._RAW_ROW_ROLE)
-                model.setItem(row_idx, col_idx, item)
-        self._preview_model = model
-        self.preview_table.setModel(model)
+        self.preview_table.set_dataframe(summary, include_index=False)
+        self._preview_model = self.preview_table.model()
         if self._last_splitter_sizes:
             try:
                 self._splitter.setSizes(self._last_splitter_sizes)
@@ -381,9 +373,6 @@ class StatisticsPreview(Panel):
         if not indexes:
             return None
         row = int(indexes[0].row())
-        bound = self._raw_row_for_model_row(model, row)
-        if bound:
-            return bound
         if 0 <= row < len(self._feature_rows):
             return dict(self._feature_rows[row] or {})
         row_payload = {}
@@ -478,7 +467,7 @@ class StatisticsPreview(Panel):
         return str(value).strip()
 
     @staticmethod
-    def _model_row_payload(model: QStandardItemModel, row: int) -> dict[str, object]:
+    def _model_row_payload(model, row: int) -> dict[str, object]:
         payload: dict[str, object] = {}
         for col in range(model.columnCount()):
             header = model.headerData(col, Qt.Orientation.Horizontal, Qt.ItemDataRole.DisplayRole)
@@ -486,17 +475,6 @@ class StatisticsPreview(Panel):
                 continue
             payload[str(header)] = model.data(model.index(row, col), Qt.ItemDataRole.DisplayRole)
         return payload
-
-    def _raw_row_for_model_row(self, model, row: int) -> Optional[dict]:
-        if row < 0:
-            return None
-        idx = model.index(row, 0)
-        if not idx.isValid():
-            return None
-        raw = model.data(idx, self._RAW_ROW_ROLE)
-        if isinstance(raw, dict):
-            return dict(raw)
-        return None
 
     def _mask_for_raw_row(self, df: pd.DataFrame, raw: dict) -> pd.Series:
         mask = pd.Series([True] * len(df), index=df.index)

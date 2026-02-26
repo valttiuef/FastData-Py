@@ -1,4 +1,5 @@
 from __future__ import annotations
+# @ai(gpt-5, codex, refactor, 2026-02-26)
 import logging
 
 logger = logging.getLogger(__name__)
@@ -24,7 +25,6 @@ from backend.models import ImportOptions, HeaderRoles
 from backend.importing import _get_encoding_candidates
 from frontend.models.database_model import DatabaseModel
 from ..widgets.fast_table import FastTable
-from ..widgets.dataframe_table_model import DataFrameTableModel
 from ..widgets.help_widgets import InfoButton
 from ..viewmodels.help_viewmodel import HelpViewModel, get_help_viewmodel
 from ..threading.runner import run_in_thread
@@ -524,8 +524,7 @@ class ImportOptionsDialog(QDialog):
             editable=False,
             sorting_enabled=False,
         )
-        self._preview_model = DataFrameTableModel(pd.DataFrame(), include_index=False)
-        self.preview_table.setModel(self._preview_model)
+        self.preview_table.set_dataframe(pd.DataFrame(), include_index=False)
         self.preview_table.setMinimumHeight(140)
         root.addWidget(self.preview_table, 1)
 
@@ -856,7 +855,7 @@ class ImportOptionsDialog(QDialog):
         return container
 
     def _set_preview_loading(self) -> None:
-        self._preview_model.set_dataframe(pd.DataFrame([{"Preview": tr("Loading...")}]))
+        self.preview_table.set_dataframe(pd.DataFrame([{"Preview": tr("Loading...")}]), include_index=False)
 
     def _load_initial_db_choices(self, system_name: Optional[str], stop_event=None) -> dict[str, object]:
         db = self._database_model.create_connection()
@@ -966,14 +965,14 @@ class ImportOptionsDialog(QDialog):
             return
         frame = payload.get("display_df")
         if isinstance(frame, pd.DataFrame):
-            self._preview_model.set_dataframe(frame)
+            self.preview_table.set_dataframe(frame, include_index=False)
             self.preview_table.resizeColumnsToContents()
         else:
-            self._preview_model.set_dataframe(pd.DataFrame())
+            self.preview_table.set_dataframe(pd.DataFrame(), include_index=False)
 
         error = payload.get("error")
         if error:
-            self._preview_model.set_dataframe(pd.DataFrame([{"Preview error": str(error)}]))
+            self.preview_table.set_dataframe(pd.DataFrame([{"Preview error": str(error)}]), include_index=False)
             return
 
         header_rows = payload.get("header_rows")
@@ -1015,4 +1014,5 @@ class ImportOptionsDialog(QDialog):
     def _apply_preview_error(self, message: str, request_id: int) -> None:
         if request_id != self._preview_request_id:
             return
-        self._preview_model.set_dataframe(pd.DataFrame([{"Preview error": str(message)}]))
+        self.preview_table.set_dataframe(pd.DataFrame([{"Preview error": str(message)}]), include_index=False)
+

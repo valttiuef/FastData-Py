@@ -1,5 +1,6 @@
 
 from __future__ import annotations
+# @ai(gpt-5, codex, refactor, 2026-02-26)
 from typing import Any, Optional, TYPE_CHECKING
 
 import pandas as pd
@@ -22,7 +23,6 @@ from frontend.charts import TimeSeriesChart
 from ...widgets.multi_check_combo import MultiCheckCombo
 from .map_view import SomMapView
 from ...widgets.fast_table import FastTable
-from ...widgets.dataframe_table_model import DataFrameTableModel
 from ...widgets.help_widgets import InfoButton
 from ...viewmodels.help_viewmodel import get_help_viewmodel
 
@@ -53,11 +53,11 @@ def set_timeline_table_dataframe(table: Any, df: Optional[pd.DataFrame]) -> pd.D
     if table is None:
         return normalized
     model = table.model()
-    if not isinstance(model, DataFrameTableModel):
+    if model is None:
         return normalized
 
     previous_widths = [int(table.columnWidth(col)) for col in range(model.columnCount())]
-    model.set_dataframe(normalized)
+    table.set_dataframe(normalized, include_index=False)
 
     if previous_widths and len(previous_widths) == model.columnCount():
         for col, width in enumerate(previous_widths):
@@ -160,8 +160,7 @@ class TimelineTabWidget(QWidget):
             sorting_enabled=False,
         )
         self.timeline_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self._timeline_table_model = DataFrameTableModel(empty_timeline_table_dataframe())
-        self.timeline_table.setModel(self._timeline_table_model)
+        self.timeline_table.set_dataframe(empty_timeline_table_dataframe(), include_index=False)
         self.timeline_table.set_stretch_column(None)
         table_layout.addWidget(self.timeline_table, 1)
         if self._view_model is not None:

@@ -1,12 +1,14 @@
 
 from __future__ import annotations
+# @ai(gpt-5, codex, refactor, 2026-02-26)
 from typing import Optional
 
 import numpy as np
 import pandas as pd
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QHeaderView, QTableView, QAbstractItemView
+from PySide6.QtWidgets import QHeaderView
+from .fast_table import FastTable
 
 
 class CorrelationTableModel(QAbstractTableModel):
@@ -175,11 +177,17 @@ class CorrelationTableModel(QAbstractTableModel):
         return QColor(int(r), int(g), int(b))
 
 
-class CorrelationTable(QTableView):
+class CorrelationTable(FastTable):
     """Correlation heatmap table with colorized cells."""
 
     def __init__(self, parent=None, *, symmetric: bool = False, show_values: bool = True) -> None:
-        super().__init__(parent)
+        super().__init__(
+            parent=parent,
+            select="items",
+            single_selection=True,
+            editable=False,
+            sorting_enabled=False,
+        )
         self._model = CorrelationTableModel(
             pd.DataFrame(),
             parent=self,
@@ -187,12 +195,8 @@ class CorrelationTable(QTableView):
             show_values=show_values,
         )
         self.setModel(self._model)
-        self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)  # type: ignore
-        self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)  # type: ignore
-        self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)  # type: ignore
         self.setWordWrap(False)
         self.setAlternatingRowColors(False)
-        self.setSortingEnabled(False)
         self.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)  # type: ignore
         self.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)  # type: ignore
 
@@ -201,3 +205,4 @@ class CorrelationTable(QTableView):
 
 
 __all__ = ["CorrelationTable", "CorrelationTableModel"]
+

@@ -1,12 +1,14 @@
 from __future__ import annotations
+# @ai(gpt-5, codex, refactor, 2026-02-26)
 import logging
 
 logger = logging.getLogger(__name__)
 # frontend/widgets/fast_table.py
 
-from typing import Optional, Callable
+from typing import Optional, Callable, Iterable, Sequence
 
-from PySide6.QtCore import Qt, QPoint, QRect, QSortFilterProxyModel, Signal, QEvent, QTimer
+import pandas as pd
+from PySide6.QtCore import Qt, QPoint, QRect, QSortFilterProxyModel, Signal, QEvent, QTimer, QAbstractTableModel, QModelIndex
 from PySide6.QtGui import QAction, QColor, QPainter
 from PySide6.QtWidgets import (
 
@@ -14,6 +16,172 @@ from PySide6.QtWidgets import (
     QStyledItemDelegate, QStyleOptionViewItem, QStyle
 )
 from ..localization import tr
+
+
+class FastDataFrameModel(QAbstractTableModel):
+    """High-throughput pandas-backed model used internally by FastTable."""
+
+    def __init__(
+        self,
+        df: Optional[pd.DataFrame] = None,
+        parent=None,
+        *,
+        float_format: str = "{:.4f}",
+        editable_columns: Optional[Sequence[str]] = None,
+        editable_all: bool = False,
+        include_index: bool = False,
+    ) -> None:
+        super().__init__(parent)
+        self._float_format = float_format
+        self._editable_columns = set(editable_columns or [])
+        self._editable_all = bool(editable_all)
+        self._include_index = bool(include_index)
+        self._df = pd.DataFrame()
+        self.set_dataframe(df if df is not None else pd.DataFrame())
+
+    def rowCount(self, parent=QModelIndex()):  # noqa: N802
+        if parent.isValid():
+            return 0
+        return int(self._df.shape[0]) if self._df is not None else 0
+
+    def columnCount(self, parent=QModelIndex()):  # noqa: N802
+        if parent.isValid():
+            return 0
+        return int(self._df.shape[1]) if self._df is not None else 0
+
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+        return self._data_impl(index, role)
+
+    def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):  # noqa: N802
+        return self._header_impl(section, orientation, role)
+
+    def flags(self, index):
+        return self._flags_impl(index)
+
+    def setData(self, index, value, role=Qt.ItemDataRole.EditRole):  # noqa: N802
+        return self._set_data_impl(index, value, role)
+
+    def sort(self, column, order=Qt.SortOrder.AscendingOrder):  # noqa: N802
+        self._sort_impl(column, order)
+
+    def _normalize_dataframe(self, df: Optional[pd.DataFrame]) -> pd.DataFrame:
+        out = pd.DataFrame() if df is None else df.copy()
+        if self._include_index:
+            if isinstance(out.index, pd.MultiIndex) or out.index.name is not None:
+                out = out.reset_index()
+        return out
+
+    def set_dataframe(self, df: Optional[pd.DataFrame]) -> None:
+        new_df = self._normalize_dataframe(df)
+        self.beginResetModel()
+        self._df = new_df
+        self.endResetModel()
+
+    def dataframe(self) -> pd.DataFrame:
+        return self._df.copy() if self._df is not None else pd.DataFrame()
+
+    def set_editable_columns(self, columns: Iterable[str]) -> None:
+        self._editable_columns = set(columns or [])
+
+    def set_editable_all(self, enabled: bool) -> None:
+        self._editable_all = bool(enabled)
+
+    def set_float_format(self, float_format: str) -> None:
+        self._float_format = float_format or "{:.4f}"
+
+    def _data_impl(self, index, role: int):
+        if not index.isValid() or self._df is None:
+            return None
+        try:
+            value = self._df.iat[index.row(), index.column()]
+        except Exception:
+            return None
+        if role == Qt.ItemDataRole.DisplayRole:
+            return self._format_value(value)
+        if role in (Qt.ItemDataRole.EditRole, Qt.ItemDataRole.UserRole):
+            return value
+        if role == Qt.ItemDataRole.TextAlignmentRole:
+            if isinstance(value, (int, float)) and not pd.isna(value):
+                return Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+            return Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        return None
+
+    def _header_impl(self, section: int, orientation: Qt.Orientation, role: int):
+        if role != Qt.ItemDataRole.DisplayRole or self._df is None:
+            return None
+        if orientation == Qt.Orientation.Horizontal:
+            try:
+                return str(self._df.columns[section])
+            except Exception:
+                return None
+        return str(section + 1)
+
+    def _flags_impl(self, index):
+        if not index.isValid():
+            return Qt.ItemFlag.NoItemFlags
+        base = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+        if self._editable_all:
+            return base | Qt.ItemFlag.ItemIsEditable
+        try:
+            column_name = self._df.columns[index.column()]
+        except Exception:
+            return base
+        if column_name in self._editable_columns:
+            return base | Qt.ItemFlag.ItemIsEditable
+        return base
+
+    def _set_data_impl(self, index, value, role: int):
+        if role != Qt.ItemDataRole.EditRole or not index.isValid() or self._df is None:
+            return False
+        if not self._editable_all:
+            try:
+                column_name = self._df.columns[index.column()]
+            except Exception:
+                return False
+            if column_name not in self._editable_columns:
+                return False
+        try:
+            self._df.iat[index.row(), index.column()] = value
+        except Exception:
+            return False
+        self.dataChanged.emit(index, index, [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole])
+        return True
+
+    def _sort_impl(self, column: int, order: Qt.SortOrder):
+        if self._df is None or self._df.empty:
+            return
+        if column < 0 or column >= self._df.shape[1]:
+            return
+        ascending = order != Qt.SortOrder.DescendingOrder
+        series = self._df.iloc[:, column]
+        numeric = pd.to_numeric(series, errors="coerce")
+        sort_key = numeric if bool(numeric.notna().any()) else series.astype(str)
+        try:
+            sorted_index = sort_key.sort_values(
+                ascending=ascending,
+                kind="mergesort",
+                na_position="last",
+            ).index
+        except Exception:
+            return
+        self.layoutAboutToBeChanged.emit()
+        self._df = self._df.loc[sorted_index].reset_index(drop=True)
+        self.layoutChanged.emit()
+
+    def _format_value(self, value) -> str:
+        if value is None:
+            return ""
+        try:
+            if pd.isna(value):
+                return ""
+        except Exception:
+            pass
+        if isinstance(value, float):
+            try:
+                return self._float_format.format(value)
+            except Exception:
+                return str(value)
+        return str(value)
 
 
 class HoverRowDelegate(QStyledItemDelegate):
@@ -164,6 +332,7 @@ class FastTable(QTableView):
             parsed_uniform_count = 0
         self._initial_uniform_column_count = max(0, parsed_uniform_count)
         self._uniform_applied = False
+        self._dataframe_model: Optional[FastDataFrameModel] = None
 
         # hover
         self._hover_delegate: Optional[HoverRowDelegate] = None
@@ -240,8 +409,66 @@ class FastTable(QTableView):
                 | QAbstractItemView.EditTrigger.DoubleClicked
                 | QAbstractItemView.EditTrigger.AnyKeyPressed
             )
+            m = self.model()
+            if isinstance(m, FastDataFrameModel):
+                m.set_editable_all(True)
         else:
             self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+            m = self.model()
+            if isinstance(m, FastDataFrameModel):
+                m.set_editable_all(False)
+
+    def set_dataframe(
+        self,
+        df: Optional[pd.DataFrame],
+        *,
+        include_index: bool = False,
+        editable_columns: Optional[Sequence[str]] = None,
+        float_format: str = "{:.4f}",
+    ) -> None:
+        model = self._ensure_dataframe_model(
+            include_index=include_index,
+            editable_columns=editable_columns,
+            float_format=float_format,
+        )
+        model.set_dataframe(df)
+
+    def dataframe(self) -> pd.DataFrame:
+        model = self.model()
+        if isinstance(model, FastDataFrameModel):
+            return model.dataframe()
+        return pd.DataFrame()
+
+    def set_dataframe_editable_columns(self, columns: Iterable[str]) -> None:
+        model = self._ensure_dataframe_model()
+        model.set_editable_columns(columns)
+
+    def _ensure_dataframe_model(
+        self,
+        *,
+        include_index: bool = False,
+        editable_columns: Optional[Sequence[str]] = None,
+        float_format: str = "{:.4f}",
+    ) -> FastDataFrameModel:
+        existing = self.model()
+        if isinstance(existing, FastDataFrameModel):
+            if editable_columns is not None:
+                existing.set_editable_columns(editable_columns)
+            if float_format:
+                existing.set_float_format(float_format)
+            existing._include_index = bool(include_index)
+            return existing
+        model = FastDataFrameModel(
+            pd.DataFrame(),
+            parent=self,
+            include_index=include_index,
+            editable_columns=editable_columns,
+            float_format=float_format,
+            editable_all=(self.editTriggers() != QAbstractItemView.EditTrigger.NoEditTriggers),
+        )
+        self._dataframe_model = model
+        self.setModel(model)
+        return model
 
     def enable_hover_tint(self, enabled: bool, alpha: int = 36):
         """

@@ -1,5 +1,6 @@
 
 from __future__ import annotations
+# @ai(gpt-5, codex, refactor, 2026-02-26)
 import math
 from typing import Optional
 
@@ -7,7 +8,7 @@ import numpy as np
 import pandas as pd
 
 from PySide6.QtCore import Qt, QSignalBlocker, Signal
-from PySide6.QtGui import QResizeEvent, QShowEvent, QStandardItem, QStandardItemModel
+from PySide6.QtGui import QResizeEvent, QShowEvent
 from PySide6.QtWidgets import (
 
 
@@ -28,12 +29,7 @@ from backend.services.modeling_shared import display_name
 from backend.services.regression_service import RegressionSummary, RegressionRunResult
 from frontend.charts import ScatterChart, TimeSeriesChart
 from ...widgets.panel import Panel
-from ...widgets.dataframe_table_model import DataFrameTableModel
 from ...widgets.fast_table import FastTable
-
-
-_SORT_ROLE = int(Qt.ItemDataRole.UserRole) + 1
-
 
 
 class RegressionResultsPanel(Panel):
@@ -86,12 +82,15 @@ class RegressionResultsPanel(Panel):
         runs_box = QGroupBox(tr("Regression runs"), self)
         runs_layout = QVBoxLayout(runs_box)
         self.runs_table = FastTable(runs_box, select="rows", single_selection=False, editable=False)
-        self._runs_model = QStandardItemModel(0, len(self._COLUMN_DEFINITIONS), self)
-        self._runs_model.setHorizontalHeaderLabels(
-            [tr(label) for _key, label in self._COLUMN_DEFINITIONS]
+        self._runs_display_columns = [tr(label) for _key, label in self._COLUMN_DEFINITIONS]
+        self._run_key_column = "__run_key"
+        self._trained_sort_column = "__trained_sort"
+        self.runs_table.set_dataframe(
+            pd.DataFrame(columns=self._runs_display_columns + [self._run_key_column, self._trained_sort_column]),
+            include_index=False,
         )
-        self._runs_model.setSortRole(_SORT_ROLE)
-        self.runs_table.setModel(self._runs_model)
+        self.runs_table.hideColumn(len(self._runs_display_columns))
+        self.runs_table.hideColumn(len(self._runs_display_columns) + 1)
         self.runs_table.sortByColumn(0, Qt.SortOrder.DescendingOrder)
         header = self.runs_table.horizontalHeader()
         # Allow interactive resizing while keeping the last column stretchable on window resize.
@@ -118,13 +117,11 @@ class RegressionResultsPanel(Panel):
         )
         self.predictions_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._predictions_columns = [tr("Date"), tr("Prediction"), tr("Reference"), tr("Error"), tr("Split")]
-        self._predictions_model = DataFrameTableModel(
+        self.predictions_table.set_dataframe(
             pd.DataFrame(columns=self._predictions_columns),
-            parent=self,
-            float_format="{:.4f}",
             include_index=False,
+            float_format="{:.4f}",
         )
-        self.predictions_table.setModel(self._predictions_model)
         pred_header = self.predictions_table.horizontalHeader()
         pred_header.setStretchLastSection(False)
         pred_header.setMinimumSectionSize(30)
@@ -198,8 +195,8 @@ class RegressionResultsPanel(Panel):
         self._current_selection_key = None
         self._run_contexts.clear()
         self._active_context = None
-        self._runs_model.removeRows(0, self._runs_model.rowCount())
-        self._predictions_model.set_dataframe(pd.DataFrame(columns=self._predictions_columns))
+        self._refresh_runs_table()
+        self.predictions_table.set_dataframe(pd.DataFrame(columns=self._predictions_columns), include_index=False)
         self.scatter_chart.clear()
         self._set_scatter_title(None)
         self.timeline_chart.clear()
@@ -217,23 +214,16 @@ class RegressionResultsPanel(Panel):
             self.runs_table.setUpdatesEnabled(False)
         except Exception:
             logger.warning("Exception in begin_batch_update", exc_info=True)
-        try:
-            self._runs_model.blockSignals(True)
-        except Exception:
-            logger.warning("Exception in begin_batch_update", exc_info=True)
 
     def end_batch_update(self) -> None:
         if not self._batch_loading:
             return
         try:
-            self._runs_model.blockSignals(False)
-        except Exception:
-            logger.warning("Exception in end_batch_update", exc_info=True)
-        try:
             self.runs_table.setUpdatesEnabled(True)
         except Exception:
             logger.warning("Exception in end_batch_update", exc_info=True)
         self._batch_loading = False
+        self._refresh_runs_table()
         self.runs_table.resizeColumnsToContents()
         if self._runs:
             self.status_label.setText(tr("Regression runs updated. Select a run to inspect details."))
@@ -475,11 +465,8 @@ class RegressionResultsPanel(Panel):
         except Exception:
             run_key = ""
 
-        row = self._find_row_for_key(run_key)
-        new_row = row is None
+        new_row = run_key not in self._run_order
         if new_row:
-            row = self._runs_model.rowCount()
-            self._runs_model.insertRow(row)
             self._run_order.append(run_key)
 
         self._runs[run_key] = run
@@ -529,7 +516,7 @@ class RegressionResultsPanel(Panel):
             context["reducer_label"] = selected_reducer_label
             self._run_contexts[run_key] = context
 
-        self._populate_row(row, run)
+        self._refresh_runs_table()
 
         if not self._batch_loading:
             trained = len(self._runs)
@@ -618,13 +605,11 @@ class RegressionResultsPanel(Panel):
             return
         for key in keys:
             run_key = self._normalize_key(key)
-            row = self._find_row_for_key(run_key)
-            if row is not None:
-                self._runs_model.removeRow(row)
             self._runs.pop(run_key, None)
             self._run_contexts.pop(run_key, None)
             if run_key in self._run_order:
                 self._run_order.remove(run_key)
+        self._refresh_runs_table()
         self._summary = RegressionSummary(
             runs=[self._runs[k] for k in self._run_order if k in self._runs]
         )
@@ -633,7 +618,7 @@ class RegressionResultsPanel(Panel):
             self._set_export_available(True)
         else:
             self.status_label.setText(tr("Select features and run a regression experiment."))
-            self._predictions_model.set_dataframe(pd.DataFrame(columns=self._predictions_columns))
+            self.predictions_table.set_dataframe(pd.DataFrame(columns=self._predictions_columns), include_index=False)
             self.scatter_chart.clear()
             self.timeline_chart.clear()
             self._set_export_available(False)
@@ -643,16 +628,27 @@ class RegressionResultsPanel(Panel):
         selection = self.runs_table.selectionModel()
         if selection is None:
             return keys
+        model = self.runs_table.model()
+        if model is None:
+            return keys
+        key_col = self._runs_key_column_index()
+        if key_col is None:
+            return keys
         for index in selection.selectedRows():
-            key = index.data(Qt.ItemDataRole.UserRole)
+            key = model.index(index.row(), key_col).data(Qt.ItemDataRole.UserRole)
             if key and key not in keys:
                 keys.append(key)
         return keys
 
     def _find_row_for_key(self, key: str) -> Optional[int]:
-        for row in range(self._runs_model.rowCount()):
-            item = self._runs_model.item(row, 0)
-            if item is not None and item.data(Qt.ItemDataRole.UserRole) == key:
+        model = self.runs_table.model()
+        if model is None:
+            return None
+        key_col = self._runs_key_column_index()
+        if key_col is None:
+            return None
+        for row in range(model.rowCount()):
+            if model.index(row, key_col).data(Qt.ItemDataRole.UserRole) == key:
                 return row
         return None
 
@@ -668,40 +664,46 @@ class RegressionResultsPanel(Panel):
         self._current_selection_key = key
         self._apply_run(self._runs.get(key))
 
-    def _populate_row(self, row: int, run: RegressionRunResult) -> None:
-        context = self._run_contexts.get(str(run.key), {})
-        values = self._row_values(run, context)
-        for col, (key, _label) in enumerate(self._COLUMN_DEFINITIONS):
-            if key in self._TEXT_COLUMNS:
-                text = values.get(key, "-")
-                item = QStandardItem(str(text or "-"))
-                item.setEditable(False)
-                if key == "trained_at":
-                    _display, sort_value = self._trained_at_display_and_sort(run, context)
-                    item.setData(sort_value, _SORT_ROLE)
+    def _runs_key_column_index(self) -> Optional[int]:
+        model = self.runs_table.model()
+        if model is None:
+            return None
+        key_column_name = self._run_key_column
+        for col in range(model.columnCount()):
+            if str(model.headerData(col, Qt.Orientation.Horizontal, Qt.ItemDataRole.DisplayRole) or "") == key_column_name:
+                return col
+        return None
+
+    def _refresh_runs_table(self) -> None:
+        rows: list[dict[str, object]] = []
+        for run_key in self._run_order:
+            run = self._runs.get(run_key)
+            if run is None:
+                continue
+            context = self._run_contexts.get(str(run.key), {})
+            values = self._row_values(run, context)
+            row: dict[str, object] = {}
+            _trained_display, sort_value = self._trained_at_display_and_sort(run, context)
+            for key, label in self._COLUMN_DEFINITIONS:
+                col_label = tr(label)
+                if key in self._TEXT_COLUMNS:
+                    row[col_label] = str(values.get(key, "-") or "-")
+                elif key in self._INT_COLUMNS:
+                    numeric_value = self._to_float(values.get(key))
+                    row[col_label] = "-" if numeric_value is None else f"{int(round(numeric_value))}"
                 else:
-                    item.setData(str(text or "-"), _SORT_ROLE)
-                if col == 0:
-                    item.setData(str(run.key), Qt.ItemDataRole.UserRole)
-                self._runs_model.setItem(row, col, item)
-            elif key in self._INT_COLUMNS:
-                value = values.get(key)
-                numeric_value = self._to_float(value)
-                text = "-" if numeric_value is None else f"{int(round(numeric_value))}"
-                item = QStandardItem(text)
-                item.setEditable(False)
-                item.setData(numeric_value if numeric_value is not None else float("-inf"), _SORT_ROLE)
-                item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                self._runs_model.setItem(row, col, item)
-            else:
-                value = values.get(key)
-                numeric_value = self._to_float(value)
-                text = "-" if numeric_value is None else f"{numeric_value:.4f}"
-                item = QStandardItem(text)
-                item.setEditable(False)
-                item.setData(numeric_value if numeric_value is not None else float("-inf"), _SORT_ROLE)
-                item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                self._runs_model.setItem(row, col, item)
+                    numeric_value = self._to_float(values.get(key))
+                    row[col_label] = "-" if numeric_value is None else f"{numeric_value:.4f}"
+            row[self._run_key_column] = str(run_key)
+            row[self._trained_sort_column] = float(sort_value)
+            rows.append(row)
+
+        frame = pd.DataFrame(rows, columns=self._runs_display_columns + [self._run_key_column, self._trained_sort_column])
+        if not frame.empty and self._trained_sort_column in frame.columns:
+            frame = frame.sort_values(by=self._trained_sort_column, ascending=False, kind="stable").reset_index(drop=True)
+        self.runs_table.set_dataframe(frame, include_index=False)
+        self.runs_table.hideColumn(len(self._runs_display_columns))
+        self.runs_table.hideColumn(len(self._runs_display_columns) + 1)
 
     @staticmethod
     def _to_float(value: Optional[float]) -> Optional[float]:
@@ -918,7 +920,7 @@ class RegressionResultsPanel(Panel):
 
     def _apply_run(self, run: Optional[RegressionRunResult]) -> None:
         if run is None:
-            self._predictions_model.set_dataframe(pd.DataFrame(columns=self._predictions_columns))
+            self.predictions_table.set_dataframe(pd.DataFrame(columns=self._predictions_columns), include_index=False)
             self.scatter_chart.clear()
             self._set_scatter_title(None)
             self.timeline_chart.clear()
@@ -936,7 +938,7 @@ class RegressionResultsPanel(Panel):
         if cached_predictions is None:
             cached_predictions = self._prediction_table_frame(timeline)
             self._predictions_cache[run_key] = cached_predictions
-        self._predictions_model.set_dataframe(cached_predictions)
+        self.predictions_table.set_dataframe(cached_predictions, include_index=False, float_format="{:.4f}")
 
         scatter = run.scatter_frame if run.scatter_frame is not None else pd.DataFrame()
         self.scatter_chart.set_points(scatter, force_equal_axes=True)
@@ -1099,7 +1101,8 @@ class RegressionResultsPanel(Panel):
         return tr("Feature {id}").format(id=fid) if fid is not None else "-"
 
     def _show_context_menu(self, pos) -> None:
-        if not self._runs_model.rowCount():
+        model = self.runs_table.model()
+        if model is None or model.rowCount() <= 0:
             return
         menu = QMenu(self)
         details_action = menu.addAction(tr("Details..."))
@@ -1115,3 +1118,4 @@ class RegressionResultsPanel(Panel):
 
 
 __all__ = ["RegressionResultsPanel"]
+
