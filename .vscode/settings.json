@@ -40,18 +40,6 @@
   // =============================
   "python.terminal.activateEnvironment": true,
 
-  // Default for Linux/macOS
-  "python.defaultInterpreterPath": "${workspaceFolder}/.venv-linux/bin/python",
-
-  // Platform-specific override for Windows
-  "[windows]": {
-    "python.defaultInterpreterPath": "${workspaceFolder}\\.venv-windows\\Scripts\\python.exe"
-  },
-  
-  "[osx]": {
-    "python.defaultInterpreterPath": "${workspaceFolder}/.venv-osx/bin/python"
-  },
-
   // =============================
   // EDITOR / FORMATTER SETTINGS
   // =============================
