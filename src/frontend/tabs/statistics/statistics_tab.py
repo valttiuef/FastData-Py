@@ -5,11 +5,11 @@ from typing import Optional
 from PySide6.QtWidgets import QWidget
 
 from ...models.database_model import DatabaseModel
-from ...models.log_model import LogModel, get_log_model
 from ...localization import tr
 from ...utils import toast_error, toast_info, toast_success, toast_warn
 from ...utils.exporting import export_dataframes
 from ...widgets.export_dialog import ExportOption, ExportSelectionDialog
+from ...viewmodels.help_viewmodel import get_help_viewmodel
 from .viewmodel import StatisticsViewModel
 from .preview_panel import StatisticsPreview
 from .sidebar import StatisticsSidebar
@@ -26,20 +26,12 @@ class StatisticsTab(TabWidget):
         self,
         database_model: DatabaseModel,
         parent: Optional[QWidget] = None,
-        *,
-        log_model: Optional[LogModel] = None,
     ):
-        self._log_model = log_model or get_log_model()
         self._view_model = StatisticsViewModel(database_model, parent=None)
         self._toast_compute_active = False
 
         super().__init__(parent)
 
-        if log_model is None and self._log_model.parent() is None:
-            try:
-                self._log_model.setParent(self)
-            except Exception:
-                logger.warning("Exception in __init__", exc_info=True)
         try:
             self._view_model.setParent(self)
         except Exception:
@@ -51,11 +43,13 @@ class StatisticsTab(TabWidget):
 
     # ------------------------------------------------------------------
     def _create_sidebar(self) -> QWidget:
-        help_viewmodel = getattr(self.window(), "help_viewmodel", None)
+        try:
+            help_viewmodel = get_help_viewmodel()
+        except Exception:
+            help_viewmodel = None
         self._sidebar = StatisticsSidebar(
             self._view_model,
             parent=self,
-            log_model=self._log_model,
             help_viewmodel=help_viewmodel,
         )
         return self._sidebar

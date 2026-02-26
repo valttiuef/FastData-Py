@@ -337,7 +337,11 @@ class FeaturesListWidget(QGroupBox):
             previously_selected_ids = set()
 
         previous_suppression = self._suppress_selection_emit
+        dynamic_sort = self._proxy_model.dynamicSortFilter()
         self._suppress_selection_emit = True
+        self._table.setUpdatesEnabled(False)
+        if dynamic_sort:
+            self._proxy_model.setDynamicSortFilter(False)
         try:
             selection = self._table.selectionModel()
             if selection is not None:
@@ -381,6 +385,9 @@ class FeaturesListWidget(QGroupBox):
                 except Exception:
                     logger.warning("Exception in _apply_dataframe", exc_info=True)
         finally:
+            if dynamic_sort:
+                self._proxy_model.setDynamicSortFilter(True)
+            self._table.setUpdatesEnabled(True)
             self._suppress_selection_emit = previous_suppression
 
         if self._suppress_autoselect:

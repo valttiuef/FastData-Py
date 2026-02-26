@@ -290,47 +290,51 @@ class FastTable(QTableView):
         sorting = self.isSortingEnabled()
         if sorting:
             super().setSortingEnabled(False)
+        self.setUpdatesEnabled(False)
 
-        super().setModel(model)
+        try:
+            super().setModel(model)
 
-        if sorting:
-            super().setSortingEnabled(True)
+            if sorting:
+                super().setSortingEnabled(True)
 
-        # disconnect old selection model
-        prev = getattr(self, "_last_sel_model", None)
-        if prev is not None:
-            try:
-                prev.selectionChanged.disconnect(self._emit_sel_changed_instant)
-            except Exception:
-                logger.warning("Exception in setModel", exc_info=True)
+            # disconnect old selection model
+            prev = getattr(self, "_last_sel_model", None)
+            if prev is not None:
+                try:
+                    prev.selectionChanged.disconnect(self._emit_sel_changed_instant)
+                except Exception:
+                    logger.warning("Exception in setModel", exc_info=True)
 
-        sel = self.selectionModel()
-        if sel:
-            try:
-                sel.selectionChanged.connect(self._emit_sel_changed_instant)
-                self._last_sel_model = sel
-            except Exception:
-                self._last_sel_model = None
+            sel = self.selectionModel()
+            if sel:
+                try:
+                    sel.selectionChanged.connect(self._emit_sel_changed_instant)
+                    self._last_sel_model = sel
+                except Exception:
+                    self._last_sel_model = None
 
-        if model is None:
-            return
+            if model is None:
+                return
 
-        # initial sizing (ONE shot only)
-        if self._auto_resize_once and not self._did_initial_resize:
-            if self._uniform_column_widths:
-                self._apply_uniform_column_widths()
+            # initial sizing (ONE shot only)
+            if self._auto_resize_once and not self._did_initial_resize:
+                if self._uniform_column_widths:
+                    self._apply_uniform_column_widths()
+                else:
+                    # keep it cheap
+                    self._apply_min_column_widths()
+                self._did_initial_resize = True
             else:
-                # keep it cheap
                 self._apply_min_column_widths()
-            self._did_initial_resize = True
-        else:
-            self._apply_min_column_widths()
 
-        self._apply_stretch_column()
+            self._apply_stretch_column()
 
-        # refresh hover tint color from palette if installed
-        if self._hover_delegate is not None:
-            self._hover_delegate.set_color(self._make_mild_tint(36))
+            # refresh hover tint color from palette if installed
+            if self._hover_delegate is not None:
+                self._hover_delegate.set_color(self._make_mild_tint(36))
+        finally:
+            self.setUpdatesEnabled(True)
 
     def resizeEvent(self, ev):
         super().resizeEvent(ev)

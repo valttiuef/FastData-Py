@@ -13,7 +13,7 @@ applied when a window is registered.
 
 import weakref
 from typing import Optional
-from ..models.log_model import get_log_model
+from ..viewmodels.log_view_model import get_log_view_model
 
 # Weak reference to the main window
 _main_window_ref: Optional[weakref.ref] = None
@@ -44,7 +44,7 @@ def _log_toast(kind: str, message: str, *, title: str = "", tab_key: Optional[st
         level = logging.ERROR
 
     try:
-        get_log_model().log_text(payload, level=level, origin="ui.toast")
+        get_log_view_model().log_message(payload, level=level, origin="ui.toast")
     except Exception:
         logger.warning("Exception in _log_toast", exc_info=True)
 

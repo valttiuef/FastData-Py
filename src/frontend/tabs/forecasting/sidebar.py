@@ -27,7 +27,7 @@ from ...widgets.data_selector_widget import DataSelectorWidget
 from ...widgets.multi_check_combo import MultiCheckCombo
 from ...widgets.sidebar_widget import SidebarWidget
 from ...widgets.help_widgets import InfoButton
-from ...viewmodels.help_viewmodel import HelpViewModel
+from ...viewmodels.help_viewmodel import HelpViewModel, get_help_viewmodel
 from ...param_specs.forecasting import FORECASTING_MODEL_PARAM_SPECS
 from ...utils import toast_error
 
@@ -46,11 +46,15 @@ class ForecastingSidebar(SidebarWidget):
         super().__init__(title=tr("Forecasting"), parent=parent)
 
         self._view_model = view_model
-        self._help_viewmodel = help_viewmodel
+        resolved_help = help_viewmodel
+        if resolved_help is None:
+            try:
+                resolved_help = get_help_viewmodel()
+            except Exception:
+                resolved_help = None
+        self._help_viewmodel = resolved_help
         if self._view_model is None:
             logger.warning("ForecastingSidebar initialised without view_model.")
-        if self._help_viewmodel is None:
-            logger.warning("ForecastingSidebar initialised without help_viewmodel.")
 
         self._model_items: list[tuple[str, str, dict[str, object]]] = []
         self._model_param_getters: dict[str, dict[str, Callable[[], object]]] = {}

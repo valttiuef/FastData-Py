@@ -7,7 +7,7 @@ from typing import Optional
 from PySide6.QtCore import QObject, Signal
 
 from ..models.llm_model import LlmModel
-from ..models.log_model import LogModel
+from ..models.log_model import LogModel, get_log_model
 
 
 class LogViewModel(QObject):
@@ -92,6 +92,12 @@ class LogViewModel(QObject):
     def current_log_database_path(self) -> Path:
         return self.log_model.current_database_path()
 
+    def enabled_logger_names(self) -> list[str]:
+        return self.log_model.enabled_logger_names()
+
+    def reload_from_storage(self, *, preferred_loggers: Optional[list[str]] = None) -> None:
+        self.log_model.reload_from_storage(preferred_loggers=preferred_loggers)
+
     # ------------------------------------------------------------------
     def _on_llm_finished(self, text: str) -> None:
         if text.strip():
@@ -102,3 +108,18 @@ class LogViewModel(QObject):
         if message:
             self.log_model.log_text(message, level=logging.ERROR, origin="llm")
         self.llm_error.emit(message)
+
+
+_shared_log_view_model: Optional[LogViewModel] = None
+
+
+def get_log_view_model(log_model: Optional[LogModel] = None, parent: Optional[QObject] = None) -> LogViewModel:
+    """Get or create the shared LogViewModel instance."""
+    global _shared_log_view_model
+
+    if _shared_log_view_model is None:
+        _shared_log_view_model = LogViewModel(log_model or get_log_model(), parent=parent)
+    elif parent is not None and _shared_log_view_model.parent() is None:
+        _shared_log_view_model.setParent(parent)
+
+    return _shared_log_view_model

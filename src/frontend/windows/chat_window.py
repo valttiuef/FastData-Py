@@ -30,10 +30,10 @@ from PySide6.QtWidgets import (
 )
 from ..localization import tr
 
-from ..models.log_model import LogEvent, LogModel
+from ..models.log_model import LogEvent
 from ..models.settings_model import SettingsModel
 from ..viewmodels.log_view_model import LogViewModel
-from ..viewmodels.help_viewmodel import HelpViewModel
+from ..viewmodels.help_viewmodel import HelpViewModel, get_help_viewmodel
 from ..widgets.collapsible_section import CollapsibleSection
 from ..widgets.help_widgets import InfoButton
 
@@ -52,17 +52,21 @@ class ChatWindow(QWidget):
 
     def __init__(
         self,
-        log_model: LogModel,
         log_view_model: LogViewModel,
         settings_model: SettingsModel,
         help_viewmodel: Optional[HelpViewModel] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
-        self._log_model = log_model
         self._log_view_model = log_view_model
         self._settings_model = settings_model
-        self._help_viewmodel = help_viewmodel
+        resolved_help = help_viewmodel
+        if resolved_help is None:
+            try:
+                resolved_help = get_help_viewmodel()
+            except Exception:
+                resolved_help = None
+        self._help_viewmodel = resolved_help
         self._stored_api_key: Optional[str] = None
 
         self._messages: list[_ChatMessage] = []
@@ -174,8 +178,8 @@ class ChatWindow(QWidget):
 
         layout.addWidget(input_row)
 
-        self._log_model.entry_added.connect(self._on_log_entry_added)
-        self._log_model.cleared.connect(self._on_log_cleared)
+        self._log_view_model.log_model.entry_added.connect(self._on_log_entry_added)
+        self._log_view_model.log_model.cleared.connect(self._on_log_cleared)
 
         self._log_view_model.llm_response_started.connect(self._on_llm_response_started)
         self._log_view_model.llm_token_received.connect(self._on_llm_token_received)
@@ -422,7 +426,7 @@ class ChatWindow(QWidget):
         self._suppress_next_llm_error_log = None
         self._pending_stream_append.clear()
 
-        for entry in self._log_model.entries():
+        for entry in self._log_view_model.log_model.entries():
             if entry.origin == "chat":
                 self._messages.append(_ChatMessage(role="user", content=entry.message))
             elif entry.origin == "llm":

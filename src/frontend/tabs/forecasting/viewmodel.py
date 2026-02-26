@@ -9,10 +9,10 @@ from PySide6.QtCore import QObject, Signal
 from backend.services.forecasting_service import ForecastRunResult, ForecastingService, ForecastSummary
 
 from ...models.hybrid_pandas_model import DataFilters, HybridPandasModel
-from ...models.log_model import LogModel, get_log_model
 from ...utils.model_persistence import frame_to_records, normalize_for_json, records_to_frame
 from ...threading.runner import run_in_thread
 from ...threading.utils import run_in_main_thread
+from ...viewmodels.log_view_model import get_log_view_model
 from ...utils import (
     clear_progress,
     set_progress,
@@ -41,15 +41,12 @@ class ForecastingViewModel(QObject):
         self,
         data_model: HybridPandasModel,
         parent: Optional[QObject] = None,
-        *,
-        log_model: Optional[LogModel] = None,
     ):
         super().__init__(parent)
         self._data_model: HybridPandasModel = data_model
         self._service: Optional[ForecastingService] = None
         self._running = False
         self._last_status_message: Optional[str] = None
-        self._log_model: LogModel = log_model or get_log_model()
 
         self._data_model.database_changed.connect(self._on_database_changed)
         self._on_database_changed(self._data_model.path)
@@ -429,7 +426,10 @@ class ForecastingViewModel(QObject):
             "error": logging.ERROR,
         }
         lvl = levels.get(level, logging.INFO)
-        self._log_model.log_text(message, level=lvl, origin="forecasting")
+        try:
+            get_log_view_model().log_message(message, level=lvl, origin="forecasting")
+        except Exception:
+            logger.warning("Exception in _log", exc_info=True)
 
 
 def _safe_feature_id(payload: object) -> Optional[int]:

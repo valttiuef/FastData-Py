@@ -15,7 +15,8 @@ from ..threading.utils import run_in_main_thread
 from .features_list_widget import FeaturesListWidget
 from .filters_widget import FiltersWidget
 from .preprocessing_widget import PreprocessingWidget
-from ..viewmodels.help_viewmodel import HelpViewModel
+from ..viewmodels.help_viewmodel import HelpViewModel, get_help_viewmodel
+from ..viewmodels.log_view_model import get_log_view_model
 import logging
 
 logger = logging.getLogger(__name__)
@@ -315,11 +316,15 @@ class DataSelectorWidget(QGroupBox):
     ) -> None:
         super().__init__(tr(title), parent)
         self._data_model = data_model
-        self._help_viewmodel = help_viewmodel
+        resolved_help = help_viewmodel
+        if resolved_help is None:
+            try:
+                resolved_help = get_help_viewmodel()
+            except Exception:
+                resolved_help = None
+        self._help_viewmodel = resolved_help
         if self._data_model is None:
             logger.warning("DataSelectorWidget initialised without data_model.")
-        if self._help_viewmodel is None:
-            logger.warning("DataSelectorWidget initialised without help_viewmodel.")
         self._feature_dialog: FeaturesInfoDialog | None = None
         self._requirements_batch_depth = 0
         self._requirements_emit_pending = False
@@ -600,12 +605,9 @@ class DataSelectorWidget(QGroupBox):
     # ------------------------------------------------------------------
     def _resolve_log_view_model(self):
         try:
-            win = self.window() or self.parent()
+            return get_log_view_model()
         except Exception:
-            win = None
-        if win is not None:
-            return getattr(win, "log_view_model", None)
-        return None
+            return None
 
     def _show_log_window(self) -> None:
         try:

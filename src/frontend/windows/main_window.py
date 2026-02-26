@@ -36,8 +36,7 @@ from backend.help_manager import get_help_manager
 from core.paths import get_app_metadata_path, get_help_path, get_resource_path
 from ..menu import init_menu_bar
 from ..models.hybrid_pandas_model import HybridPandasModel
-from ..models.log_model import get_log_model
-from ..viewmodels import LogViewModel
+from ..viewmodels import get_log_view_model
 from ..models.settings_model import SettingsModel
 from ..tabs import add_tab_with_help
 from ..tabs.tab_modules import get_runtime_tab_modules
@@ -121,9 +120,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)  # remove extra vertical jitter
 
-        self._report_startup_status(self.tr("Initializing log model..."), 60)
-        # Log model is shared across tabs and windows so initialize before they need it
-        self.log_model = get_log_model(parent=self)
+        self._report_startup_status(self.tr("Initializing logging..."), 60)
 
         self._report_startup_status(self.tr("Building tabs..."), 65)
         # Tabs
@@ -196,7 +193,7 @@ class MainWindow(QMainWindow):
 
         self._report_startup_status(self.tr("Preparing log view..."), 75)
         # Log
-        self.log_view_model = LogViewModel(self.log_model, parent=self)
+        self.log_view_model = get_log_view_model(parent=self)
         self.log_window = LogWindow(
             self.log_view_model,
             self.settings_model,
@@ -331,7 +328,6 @@ class MainWindow(QMainWindow):
     def show_chat_window(self) -> None:
         if self.chat_window is None:
             self.chat_window = ChatWindow(
-                self.log_model,
                 self.log_view_model,
                 self.settings_model,
                 help_viewmodel=self.help_viewmodel,
@@ -783,8 +779,8 @@ class MainWindow(QMainWindow):
         except Exception:
             logger.warning("Exception in refresh_databases", exc_info=True)
         try:
-            preferred = self.log_model.enabled_logger_names()
-            self.log_model.reload_from_storage(preferred_loggers=preferred)
+            preferred = self.log_view_model.enabled_logger_names()
+            self.log_view_model.reload_from_storage(preferred_loggers=preferred)
         except Exception:
             logger.warning("Exception in refresh_databases", exc_info=True)
         try:
@@ -876,7 +872,7 @@ class MainWindow(QMainWindow):
             if text:
                 message = str(text)
                 self._status_label.setText(message)
-                self.log_model.log_text(message, level=logging.INFO, origin="status")
+                self.log_view_model.log_message(message, level=logging.INFO, origin="status")
             else:
                 self._status_label.setText(self._default_status)
         except Exception:

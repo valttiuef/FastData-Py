@@ -17,7 +17,7 @@ from ..localization import tr
 
 from .collapsible_section import CollapsibleSection
 from .help_widgets import InfoButton
-from ..viewmodels.help_viewmodel import HelpViewModel
+from ..viewmodels.help_viewmodel import HelpViewModel, get_help_viewmodel
 from ..utils.time_steps import (
     MOVING_AVERAGE_OPTIONS,
     TIMESTEP_OPTIONS,
@@ -41,9 +41,13 @@ class PreprocessingWidget(CollapsibleSection):
         help_viewmodel: Optional[HelpViewModel] = None,
     ):
         super().__init__(tr(title), collapsed=collapsed, parent=parent)
-        self._help_viewmodel = help_viewmodel
-        if self._help_viewmodel is None:
-            self._logger.warning("PreprocessingWidget initialised without help_viewmodel.")
+        resolved_help = help_viewmodel
+        if resolved_help is None:
+            try:
+                resolved_help = get_help_viewmodel()
+            except Exception:
+                resolved_help = None
+        self._help_viewmodel = resolved_help
 
         grid = QGridLayout()
         grid.setContentsMargins(4, 4, 4, 4)

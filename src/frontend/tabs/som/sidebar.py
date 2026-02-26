@@ -40,9 +40,8 @@ from ...widgets.sidebar_widget import SidebarWidget
 from ...models.hybrid_pandas_model import HybridPandasModel
 
 from .clustering_viewmodel import ClusteringRequest, ClusteringViewModel
-from ...models.log_model import LogModel, get_log_model
 from ...utils import toast_error, toast_info, toast_warn
-from ...viewmodels.help_viewmodel import HelpViewModel
+from ...viewmodels.help_viewmodel import HelpViewModel, get_help_viewmodel
 
 if TYPE_CHECKING:
     from .viewmodel import SomViewModel
@@ -66,7 +65,6 @@ class SomSidebar(SidebarWidget):
         view_model: Optional[SomViewModel] = None,
         clustering_view_model: Optional[ClusteringViewModel] = None,
         *,
-        log_model: Optional[LogModel] = None,
         data_model: Optional[HybridPandasModel] = None,
         help_viewmodel: Optional[HelpViewModel] = None,
         parent: Optional[QWidget] = None,
@@ -77,17 +75,20 @@ class SomSidebar(SidebarWidget):
 
         self._view_model = view_model
         self._clustering_view_model = clustering_view_model
-        self._log_model = log_model or get_log_model(parent)
         self._data_model = data_model
-        self._help_viewmodel = help_viewmodel
+        resolved_help = help_viewmodel
+        if resolved_help is None:
+            try:
+                resolved_help = get_help_viewmodel()
+            except Exception:
+                resolved_help = None
+        self._help_viewmodel = resolved_help
         if self._view_model is None:
             self._logger.warning("SomSidebar initialised without view_model.")
         if self._clustering_view_model is None:
             self._logger.warning("SomSidebar initialised without clustering_view_model.")
         if self._data_model is None:
             self._logger.warning("SomSidebar initialised without data_model.")
-        if self._help_viewmodel is None:
-            self._logger.warning("SomSidebar initialised without help_viewmodel.")
         
         self._build_ui()
         self._wire_signals()

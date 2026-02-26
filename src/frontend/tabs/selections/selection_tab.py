@@ -7,7 +7,6 @@ from PySide6.QtWidgets import QAbstractItemView, QInputDialog, QLineEdit, QMessa
 from ...localization import tr
 
 from ...models.database_model import DatabaseModel
-from ...models.log_model import LogModel, get_log_model
 from ...utils import toast_error, toast_info, toast_success
 from ...models.selection_settings import SelectionSettingsPayload
 from ...widgets.fast_table import FastTable
@@ -69,9 +68,8 @@ class _SelectionSortProxy(QSortFilterProxyModel):
 
 
 class SelectionsTab(TabWidget):
-    def __init__(self, database_model: DatabaseModel, parent: Optional[QWidget] = None, *, log_model: Optional[LogModel] = None) -> None:
+    def __init__(self, database_model: DatabaseModel, parent: Optional[QWidget] = None) -> None:
         self._database_model = database_model
-        self._log_model = log_model or get_log_model()
         self._table_model = FeatureSelectionTableModel()
         self._current_payload = SelectionSettingsPayload()
         self._settings: List[dict] = []
@@ -84,7 +82,7 @@ class SelectionsTab(TabWidget):
         # has been initialised to avoid "base class not called" errors when we
         # pass ``self`` as their parent.
         self._table_model.setParent(self)
-        self._view_model = SelectionsViewModel(self._database_model, log_model=self._log_model, parent=self)
+        self._view_model = SelectionsViewModel(self._database_model, parent=self)
 
         self._connect_signals()
         if self.sidebar.filters_widget is not None:

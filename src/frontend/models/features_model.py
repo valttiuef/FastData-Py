@@ -39,38 +39,35 @@ class FeaturesTableModel(QAbstractTableModel):
         if df is None:
             df = pd.DataFrame(columns=list(self.TABLE_COLUMNS))
         self._df = self._normalize_for_table(df)
-        self._search_cache: list[str] = []
-        self._build_search_cache()
+        self._search_cache: list[str] | None = None
 
     def set_dataframe(self, df: pd.DataFrame):
         normalized = self._normalize_for_table(df)
-        if self._df is not None:
-            try:
-                if self._df.equals(normalized):
+        old_df = self._df
+        try:
+            if old_df is not None and old_df.shape == normalized.shape and tuple(old_df.columns) == tuple(normalized.columns):
+                if old_df.equals(normalized):
                     return
-            except Exception:
-                logger.warning("Exception in set_dataframe equality check", exc_info=True)
-        old_rows = self.rowCount()
-        new_rows = int(normalized.shape[0])
+        except Exception:
+            logger.warning("Exception in set_dataframe equality check", exc_info=True)
 
-        if old_rows > new_rows:
-            self.beginRemoveRows(QModelIndex(), new_rows, old_rows - 1)
-            self._df = self._df.iloc[:new_rows].copy()
-            self.endRemoveRows()
-        elif new_rows > old_rows:
-            self.beginInsertRows(QModelIndex(), old_rows, new_rows - 1)
-            self._df = pd.concat(
-                [self._df, pd.DataFrame(index=range(new_rows - old_rows), columns=self._df.columns)],
-                ignore_index=True,
-            )
-            self.endInsertRows()
+        old_columns = tuple(old_df.columns) if old_df is not None else ()
+        old_shape = old_df.shape if old_df is not None else (0, 0)
+        new_shape = normalized.shape
+        self._search_cache = None
+
+        # Resetting is significantly cheaper than incremental row inserts/removals for full table reloads.
+        if old_shape != new_shape or old_columns != tuple(normalized.columns):
+            self.beginResetModel()
+            self._df = normalized
+            self.endResetModel()
+            return
 
         self._df = normalized
-        self._build_search_cache()
-        if new_rows > 0 and self.columnCount() > 0:
+        if new_shape[0] > 0 and new_shape[1] > 0:
             self.dataChanged.emit(
                 self.index(0, 0),
-                self.index(new_rows - 1, self.columnCount() - 1),
+                self.index(new_shape[0] - 1, new_shape[1] - 1),
                 [Qt.DisplayRole, Qt.EditRole],
             )
 
@@ -90,7 +87,7 @@ class FeaturesTableModel(QAbstractTableModel):
         out = df.copy()
         if "tags" not in out.columns:
             out["tags"] = [[] for _ in range(len(out))]
-        return out.loc[:, list(self.TABLE_COLUMNS)].copy()
+        return out.loc[:, list(self.TABLE_COLUMNS)]
 
     def rowCount(self, parent=QModelIndex()) -> int:
         # For tree models; for a flat table always return 0 for children
@@ -215,7 +212,9 @@ class FeaturesTableModel(QAbstractTableModel):
         )
 
     def search_text_at(self, row: int) -> str:
-        if row < 0 or row >= len(self._search_cache):
+        if self._search_cache is None:
+            self._build_search_cache()
+        if self._search_cache is None or row < 0 or row >= len(self._search_cache):
             return ""
         return self._search_cache[row]
 

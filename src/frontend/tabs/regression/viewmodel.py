@@ -12,8 +12,8 @@ from backend.services.modeling_shared import display_name
 from backend.services.regression_service import RegressionRunResult, RegressionService, RegressionSummary
 
 from ...models.hybrid_pandas_model import HybridPandasModel
-from ...models.log_model import LogModel, get_log_model
 from ...utils.model_persistence import frame_to_records, normalize_for_json, records_to_frame
+from ...viewmodels.log_view_model import get_log_view_model
 
 from ...threading.runner import run_in_thread
 from ...threading.utils import run_in_main_thread
@@ -41,8 +41,6 @@ class RegressionViewModel(QObject):
         self,
         data_model: HybridPandasModel,
         parent: Optional[QObject] = None,
-        *,
-        log_model: Optional[LogModel] = None,
     ):
         """
         Parameters
@@ -61,7 +59,6 @@ class RegressionViewModel(QObject):
         self._save_predictions_running = False
         self._pending_auto_saves: dict[str, tuple[RegressionRunResult, dict[str, object]]] = {}
         self._last_status_message: Optional[str] = None
-        self._log_model: LogModel = log_model or get_log_model()
 
         # React to DB path changes inside the HybridPandasModel
         self._data_model.database_changed.connect(self._on_database_changed)
@@ -841,7 +838,10 @@ class RegressionViewModel(QObject):
             "error": logging.ERROR,
         }
         lvl = levels.get(level, logging.INFO)
-        self._log_model.log_text(message, level=lvl, origin="regression")
+        try:
+            get_log_view_model().log_message(message, level=lvl, origin="regression")
+        except Exception:
+            logger.warning("Exception in _log", exc_info=True)
 
     def _ensure_context_labels(self, run: RegressionRunResult, context: dict[str, object]) -> dict[str, object]:
         context = dict(context)

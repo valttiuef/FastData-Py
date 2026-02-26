@@ -26,9 +26,8 @@ from ...widgets.help_widgets import InfoButton
 from ...widgets.data_selector_widget import DataSelectorWidget
 from ...widgets.sidebar_widget import SidebarWidget
 from ...widgets.multi_check_combo import MultiCheckCombo
-from ...models.log_model import LogModel, get_log_model
 from ...utils import toast_error, toast_info, toast_warn
-from ...viewmodels.help_viewmodel import HelpViewModel
+from ...viewmodels.help_viewmodel import HelpViewModel, get_help_viewmodel
 
 if TYPE_CHECKING:
     from .viewmodel import StatisticsViewModel
@@ -46,20 +45,20 @@ class StatisticsSidebar(SidebarWidget):
         view_model: "StatisticsViewModel",
         *,
         parent: Optional[QWidget] = None,
-        log_model: Optional[LogModel] = None,
         help_viewmodel: Optional[HelpViewModel] = None,
     ) -> None:
         super().__init__(title=tr("Statistics"), parent=parent)
 
         self._view_model = view_model
-        self._log_model = log_model or get_log_model(self)
-        self._help_viewmodel = help_viewmodel
+        resolved_help = help_viewmodel
+        if resolved_help is None:
+            try:
+                resolved_help = get_help_viewmodel()
+            except Exception:
+                resolved_help = None
+        self._help_viewmodel = resolved_help
         if self._view_model is None:
             logger.warning("StatisticsSidebar initialised without view_model.")
-        if self._log_model is None:
-            logger.warning("StatisticsSidebar initialised without log_model.")
-        if self._help_viewmodel is None:
-            logger.warning("StatisticsSidebar initialised without help_viewmodel.")
 
         controls_layout = self.content_layout()
 

@@ -22,7 +22,7 @@ from frontend.utils.feature_details import (
 )
 from ...widgets.panel import Panel
 from ...models.hybrid_pandas_model import DataFilters, HybridPandasModel
-from ...models.log_model import LogModel, get_log_model
+from ...viewmodels.help_viewmodel import get_help_viewmodel
 from .sidebar import Sidebar
 from .viewmodel import DataViewModel
 
@@ -63,23 +63,15 @@ class DataTab(TabWidget):
         self,
         database_model: HybridPandasModel,
         parent=None,
-        *,
-        log_model: Optional[LogModel] = None,
     ):
         # Shared model used throughout the app
         self._database_model = database_model
-        self._log_model = log_model or get_log_model()
         # Wrap the shared HybridPandasModel in a view-model for signal & UI helpers
         self._view_model = DataViewModel(self._database_model)
         self._import_dialog_active = False
 
         super().__init__(parent)
 
-        if log_model is None and self._log_model.parent() is None:
-            try:
-                self._log_model.setParent(self)
-            except Exception:
-                logger.warning("Exception in __init__", exc_info=True)
         try:
             self._view_model.setParent(self)
         except Exception:
@@ -739,12 +731,16 @@ class DataTab(TabWidget):
                 return
 
             base_opts = ImportOptions(system_name="DefaultSystem", dataset_name="DefaultDataset")
+            try:
+                help_viewmodel = get_help_viewmodel()
+            except Exception:
+                help_viewmodel = None
             dlg = ImportOptionsDialog(
                 files,
                 base_opts,
                 database_model=self._database_model,
                 data_view_model=self._view_model,
-                help_viewmodel=getattr(parent_win, "help_viewmodel", None),
+                help_viewmodel=help_viewmodel,
                 parent=parent_win,
             )
             if dlg.exec() != QDialog.DialogCode.Accepted:

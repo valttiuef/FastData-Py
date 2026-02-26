@@ -23,7 +23,6 @@ from ...localization import tr
 from ...widgets.panel import Panel
 from ...models.hybrid_pandas_model import FeatureSelection
 from ...models.hybrid_pandas_model import HybridPandasModel
-from ...models.log_model import LogModel, get_log_model
 from backend.services import ClusteringMethodSpec
 from .viewmodel import SomViewModel
 from .clustering_viewmodel import ClusteringViewModel
@@ -37,6 +36,8 @@ from ...widgets.dataframe_table_model import DataFrameTableModel
 from ...widgets.export_dialog import ExportOption, ExportSelectionDialog
 from ...utils import toast_error, toast_info, toast_success, toast_warn
 from ...style.cluster_colors import cluster_color_for_label
+from ...viewmodels.help_viewmodel import get_help_viewmodel
+from ...viewmodels.log_view_model import get_log_view_model
 
 # Tabs
 from .component_planes_tab import ComponentPlanesTab
@@ -55,10 +56,7 @@ class SomTab(TabWidget):
         self,
         database_model: HybridPandasModel,
         parent: Optional[QWidget] = None,
-        *,
-        log_model: Optional[LogModel] = None,
     ):
-        self._log_model = log_model or get_log_model()
         self._view_model = SomViewModel(database_model)
         self._clustering_view_model = ClusteringViewModel(self._view_model)
         self.view_model = self._view_model
@@ -90,11 +88,6 @@ class SomTab(TabWidget):
 
         super().__init__(parent)
 
-        if log_model is None and self._log_model.parent() is None:
-            try:
-                self._log_model.setParent(self)
-            except Exception:
-                logger.warning("Exception in __init__", exc_info=True)
         try:
             self._view_model.setParent(self)
         except Exception:
@@ -108,11 +101,13 @@ class SomTab(TabWidget):
 
     # ------------------------------------------------------------------
     def _create_sidebar(self) -> QWidget:
-        help_viewmodel = getattr(self.window(), "help_viewmodel", None)
+        try:
+            help_viewmodel = get_help_viewmodel()
+        except Exception:
+            help_viewmodel = None
         self.sidebar = SomSidebar(
             view_model=self._view_model,
             clustering_view_model=self._clustering_view_model,
-            log_model=self._log_model,
             data_model=self.view_model._data_model,
             help_viewmodel=help_viewmodel,
             parent=self,
@@ -1952,12 +1947,9 @@ class SomTab(TabWidget):
 
     def _resolve_log_view_model(self):
         try:
-            win = self.window() or self.parent()
+            return get_log_view_model()
         except Exception:
-            win = None
-        if win is not None:
-            return getattr(win, "log_view_model", None)
-        return None
+            return None
 
     def _show_log_window(self) -> None:
         try:

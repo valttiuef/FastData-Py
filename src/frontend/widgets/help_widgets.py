@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 from ..localization import tr
 
 from ..viewmodels.help_viewmodel import HelpViewModel
+from ..viewmodels.log_view_model import get_log_view_model
 from .ask_ai_dialog import AskAiDialog
 
 
@@ -86,7 +87,10 @@ class InfoButton(QPushButton):
         if self._popup is None:
             parent_window = self.window()
             show_log_callback = self._resolve_log_visibility_callback(parent_window)
-            log_view_model = getattr(parent_window, "log_view_model", None)
+            try:
+                log_view_model = get_log_view_model()
+            except Exception:
+                log_view_model = None
             self._popup = HelpPopup(
                 self._help_key,
                 self._help_viewmodel,
@@ -167,7 +171,12 @@ class HelpPopup(AskAiDialog):
         """
         self._help_key = help_key
         self._help_viewmodel = help_viewmodel
-        self._log_view_model = log_view_model or getattr(parent, "log_view_model", None)
+        if log_view_model is None:
+            try:
+                log_view_model = get_log_view_model()
+            except Exception:
+                log_view_model = None
+        self._log_view_model = log_view_model
         self._show_log_callback = show_log_callback
         self._initial_context_text = ""
 
@@ -264,9 +273,10 @@ class HelpPopup(AskAiDialog):
         if self._log_view_model is not None:
             return self._log_view_model
 
-        parent_window = self.parent()
-        if parent_window is not None:
-            self._log_view_model = getattr(parent_window, "log_view_model", None)
+        try:
+            self._log_view_model = get_log_view_model()
+        except Exception:
+            self._log_view_model = None
 
         return self._log_view_model
 

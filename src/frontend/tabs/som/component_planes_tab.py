@@ -23,6 +23,7 @@ from ...localization import tr
 
 from ...widgets.panel import Panel
 from ...utils.som_details import build_som_map_summary_text, build_som_map_prompt
+from ...viewmodels.log_view_model import get_log_view_model
 from .map_view import SomMapView
 from .som_details_dialog import SomDetailsDialog
 
@@ -201,12 +202,9 @@ class ComponentPlanesTab(QWidget):
 
     def _resolve_log_view_model(self):
         try:
-            win = self.window() or self.parent()
+            return get_log_view_model()
         except Exception:
-            win = None
-        if win is not None:
-            return getattr(win, "log_view_model", None)
-        return None
+            return None
 
     def _show_log_window(self) -> None:
         try:

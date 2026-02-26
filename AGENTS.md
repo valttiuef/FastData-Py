@@ -35,6 +35,8 @@ Do not introduce new architectural patterns without explicit instruction.
 - Keep release tab behavior aligned with `src/frontend/tabs/tab_modules.py`.
 - Respect local-first architecture. Do not introduce cloud-only dependencies.
 - When fixing issues, never suppress warnings/errors as a workaround; fix the root cause.
+- Global UI viewmodels (for example help/log) belong in `src/frontend/viewmodels/` and must expose shared getter functions.
+- Initialize shared/global viewmodels once in `src/frontend/windows/main_window.py`, then access them through getters instead of passing/storing ad-hoc per-widget instances.
 
 ## DataSelectorWidget Rule (Strict)
 

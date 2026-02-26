@@ -26,7 +26,7 @@ from frontend.models.database_model import DatabaseModel
 from ..widgets.fast_table import FastTable
 from ..widgets.dataframe_table_model import DataFrameTableModel
 from ..widgets.help_widgets import InfoButton
-from ..viewmodels.help_viewmodel import HelpViewModel
+from ..viewmodels.help_viewmodel import HelpViewModel, get_help_viewmodel
 from ..threading.runner import run_in_thread
 from ..threading.utils import run_in_main_thread
 from ..tabs.data.import_preview_logic import should_enable_duckdb_csv_import
@@ -472,13 +472,17 @@ class ImportOptionsDialog(QDialog):
         self.opts = opts or ImportOptions()
         self._database_model = database_model
         self._data_view_model = data_view_model
-        self._help_viewmodel = help_viewmodel
+        resolved_help = help_viewmodel
+        if resolved_help is None:
+            try:
+                resolved_help = get_help_viewmodel()
+            except Exception:
+                resolved_help = None
+        self._help_viewmodel = resolved_help
         if self._database_model is None:
             logger.warning("ImportOptionsDialog initialised without database_model.")
         if self._data_view_model is None:
             logger.warning("ImportOptionsDialog initialised without data_view_model.")
-        if self._help_viewmodel is None:
-            logger.warning("ImportOptionsDialog initialised without help_viewmodel.")
         self._preview_request_id = 0
         self._choices_request_id = 0
         self._datasets_request_id = 0

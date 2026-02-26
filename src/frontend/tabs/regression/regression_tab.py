@@ -14,7 +14,6 @@ logger = logging.getLogger(__name__)
 from ...localization import tr
 
 from ...models.hybrid_pandas_model import HybridPandasModel
-from ...models.log_model import LogModel, get_log_model
 from ...threading import run_in_main_thread
 from ...utils import clear_status_text, set_status_text, toast_error, toast_info, toast_success
 from ...utils.exporting import export_dataframes
@@ -22,6 +21,8 @@ from ...utils.model_details import build_model_details_prompt, build_regression_
 from ...widgets.export_dialog import ExportOption, ExportSelectionDialog
 from ...widgets.model_details_dialog import ModelDetailsDialog
 from ...widgets.save_predictions_dialog import SavePredictionsDialog
+from ...viewmodels.help_viewmodel import get_help_viewmodel
+from ...viewmodels.log_view_model import get_log_view_model
 from .viewmodel import RegressionViewModel
 
 from .results_panel import RegressionResultsPanel
@@ -37,24 +38,15 @@ class RegressionTab(TabWidget):
         self,
         database_model: HybridPandasModel,
         parent: Optional[QWidget] = None,
-        *,
-        log_model: Optional[LogModel] = None,
     ) -> None:
-        self._log_model = log_model or get_log_model()
         self._view_model = RegressionViewModel(
             database_model,
             parent=None,
-            log_model=self._log_model,
         )
         self._details_dialog: Optional[ModelDetailsDialog] = None
 
         super().__init__(parent)
 
-        if log_model is None and self._log_model.parent() is None:
-            try:
-                self._log_model.setParent(self)
-            except Exception:
-                logger.warning("Exception in __init__", exc_info=True)
         try:
             self._view_model.setParent(self)
         except Exception:
@@ -83,7 +75,10 @@ class RegressionTab(TabWidget):
 
     # ------------------------------------------------------------------
     def _create_sidebar(self) -> QWidget:
-        help_viewmodel = getattr(self.window(), "help_viewmodel", None)
+        try:
+            help_viewmodel = get_help_viewmodel()
+        except Exception:
+            help_viewmodel = None
         self.sidebar = RegressionSidebar(
             view_model=self._view_model,
             help_viewmodel=help_viewmodel,
@@ -534,12 +529,9 @@ class RegressionTab(TabWidget):
 
     def _resolve_log_view_model(self):
         try:
-            win = self.window() or self.parent()
+            return get_log_view_model()
         except Exception:
-            win = None
-        if win is not None:
-            return getattr(win, "log_view_model", None)
-        return None
+            return None
 
     def _show_log_window(self) -> None:
         try:

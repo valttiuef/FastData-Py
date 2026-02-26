@@ -36,19 +36,19 @@ def is_frozen_app() -> bool:
 def _build_data_tab(window: Any) -> Any:
     from .data.data_tab import DataTab
 
-    return DataTab(window.database_model, parent=window, log_model=window.log_model)
+    return DataTab(window.database_model, parent=window)
 
 
 def _build_selections_tab(window: Any) -> Any:
     from .selections.selection_tab import SelectionsTab
 
-    return SelectionsTab(window.database_model, parent=window, log_model=window.log_model)
+    return SelectionsTab(window.database_model, parent=window)
 
 
 def _build_statistics_tab(window: Any) -> Any:
     from .statistics.statistics_tab import StatisticsTab
 
-    return StatisticsTab(window.database_model, parent=window, log_model=window.log_model)
+    return StatisticsTab(window.database_model, parent=window)
 
 
 def _build_charts_tab(window: Any) -> Any:
@@ -60,19 +60,19 @@ def _build_charts_tab(window: Any) -> Any:
 def _build_som_tab(window: Any) -> Any:
     from .som.som_tab import SomTab
 
-    return SomTab(window.database_model, parent=window, log_model=window.log_model)
+    return SomTab(window.database_model, parent=window)
 
 
 def _build_regression_tab(window: Any) -> Any:
     from .regression.regression_tab import RegressionTab
 
-    return RegressionTab(window.database_model, parent=window, log_model=window.log_model)
+    return RegressionTab(window.database_model, parent=window)
 
 
 def _build_forecasting_tab(window: Any) -> Any:
     from .forecasting.forecasting_tab import ForecastingTab
 
-    return ForecastingTab(window.database_model, parent=window, log_model=window.log_model)
+    return ForecastingTab(window.database_model, parent=window)
 
 
 

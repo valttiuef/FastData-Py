@@ -9,7 +9,6 @@ from PySide6.QtCore import QObject, Signal
 
 from ...models.database_model import DatabaseModel
 from ...models.selection_settings import SelectionSettingsPayload
-from ...models.log_model import LogModel, get_log_model
 from ...threading.runner import run_in_thread
 from ...threading.utils import run_in_main_thread
 
@@ -41,10 +40,9 @@ class SelectionsViewModel(QObject):
     feature_group_conversion_done = Signal(object)
     features_save_completed = Signal(object)
 
-    def __init__(self, database_model: DatabaseModel, *, log_model: Optional[LogModel] = None, parent: Optional[QObject] = None) -> None:
+    def __init__(self, database_model: DatabaseModel, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
         self._database_model = database_model
-        self._log_model = log_model or get_log_model()
         self._pending_deletes: set[int] = set()
         self._settings_cache: List[dict] = []
         self._active_setting_key: Optional[tuple] = None

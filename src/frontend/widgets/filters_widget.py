@@ -28,7 +28,7 @@ from ..threading.runner import run_in_thread
 from ..threading.utils import run_in_main_thread
 from ..utils import toast_error, toast_success
 from .help_widgets import InfoButton
-from ..viewmodels.help_viewmodel import HelpViewModel
+from ..viewmodels.help_viewmodel import HelpViewModel, get_help_viewmodel
 
 
 
@@ -248,9 +248,13 @@ class FiltersWidget(CollapsibleSection):
     ):
         super().__init__(tr(title), collapsed=collapsed, parent=parent)
 
-        self._help_viewmodel = help_viewmodel
-        if self._help_viewmodel is None:
-            logger.warning("FiltersWidget initialised without help_viewmodel.")
+        resolved_help = help_viewmodel
+        if resolved_help is None:
+            try:
+                resolved_help = get_help_viewmodel()
+            except Exception:
+                resolved_help = None
+        self._help_viewmodel = resolved_help
 
         grid = QGridLayout()
         grid.setContentsMargins(4, 4, 4, 4)
