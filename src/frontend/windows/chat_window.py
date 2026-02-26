@@ -383,6 +383,8 @@ class ChatWindow(QWidget):
         self._pending_stream_append.clear()
         self._set_llm_busy(False)
         if message:
+            if self._is_duplicate_tail_message("error", message):
+                return
             self._append_message("error", message)
             self._suppress_next_llm_error_log = message.strip()
 
@@ -402,6 +404,8 @@ class ChatWindow(QWidget):
         if event.level >= 40:
             if self._suppress_next_llm_error_log and message == self._suppress_next_llm_error_log:
                 self._suppress_next_llm_error_log = None
+                return
+            if self._is_duplicate_tail_message("error", event.message):
                 return
             self._append_message("error", event.message)
             return
@@ -438,6 +442,12 @@ class ChatWindow(QWidget):
     def _append_message(self, role: str, content: str) -> None:
         self._messages.append(_ChatMessage(role=role, content=content))
         self._append_message_item(len(self._messages) - 1)
+
+    def _is_duplicate_tail_message(self, role: str, content: str) -> bool:
+        if not self._messages:
+            return False
+        tail = self._messages[-1]
+        return tail.role == role and tail.content.strip() == (content or "").strip()
 
     def _set_llm_busy(self, value: bool) -> None:
         self._send_button.setDisabled(value)
