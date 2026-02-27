@@ -54,7 +54,6 @@ class StatisticsPreview(Panel):
             context_menu_builder=self._build_table_context_menu,
             sorting_enabled=True,
         )
-        self.preview_table.set_stretch_column(-1)
         table_layout.addWidget(self.preview_table, 1)
         self._splitter.addWidget(table_container)
         

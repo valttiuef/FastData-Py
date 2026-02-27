@@ -79,9 +79,9 @@ When adding dependencies:
 
 Do not introduce mandatory cloud dependencies.
 
-## AI Fingerprinting (Required for Significant Changes)
+## AI Fingerprinting
 
-For large refactors, architectural changes, or substantial generated code, annotate with:
+For significant AI-generated changes, annotate with one of these forms:
 
 Single-line:
 
@@ -91,7 +91,11 @@ Example:
 
     # @ai(gpt-4o, vscode, refactor, 2026-02-26)
 
-Block form (large sections only):
+Use single-line markers for:
+- New public functions/methods (non-underscore names) when AI-authored.
+- Significant single-function edits or refactors.
+
+Block form:
 
     # --- @ai START ---
     # model: gpt-4o
@@ -100,6 +104,10 @@ Block form (large sections only):
     # reviewed: yes
     # date: 2026-02-26
     # --- @ai END ---
+
+Use block markers for:
+- Full-file changes.
+- Large multi-function or architectural refactors.
 
 Do not annotate trivial edits.  
 Markers must not affect runtime behavior.

@@ -46,7 +46,6 @@ class FeatureMapTabWidget(QWidget):
             initial_uniform_column_widths=True,
             sorting_enabled=True,
         )
-        self.feature_table.set_stretch_column(-1)
         self.feature_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         feature_panel_layout.addWidget(self.feature_table)
         splitter.addWidget(feature_panel)

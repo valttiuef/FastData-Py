@@ -553,7 +553,6 @@ class FastTable(QTableView):
         initial_uniform_column_widths: bool = False,
         initial_uniform_column_count: int | None = None,
         sorting_enabled: bool = True,
-        uniform_row_heights: bool = True,
         show_grid: bool = True,
     ):
         super().__init__(parent)
@@ -565,10 +564,9 @@ class FastTable(QTableView):
         self._fixed_row_height = int(fixed_row_height)
         self._context_menu_builder = context_menu_builder
         self._uniform_column_widths = bool(initial_uniform_column_widths)
-        try:
-            parsed_uniform_count = int(initial_uniform_column_count) if initial_uniform_column_count is not None else 0
-        except Exception:
-            parsed_uniform_count = 0
+
+        parsed_uniform_count = int(initial_uniform_column_count) if initial_uniform_column_count is not None else 0
+
         self._initial_uniform_column_count = max(0, parsed_uniform_count)
         self._uniform_applied = False
         self._dataframe_model: Optional[FastDataFrameModel] = None
@@ -582,6 +580,7 @@ class FastTable(QTableView):
             "columns": QAbstractItemView.SelectionBehavior.SelectColumns,
             "items": QAbstractItemView.SelectionBehavior.SelectItems,
         }
+        
         self.setSelectionBehavior(sel_beh_map.get(select, QAbstractItemView.SelectionBehavior.SelectRows))
         self.setSelectionMode(
             QAbstractItemView.SelectionMode.SingleSelection
@@ -823,6 +822,32 @@ class FastTable(QTableView):
                 self._stretch_column if self._stretch_column >= 0 else (count - 1),
                 count - 1
             )
+
+    # @ai(gpt-5, codex, api-add, 2026-02-27)
+    def reapply_uniform_column_widths(self) -> None:
+        if not self._uniform_column_widths:
+            return
+        model = self.model()
+        if not model:
+            return
+        total_columns = int(model.columnCount())
+        if total_columns <= 0:
+            return
+
+        uniform_count = self._initial_uniform_column_count if self._initial_uniform_column_count > 0 else total_columns
+        uniform_count = max(0, min(uniform_count, total_columns))
+        if uniform_count <= 0:
+            return
+
+        viewport = self.viewport()
+        available_width = viewport.width() if viewport is not None else self.width()
+        if available_width <= 0:
+            return
+
+        uniform_width = max(self._min_column_width, int(available_width // uniform_count))
+        for column in range(uniform_count):
+            self.setColumnWidth(column, uniform_width)
+        self._uniform_applied = True
 
     def _sum_other_columns_width(self, skip_idx: int) -> int:
         model = self.model()

@@ -57,7 +57,6 @@ class SomSavedMapsDialog(QDialog):
             sorting_enabled=True,
         )
         self._table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self._table.set_stretch_column(-1)
         header = self._table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self._table.set_dataframe(pd.DataFrame(columns=self._columns), include_index=False)

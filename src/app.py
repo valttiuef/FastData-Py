@@ -12,7 +12,7 @@ ensure_qt()
 for k in ("QT_SCALE_FACTOR", "QT_SCREEN_SCALE_FACTORS"):
     os.environ.pop(k, None)
 
-from PySide6.QtCore import Qt, QtMsgType, QEventLoop, qInstallMessageHandler
+from PySide6.QtCore import Qt, QtMsgType, QEventLoop, QTimer, qInstallMessageHandler
 from PySide6.QtGui import QGuiApplication
 
 # Must be set before QApplication is created.
@@ -95,6 +95,7 @@ def _fatal_startup_error(app, splash, message: str, exc: Exception | None = None
         logger.warning("Failed to restore cursor after startup error", exc_info=True)
 
 
+# @ai(gpt-5, codex, bugfix, 2026-02-27)
 def main():
     configure_logging(name="app.startup")
     install_global_exception_hooks()
@@ -187,10 +188,12 @@ def main():
 
     # --- Finish splash ---
     try:
-        win.showMaximized()
         update_status(splash, app, app.translate("startup", "Ready"), percent=100)
         if splash is not None:
             splash.finish(win)
+        # Re-apply maximize after splash handoff; on some platforms the initial
+        # state can be dropped during first show/polish.
+        QTimer.singleShot(0, win.showMaximized)
         if app.overrideCursor() is not None:
             app.restoreOverrideCursor()
     except Exception as e:

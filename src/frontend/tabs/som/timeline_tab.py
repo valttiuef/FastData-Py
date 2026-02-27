@@ -161,7 +161,6 @@ class TimelineTabWidget(QWidget):
         )
         self.timeline_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.timeline_table.set_dataframe(empty_timeline_table_dataframe(), include_index=False)
-        self.timeline_table.set_stretch_column(None)
         table_layout.addWidget(self.timeline_table, 1)
         if self._view_model is not None:
             try:
