@@ -36,6 +36,26 @@ def _ts_to_qdatetime_local(ts: pd.Timestamp) -> QDateTime:
     )
 
 
+def _qdatetime_to_wall_timestamp(qdt: QDateTime) -> pd.Timestamp | None:
+    """Convert QDateTime to timezone-naive wall-clock pandas Timestamp."""
+    if not qdt or not qdt.isValid():
+        return None
+    d = qdt.date()
+    t = qdt.time()
+    try:
+        return pd.Timestamp(
+            year=d.year(),
+            month=d.month(),
+            day=d.day(),
+            hour=t.hour(),
+            minute=t.minute(),
+            second=t.second(),
+            microsecond=t.msec() * 1000,
+        )
+    except Exception:
+        return None
+
+
 def _to_ms_epoch_array(t_arr) -> np.ndarray:
     """
     Convert timestamps to ms since epoch such that 00:00 stays 00:00 on the axis.
@@ -608,6 +628,7 @@ class TimeSeriesChart(QFrame):
             except Exception:
                 logger.warning("Failed to emit reset request from time-series chart reset action.", exc_info=True)
 
+    # @ai(gpt-5, codex, fix, 2026-02-27)
     def _on_user_range_selected(self, qmin: QDateTime, qmax: QDateTime):
         # Update axis label format based on selected span
         try:
@@ -617,8 +638,12 @@ class TimeSeriesChart(QFrame):
             logger.warning("Failed to update X-axis label format after user-selected range.", exc_info=True)
         self._refresh_group_timeline_overlays()
 
-        start = pd.to_datetime(qmin.toMSecsSinceEpoch(), unit="ms")
-        end = pd.to_datetime(qmax.toMSecsSinceEpoch(), unit="ms")
+        # Keep wall-clock semantics symmetric with _ts_to_qdatetime_local()
+        # to avoid timezone-offset jumps when interactions emit QDateTime.
+        start = _qdatetime_to_wall_timestamp(qmin)
+        end = _qdatetime_to_wall_timestamp(qmax)
+        if start is None or end is None:
+            return
         self.range_changed.emit(start, end)
 
     def _reset_to_data_bounds(self, *, reset_x: bool = True, reset_y: bool = True) -> None:
