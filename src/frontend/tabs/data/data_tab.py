@@ -341,11 +341,14 @@ class DataTab(TabWidget):
         flt = self._build_filters()
         if not flt:
             return
-        b0, b1 = self._view_model.time_bounds(flt)
+        # Match time-series reset behavior: reset to true feature bounds,
+        # not the current narrowed sidebar range.
+        flt_for_bounds = flt.clone_with_range(None, None)
+        b0, b1 = self._view_model.time_bounds(flt_for_bounds)
         if b0 is None or b1 is None:
             return
         self._set_dt_controls_from_range(b0, b1)
-        self._debounce.start()
+        self._reload_now(force=True)
 
     def _set_monthly_chart_title(self, flt: DataFilters | None) -> None:
         if flt is None:

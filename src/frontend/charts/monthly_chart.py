@@ -3,34 +3,24 @@ import logging
 
 logger = logging.getLogger(__name__)
 # frontend/data_tab/monthly_chart.py
-from typing import Iterable, List, Tuple
+from typing import Iterable, List
 import pandas as pd
 
-from PySide6.QtCore import Qt, Signal, QRectF, QPointF
-from PySide6.QtGui import QPainter, QPen, QBrush, QColor, QCursor, QPalette
-from PySide6.QtCharts import (
-    QChart, QChartView, QBarSeries, QBarSet, QBarCategoryAxis, QValueAxis
-)
+from PySide6.QtCore import Qt, Signal, QRectF, QPointF, QTimer
+from PySide6.QtGui import QPen, QBrush, QColor, QCursor
+from PySide6.QtCharts import QBarSet
 from PySide6.QtWidgets import (
-    QFrame,
-    QVBoxLayout,
+    QApplication,
     QGraphicsRectItem,
     QGraphicsLineItem,
     QToolTip,
 )
 
-from ..style.chart_theme import (
-    make_colors_from_palette,
-    apply_chart_background,
-    style_axis,
-    style_bar_series,
-    style_legend,
-    is_dark_color,
-    window_color_from_theme,
-)
-from ..style.theme_manager import theme_manager
+from ..style.chart_theme import style_legend
+from ..style.group_colors import group_color_cycle
 from core.datetime_utils import drop_timezone_preserving_wall
 from . import MAX_FEATURES_SHOWN_LEGEND
+from .group_chart import GroupBarChart
 
 
 def _short_label(name: str, max_len: int = 24) -> str:
@@ -45,24 +35,7 @@ def _short_label(name: str, max_len: int = 24) -> str:
     return primary[: max_len - 1] + "…"
 
 
-class _ChartView(QChartView):
-    """Click-only chart view: disable rubber-band and wheel zooming.
-
-    We keep the view interactive only for clicks so the parent widget
-    can interpret clicks on bars (filtering). Zooming is disabled to
-    avoid accidental view changes.
-    """
-    def __init__(self, chart: QChart, parent=None):
-        super().__init__(chart, parent)
-        self.setRenderHint(QPainter.RenderHint.Antialiasing)
-        # Disable rubber-band selection/zoom
-        self.setRubberBand(QChartView.NoRubberBand)
-
-    def wheelEvent(self, ev):
-        # Ignore wheel events to prevent zooming/scrolling of the chart.
-        ev.accept()
-
-class MonthlyBarChart(QFrame):
+class MonthlyBarChart(GroupBarChart):
     """Flexible time-aggregate bar chart.
 
     This chart chooses a sensible base aggregation (prefer monthly, limited to
@@ -87,32 +60,15 @@ class MonthlyBarChart(QFrame):
     ]
 
     def __init__(self, title: str = "Bar Chart", parent=None, max_bars: int = 31):
-        super().__init__(parent)
-        lay = QVBoxLayout(self)
+        # These are accessed by _apply_theme, which can be invoked from
+        # GroupBarChart.__init__ before MonthlyBarChart init finishes.
+        self._hover_item = None
+        self._zero_line_item = None
+        self._multi_mode = False
+        super().__init__(title=title, parent=parent, y_label="Value")
         # keep a base title so we can append timeframe info when aggregation changes
         self._base_title = title
         self._append_timeframe_to_title = True
-
-        # Chart + single bar series
-        self.chart = QChart()
-        self.chart.legend().hide()
-        self.chart.setTitle(title)
-        self.series = QBarSeries(); self.series.setBarWidth(0.6)
-        self.chart.addSeries(self.series)
-
-        # Axes
-        self.axis_x = QBarCategoryAxis()
-        self.axis_y = QValueAxis(); self.axis_y.setLabelFormat("%.3f")
-        self.axis_x.setTitleText(""); self.axis_y.setTitleText("Value")
-        self.chart.addAxis(self.axis_x, Qt.AlignBottom)
-        self.chart.addAxis(self.axis_y, Qt.AlignLeft)
-        self.series.attachAxis(self.axis_x)
-        self.series.attachAxis(self.axis_y)
-
-        # View
-        self.view = _ChartView(self.chart); lay.addWidget(self.view, 1)
-        self.view.setMouseTracking(True)
-        self.view.setAttribute(Qt.WA_Hover, True)
 
         # Raw data cache
         self._raw_t = []
@@ -127,9 +83,7 @@ class MonthlyBarChart(QFrame):
         self._vals: List[float] = []
         self._raw_vals: List[float | None] = []
         self._bucket_periods: List[pd.Period] = []
-        self._hover_idx: int | None = None
-        # Track which QBarSet objects we've connected hover handlers for
-        self._connected_barsets = set()
+        self._hover_idx = None
 
         # Multi-feature state
         self._multi_mode: bool = False
@@ -153,101 +107,34 @@ class MonthlyBarChart(QFrame):
         self._max_bars = int(max_bars)
         self._base_level = None  # code like 'M'
         self._current_level = None
-        self._single_series_name: str = "Value"
+        self._single_series_name = "Value"
 
-        # Signals and theme
+        # Signals
         self._series_hover_supported = False
-        self._current_theme: str | None = None
-        self._dark_theme: bool = False
-        self._chart_colors = None
+        self._pending_click_index: int | None = None
+        self._single_click_timer = QTimer(self)
+        self._single_click_timer.setSingleShot(True)
+        self._single_click_timer.timeout.connect(self._commit_pending_single_click)
         self._connect_hover_signals()
-        self.view.mousePressEvent = self._mouse_press_wrapper(self.view.mousePressEvent)
-        self.view.mouseDoubleClickEvent = self._mouse_double_click_wrapper(self.view.mouseDoubleClickEvent)
-
-        try:
-            self._current_theme = theme_manager().current_theme
-        except AssertionError:
-            self._current_theme = None
-
+        self.view.mousePressEvent = self._mouse_press_wrapper(self._native_mouse_press_event)
+        self.view.mouseDoubleClickEvent = self._mouse_double_click_wrapper(self._native_mouse_double_click_event)
         self._apply_theme(self._current_theme)
 
-        try:
-            theme_manager().theme_changed.connect(self._on_theme_changed)
-        except AssertionError:
-            logger.warning("Failed to connect theme change signal for monthly chart.", exc_info=True)
-
-    def _on_theme_changed(self, theme_name: str):
-        self._current_theme = theme_name
-        self._apply_theme(theme_name)
-
     def _apply_theme(self, theme_name: str | None = None):
-        if theme_name is None:
-            theme_name = self._current_theme
-        else:
-            self._current_theme = theme_name
-
-        colors = make_colors_from_palette(self, theme_name)
-        self._chart_colors = colors
-        self._dark_theme = is_dark_color(colors.plot_bg)
-        apply_chart_background(self.chart, colors)
-        style_axis(self.axis_x, colors)
-        style_axis(self.axis_y, colors)
-        style_legend(self.chart.legend(), colors)
+        super()._apply_theme(theme_name)
+        colors = self._chart_colors
         self._set_zero_line_pen(colors)
 
-        container_color = window_color_from_theme(self, theme_name)
-
-        try:
-            self.chart.setTitleBrush(QBrush(colors.text))
-        except Exception:
-            logger.warning("Failed to update title brush while applying monthly chart theme.", exc_info=True)
-
-        frame_palette = self.palette()
-        frame_palette.setColor(QPalette.Window, container_color)
-        frame_palette.setColor(QPalette.Base, container_color)
-        self.setPalette(frame_palette)
-        self.setAutoFillBackground(True)
-        try:
-            self.setAttribute(Qt.WA_StyledBackground, True)
-        except Exception:
-            logger.warning("Failed to set styled-background attribute while applying monthly chart theme.", exc_info=True)
-
-        view_palette = self.view.palette()
-        view_palette.setColor(QPalette.Window, container_color)
-        view_palette.setColor(QPalette.Base, container_color)
-        self.view.setPalette(view_palette)
-        self.view.setAutoFillBackground(True)
-        try:
-            self.view.setBackgroundBrush(QBrush(container_color))
-        except Exception:
-            logger.warning("Failed to set chart-view background brush while applying monthly chart theme.", exc_info=True)
-
-        viewport_palette = self.view.viewport().palette()
-        viewport_palette.setColor(QPalette.Window, container_color)
-        viewport_palette.setColor(QPalette.Base, container_color)
-        self.view.viewport().setPalette(viewport_palette)
-        self.view.viewport().setAutoFillBackground(True)
-        try:
-            self.view.viewport().setBackgroundRole(QPalette.Window)
-        except Exception:
-            logger.warning("Failed to set viewport background role while applying monthly chart theme.", exc_info=True)
-
-        try:
-            scene = self.chart.scene()
-            if scene is not None:
-                scene.setBackgroundBrush(QBrush(container_color))
-        except Exception:
-            logger.warning("Failed to update scene background while applying monthly chart theme.", exc_info=True)
-
-        if self._multi_mode and self.series.barSets():
+        if getattr(self, "_multi_mode", False) and self.series.barSets():
             bar_colors = self._multi_bar_colors(len(self.series.barSets()))
             for bar_set, color in zip(self.series.barSets(), bar_colors):
                 bar_set.setBrush(QBrush(color))
                 bar_set.setPen(QPen(QColor(color).darker(110 if not self._dark_theme else 140)))
             if self._chart_colors is not None:
                 style_legend(self.chart.legend(), self._chart_colors)
-        else:
-            style_bar_series(self.series, colors)
+
+        if self._hover_item is None or colors is None:
+            return
 
         hover_fill = QColor(colors.bar_fill).lighter(120)
         hover_fill.setAlpha(160)
@@ -268,7 +155,7 @@ class MonthlyBarChart(QFrame):
         self._update_zero_line()
 
     def _set_zero_line_pen(self, colors):
-        if self._zero_line_item is None or colors is None:
+        if getattr(self, "_zero_line_item", None) is None or colors is None:
             return
         pen = QPen(QColor(colors.grid))
         pen.setCosmetic(True)
@@ -348,6 +235,9 @@ class MonthlyBarChart(QFrame):
             self._base_level = None
             self._current_level = None
         self._cats.clear(); self._vals.clear(); self._raw_vals.clear(); self._bucket_periods.clear()
+        self._pending_click_index = None
+        if getattr(self, "_single_click_timer", None) is not None and self._single_click_timer.isActive():
+            self._single_click_timer.stop()
         self._hover_item.setVisible(False)
         if self._zero_line_item is not None:
             self._zero_line_item.setVisible(False)
@@ -556,6 +446,9 @@ class MonthlyBarChart(QFrame):
             # Build bar set
             bar = QBarSet(self._single_series_name)
             bar.append(self._vals)
+            primary = group_color_cycle(1, dark_theme=self._dark_theme)[0]
+            bar.setBrush(QBrush(primary))
+            bar.setPen(QPen(QColor(primary).darker(110 if not self._dark_theme else 140)))
             self.series.append(bar)
             bar.hovered.connect(self._on_set_hovered)
 
@@ -753,27 +646,7 @@ class MonthlyBarChart(QFrame):
         return start.strftime("%Y-%m-%d %H:00")
 
     def _multi_bar_colors(self, count: int) -> list[QColor]:
-        base_palette = [
-            QColor(66, 133, 244),   # blue
-            QColor(219, 68, 55),    # red
-            QColor(244, 180, 0),    # orange
-            QColor(15, 157, 88),    # green
-            QColor(171, 71, 188),   # purple
-            QColor(0, 172, 193),    # teal
-        ]
-        colors: list[QColor] = []
-        for idx in range(max(1, count)):
-            base = QColor(base_palette[idx % len(base_palette)])
-            if self._dark_theme:
-                base = base.lighter(130)
-            if idx >= len(base_palette):
-                factor = 110 + 15 * (idx // len(base_palette))
-                if base.lightness() < 128:
-                    base = base.lighter(factor)
-                else:
-                    base = base.darker(factor)
-            colors.append(base)
-        return colors
+        return group_color_cycle(count, dark_theme=self._dark_theme)
 
     def _noop_hover(self, *args, **kwargs):
         """Placeholder to disable hover handling in multi mode."""
@@ -838,10 +711,15 @@ class MonthlyBarChart(QFrame):
             if ev.button() == Qt.LeftButton:
                 try:
                     if self._hover_idx is not None:
-                        try:
-                            self._on_bar_clicked(self._hover_idx)
-                        except Exception:
-                            logger.warning("Failed to drill down from monthly chart left-clicked bar.", exc_info=True)
+                        self._pending_click_index = int(self._hover_idx)
+                        delay_ms = 250
+                        app = QApplication.instance()
+                        if app is not None:
+                            try:
+                                delay_ms = max(120, int(app.doubleClickInterval()))
+                            except Exception:
+                                delay_ms = 250
+                        self._single_click_timer.start(delay_ms)
                 except Exception:
                     logger.warning("Failed while handling monthly chart left-click interaction.", exc_info=True)
             return base_handler(ev)
@@ -850,12 +728,28 @@ class MonthlyBarChart(QFrame):
     def _mouse_double_click_wrapper(self, base_handler):
         def handler(ev):
             if ev.button() == Qt.LeftButton:
+                self._pending_click_index = None
+                if self._single_click_timer.isActive():
+                    self._single_click_timer.stop()
                 try:
                     self.reset_to_base()
                 except Exception:
                     logger.warning("Failed to reset monthly chart to base level on double-click.", exc_info=True)
             return base_handler(ev)
         return handler
+
+    def _commit_pending_single_click(self) -> None:
+        if self._multi_mode:
+            self._pending_click_index = None
+            return
+        idx = self._pending_click_index
+        self._pending_click_index = None
+        if idx is None:
+            return
+        try:
+            self._on_bar_clicked(int(idx))
+        except Exception:
+            logger.warning("Failed to handle delayed monthly chart bar click.", exc_info=True)
 
     def _on_bar_clicked(self, idx: int):
         if self._multi_mode:
@@ -865,14 +759,6 @@ class MonthlyBarChart(QFrame):
             return
 
         cur_code = self._current_level if self._current_level is not None else (self._base_level or self._LEVELS[0][0])
-        # fixed drill order: Month -> Day -> Hour
-        if cur_code == "M":
-            next_code = "D"
-        elif cur_code == "D":
-            next_code = "h"
-        else:
-            next_code = None
-
         # compute start and next_start timestamps for the clicked bucket
         per = self._bucket_periods[idx]
         try:
@@ -893,37 +779,13 @@ class MonthlyBarChart(QFrame):
         except Exception:
             logger.warning("Failed to emit bucket-selected signal from monthly chart bar click.", exc_info=True)
 
-        # drill down using filtered subset if finer level exists
-        if next_code is not None and next_code != cur_code:
-            # filter raw series to the clicked bucket
-            mask = (self._raw_t >= start) & (self._raw_t < next_start)
-            t_f = self._raw_t[mask]
-            v_f = self._raw_v[mask]
-            # push new history entry with parent bucket info so we can step back
-            try:
-                # store parent bounds as naive timestamps
-                self._history.append((next_code, t_f, v_f, start, next_start))
-            except Exception:
-                self._history.append((next_code, t_f, v_f, None, None))
-            self._current_level = next_code
-            self._render_level(t_f, v_f, self._current_level)
+        # Do not locally render the next timeframe. Controller/viewmodel handles
+        # filter + preprocessing + reload, then pushes new data back to this chart.
 
     def reset_to_base(self):
-        if self._multi_mode:
-            if self._multi_base_level is None:
-                return
-            self._render_multi_level(self._multi_base_level)
-            try:
-                self.reset_requested.emit()
-            except Exception:
-                logger.warning("Failed to emit reset request while resetting monthly chart to base.", exc_info=True)
-            return
-        if self._base_level is None: return
-        self._current_level = self._base_level
-        # restore full dataset view and notify listeners
-        self._history.clear()
-        self._history.append((self._base_level, self._raw_t, self._raw_v, None, None))
-        self._render_level(self._raw_t, self._raw_v, self._current_level)
+        self._pending_click_index = None
+        if self._single_click_timer.isActive():
+            self._single_click_timer.stop()
         try:
             self.reset_requested.emit()
         except Exception:

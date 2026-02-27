@@ -26,12 +26,12 @@ from ..style.chart_theme import (
     make_colors_from_palette,
     apply_chart_background,
     style_axis,
-    style_bar_series,
     style_legend,
     is_dark_color,
     window_color_from_theme,
 )
 from ..style.theme_manager import theme_manager
+from ..style.group_colors import group_color_cycle
 
 
 
@@ -115,6 +115,8 @@ class GroupBarChart(QFrame):
         # View
         self.view = _ChartView(self.chart)
         lay.addWidget(self.view, 1)
+        self._native_mouse_press_event = self.view.mousePressEvent
+        self._native_mouse_double_click_event = self.view.mouseDoubleClickEvent
         try:
             self.view.setMouseTracking(True)
             self.view.setAttribute(Qt.WA_Hover, True)
@@ -200,8 +202,15 @@ class GroupBarChart(QFrame):
         self.view.viewport().setPalette(viewport_palette)
         self.view.viewport().setAutoFillBackground(True)
 
-        # Style existing bar series
-        style_bar_series(self.series, colors)
+        # Keep grouped-series colors stable across theme changes.
+        existing_sets = list(self.series.barSets())
+        fallback = group_color_cycle(len(existing_sets), dark_theme=self._dark_theme)
+        for idx, bar_set in enumerate(existing_sets):
+            brush_color = bar_set.brush().color() if bar_set.brush().color().isValid() else None
+            color = QColor(brush_color) if brush_color is not None else QColor(fallback[idx])
+            if not brush_color:
+                bar_set.setBrush(QBrush(color))
+            bar_set.setPen(QPen(QColor(color).darker(110 if not self._dark_theme else 140)))
 
         self.axis_x.setLabelsAngle(-45)
 
@@ -292,6 +301,9 @@ class GroupBarChart(QFrame):
         self._single_series_name = str(series_name)
         bar = QBarSet(series_name)
         bar.append(self._values)
+        primary = group_color_cycle(1, dark_theme=self._dark_theme)[0]
+        bar.setBrush(QBrush(primary))
+        bar.setPen(QPen(QColor(primary).darker(110 if not self._dark_theme else 140)))
         self.series.append(bar)
 
         # Connect signals
@@ -323,9 +335,7 @@ class GroupBarChart(QFrame):
             y_min = 0.0
         self.axis_y.setRange(y_min, y_max + padding)
 
-        # Apply theme styling to the new bar set
-        if self._chart_colors is not None:
-            style_bar_series(self.series, self._chart_colors)
+        # Keep explicit group palette color for single-series group bars.
 
     def set_dataframe(
         self,
@@ -460,27 +470,7 @@ class GroupBarChart(QFrame):
 
     def _get_series_colors(self, count: int) -> List[QColor]:
         """Get a list of colors for multiple series."""
-        base_palette = [
-            QColor(66, 133, 244),   # blue
-            QColor(219, 68, 55),    # red
-            QColor(244, 180, 0),    # orange
-            QColor(15, 157, 88),    # green
-            QColor(171, 71, 188),   # purple
-            QColor(0, 172, 193),    # teal
-        ]
-        colors: List[QColor] = []
-        for idx in range(max(1, count)):
-            base = QColor(base_palette[idx % len(base_palette)])
-            if self._dark_theme:
-                base = base.lighter(130)
-            if idx >= len(base_palette):
-                factor = 110 + 15 * (idx // len(base_palette))
-                if base.lightness() < 128:
-                    base = base.lighter(factor)
-                else:
-                    base = base.darker(factor)
-            colors.append(base)
-        return colors
+        return group_color_cycle(count, dark_theme=self._dark_theme)
 
     def _make_click_handler(self, series_name: str):
         """Create a click handler for a specific series."""
@@ -537,7 +527,7 @@ class GroupBarChart(QFrame):
     # ---------- Signal Handlers ----------
     def _connect_signals(self):
         """Connect chart interaction signals."""
-        self.view.mousePressEvent = self._mouse_press_wrapper(self.view.mousePressEvent)
+        self.view.mousePressEvent = self._mouse_press_wrapper(self._native_mouse_press_event)
 
     def _on_set_hovered(self, status: bool, index: int):
         """Handle bar hover events."""

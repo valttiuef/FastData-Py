@@ -11,7 +11,7 @@ from PySide6.QtGui import QColor, QPen, QPalette, QBrush, QFont
 
 from .interactive_chart_view import InteractiveChartView
 from . import MAX_FEATURES_SHOWN_LEGEND
-from ..style.cluster_colors import cluster_color_for_label
+from ..style.group_colors import group_color_for_label, group_color_cycle
 from ..style.chart_theme import (
 
     make_colors_from_palette,
@@ -456,7 +456,7 @@ class TimeSeriesChart(QFrame):
             self.chart.addSeries(series)
             series.attachAxis(self.axis_x)
             series.attachAxis(self.axis_y)
-            color = cluster_color_for_label(group, border=False)
+            color = group_color_for_label(group, dark_theme=self._dark_theme)
             pen = QPen(color)
             pen.setWidthF(2.0)
             pen.setCosmetic(True)
@@ -518,7 +518,7 @@ class TimeSeriesChart(QFrame):
         for run in runs:
             label, key, _color = group_meta.get(
                 float(run.group),
-                (f"Cluster {int(run.group)}", f"group:{int(run.group)}", QColor(100, 100, 100)),
+                (f"Cluster {int(run.group)}", f"group:{int(run.group)}", group_color_for_label(run.group, dark_theme=self._dark_theme)),
             )
             start = float(run.start_ms)
             end = float(run.end_ms if run.end_ms > run.start_ms else run.start_ms + 1)
@@ -742,27 +742,7 @@ class TimeSeriesChart(QFrame):
         series.setPen(pen)
 
     def _generate_colors(self, count: int) -> list[QColor]:
-        base_palette = [
-            QColor(66, 133, 244),   # blue
-            QColor(219, 68, 55),    # red
-            QColor(244, 180, 0),    # orange
-            QColor(15, 157, 88),    # green
-            QColor(171, 71, 188),   # purple
-            QColor(0, 172, 193),    # teal
-        ]
-        colors: list[QColor] = []
-        for idx in range(max(1, count)):
-            base = QColor(base_palette[idx % len(base_palette)])
-            if self._dark_theme:
-                base = base.lighter(130)
-            if idx >= len(base_palette):
-                factor = 110 + 15 * (idx // len(base_palette))
-                if base.lightness() < 128:
-                    base = base.lighter(factor)
-                else:
-                    base = base.darker(factor)
-            colors.append(base)
-        return colors
+        return group_color_cycle(count, dark_theme=self._dark_theme)
 
     def _on_theme_changed(self, theme_name: str):
         self._current_theme = theme_name

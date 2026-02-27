@@ -11,7 +11,7 @@ from PySide6.QtCore import QPointF, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPen, QPolygonF, QAction, QPixmap
 from PySide6.QtWidgets import QToolTip, QWidget, QMenu, QInputDialog
 from ...localization import tr
-from ...style.cluster_colors import build_cluster_palette_from_frame
+from ...style.group_colors import build_group_palette
 
 
 
@@ -651,11 +651,22 @@ class SomMapView(QWidget):
         return None
 
     def _build_cluster_palette(self, cluster_df: Optional[pd.DataFrame]) -> dict[object, QColor]:
-        return build_cluster_palette_from_frame(cluster_df, border=False)
+        if cluster_df is None:
+            return {}
+        try:
+            labels = cluster_df.to_numpy().ravel()
+        except Exception:
+            labels = []
+        return build_group_palette(labels, dark_theme=False)
 
     def _build_cluster_border_palette(self, cluster_df: Optional[pd.DataFrame]) -> dict[object, QColor]:
-        """Build palette for cluster borders using shared global cluster colors."""
-        return build_cluster_palette_from_frame(cluster_df, border=True)
+        """Build border colors derived from group colors used by cluster fills."""
+        base = self._build_cluster_palette(cluster_df)
+        border_palette: dict[object, QColor] = {}
+        for label, color in base.items():
+            c = QColor(color)
+            border_palette[label] = c.darker(140) if c.lightness() > 140 else c.lighter(140)
+        return border_palette
 
     def _ensure_overlay_alignment(self) -> None:
         if self._cluster_overlay is None or self._values is None:
