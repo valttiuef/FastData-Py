@@ -70,10 +70,7 @@ class ScatterChart(BaseChart):
         style_axis(self.axis_x, colors)
         style_axis(self.axis_y, colors)
         style_line_series(self.identity, colors)
-        try:
-            self.chart.setTitleBrush(QBrush(colors.text))
-        except Exception:
-            logger.warning("Exception in _apply_colors", exc_info=True)
+        self.chart.setTitleBrush(QBrush(colors.text))
         self._current_colors = colors
         self._dark_theme = is_dark_color(colors.plot_bg)
         self._update_dataset_series_colors()
@@ -93,13 +90,13 @@ class ScatterChart(BaseChart):
                 pen.setCosmetic(True)
                 series.setPen(pen)
             except Exception:
-                logger.warning("Exception in _update_dataset_series_colors", exc_info=True)
+                logger.warning("Failed to update pen style for scatter dataset series.", exc_info=True)
             brush = series.brush()
             try:
                 brush.setColor(color)
                 series.setBrush(brush)
             except Exception:
-                logger.warning("Exception in _update_dataset_series_colors", exc_info=True)
+                logger.warning("Failed to update brush color for scatter dataset series.", exc_info=True)
 
     def _color_for_index(self, index: int) -> QColor:
         rgb = self._BASE_RGB[index % len(self._BASE_RGB)]
@@ -123,7 +120,7 @@ class ScatterChart(BaseChart):
             try:
                 self.chart.removeSeries(series)
             except Exception:
-                logger.warning("Exception in _reset_series", exc_info=True)
+                logger.warning("Failed to remove scatter dataset series while resetting chart.", exc_info=True)
         self._series_map.clear()
         self._dataset_order.clear()
 
@@ -147,11 +144,11 @@ class ScatterChart(BaseChart):
         try:
             self.chart.legend().setVisible(bool(show_legend))
         except Exception:
-            logger.warning("Exception in set_points", exc_info=True)
+            logger.warning("Failed to toggle scatter chart legend visibility.", exc_info=True)
         try:
             self.identity.setVisible(bool(show_identity_line))
         except Exception:
-            logger.warning("Exception in set_points", exc_info=True)
+            logger.warning("Failed to toggle identity line visibility in scatter chart.", exc_info=True)
         if frame is None or frame.empty:
             return
 

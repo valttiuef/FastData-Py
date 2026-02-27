@@ -121,10 +121,7 @@ class TimeSeriesChart(QFrame):
         self._group_box_items: list[QGraphicsRectItem] = []
         self._group_box_text_items: list[QGraphicsSimpleTextItem] = []
         self._deferred_refresh_pending: bool = False
-        try:
-            self.view.set_hover_tooltip_callback(self._group_timeline_hover_tooltip)
-        except Exception:
-            logger.warning("Exception in __init__", exc_info=True)
+        self.view.set_hover_tooltip_callback(self._group_timeline_hover_tooltip)
 
         try:
             self._current_theme = theme_manager().current_theme
@@ -137,17 +134,23 @@ class TimeSeriesChart(QFrame):
         try:
             theme_manager().theme_changed.connect(self._on_theme_changed)
         except AssertionError:
-            logger.warning("Exception in __init__", exc_info=True)
+            logger.warning("Failed to connect theme change signal for time-series chart.", exc_info=True)
         try:
             self.axis_x.rangeChanged.connect(lambda *_args: self._refresh_group_timeline_overlays())
         except Exception:
-            logger.warning("Exception in __init__", exc_info=True)
+            logger.warning("Failed to connect X-axis range change handler for timeline overlays.", exc_info=True)
         try:
             self.chart.plotAreaChanged.connect(lambda *_args: self._refresh_group_timeline_overlays())
         except Exception:
-            logger.warning("Exception in __init__", exc_info=True)
+            logger.warning("Failed to connect plot-area change handler for timeline overlays.", exc_info=True)
 
-    def clear(self):
+    # @ai(gpt-5, codex, refactor, 2026-02-27)
+    def clear(
+        self,
+        *,
+        reset_axes: bool = True,
+        request_repaint: bool = True,
+    ):
         self._clear_group_timeline_overlays()
         self._group_box_specs = []
         self._group_hover_specs = []
@@ -159,33 +162,35 @@ class TimeSeriesChart(QFrame):
         self._feature_order = []
         self._data_x_range = None
         self._data_y_range = None
-        try:
-            self.axis_x.setLabelsVisible(False)
-        except Exception:
-            logger.warning("Exception in clear", exc_info=True)
-        try:
-            self.axis_x.setFormat("yyyy-MM-dd HH:mm")
-        except Exception:
-            logger.warning("Exception in clear", exc_info=True)
-        try:
-            self.axis_y.setRange(0.0, 1.0)
-        except Exception:
-            logger.warning("Exception in clear", exc_info=True)
-        try:
-            self.axis_y.setTickType(QValueAxis.TickType.TicksFixed)
-            self.axis_y.setTickCount(6)
-            self.axis_y.setLabelFormat("%.3f")
-        except Exception:
-            logger.warning("Exception in clear", exc_info=True)
+        if reset_axes:
+            try:
+                self.axis_x.setLabelsVisible(False)
+            except Exception:
+                logger.warning("Failed to hide X-axis labels while clearing time-series chart.", exc_info=True)
+            try:
+                self.axis_x.setFormat("yyyy-MM-dd HH:mm")
+            except Exception:
+                logger.warning("Failed to reset X-axis format while clearing time-series chart.", exc_info=True)
+            try:
+                self.axis_y.setRange(0.0, 1.0)
+            except Exception:
+                logger.warning("Failed to reset Y-axis range while clearing time-series chart.", exc_info=True)
+            try:
+                self.axis_y.setTickType(QValueAxis.TickType.TicksFixed)
+                self.axis_y.setTickCount(6)
+                self.axis_y.setLabelFormat("%.3f")
+            except Exception:
+                logger.warning("Failed to reset Y-axis tick settings while clearing time-series chart.", exc_info=True)
         self._refresh_legend_markers()
-        try:
-            self.chart.update()
-        except Exception:
-            logger.warning("Exception in clear", exc_info=True)
-        try:
-            self.view.viewport().update()
-        except Exception:
-            logger.warning("Exception in clear", exc_info=True)
+        if request_repaint:
+            try:
+                self.chart.update()
+            except Exception:
+                logger.warning("Failed to refresh chart scene after clearing time-series chart.", exc_info=True)
+            try:
+                self.view.viewport().update()
+            except Exception:
+                logger.warning("Failed to refresh chart viewport after clearing time-series chart.", exc_info=True)
 
     def set_title(self, title: str):
         self.chart.setTitle(title)
@@ -201,7 +206,9 @@ class TimeSeriesChart(QFrame):
         self._max_series = max(1, value)
 
     def set_dataframe(self, frame: pd.DataFrame | None):
-        self.clear()
+        # Keep current axis state during regular data refreshes to avoid
+        # intermediate 0..1 axis flicker before new ranges are applied.
+        self.clear(reset_axes=False, request_repaint=False)
         self._preserve_series_colors = False
         self._group_hover_specs = []
         if frame is None:
@@ -259,25 +266,25 @@ class TimeSeriesChart(QFrame):
             try:
                 self.axis_x.setLabelsVisible(True)
             except Exception:
-                logger.warning("Exception in set_dataframe", exc_info=True)
+                logger.warning("Failed to show X-axis labels after setting time-series data.", exc_info=True)
 
             try:
                 self._set_x_axis_format_for_span_ms(ms_max - ms_min)
             except Exception:
-                logger.warning("Exception in set_dataframe", exc_info=True)
+                logger.warning("Failed to format X-axis labels for time-series span.", exc_info=True)
 
         # Y-range as before
         try:
             self.axis_y.setLabelsVisible(True)
         except Exception:
-            logger.warning("Exception in set_dataframe", exc_info=True)
+            logger.warning("Failed to show Y-axis labels after setting time-series data.", exc_info=True)
         try:
             # Reset any categorical tick setup left by group timelines.
             self.axis_y.setTickType(QValueAxis.TickType.TicksFixed)
             self.axis_y.setTickCount(6)
             self.axis_y.setLabelFormat("%.3f")
         except Exception:
-            logger.warning("Exception in set_dataframe", exc_info=True)
+            logger.warning("Failed to restore numeric Y-axis tick settings for time-series data.", exc_info=True)
         self.axis_y.setTitleText("Value")
         if all_values:
             ymin = float(min(all_values)); ymax = float(max(all_values))
@@ -305,7 +312,7 @@ class TimeSeriesChart(QFrame):
         max_rows: int = 120_000,
     ) -> None:
         """Render categorical timeline as colored horizontal group lanes."""
-        self.clear()
+        self.clear(reset_axes=False, request_repaint=False)
         self._preserve_series_colors = True
         if frame is None:
             return
@@ -477,12 +484,12 @@ class TimeSeriesChart(QFrame):
             self.axis_y.setTickAnchor(float(min(ordered_groups)))
             self.axis_y.setTickInterval(1.0)
         except Exception:
-            logger.warning("Exception in set_group_timeline", exc_info=True)
+            logger.warning("Failed to configure dynamic Y-axis ticks for group timeline rendering.", exc_info=True)
         self.axis_y.setLabelFormat("%.0f")
         try:
             self.axis_y.setLabelsVisible(True)
         except Exception:
-            logger.warning("Exception in set_group_timeline", exc_info=True)
+            logger.warning("Failed to show Y-axis labels for group timeline rendering.", exc_info=True)
         self.axis_y.setTitleText("Cluster")
         self._data_y_range = (float(y_min), float(y_max))
 
@@ -582,12 +589,12 @@ class TimeSeriesChart(QFrame):
         try:
             self.axis_x.setLabelsVisible(True)
         except Exception:
-            logger.warning("Exception in set_x_range", exc_info=True)
+            logger.warning("Failed to show X-axis labels after applying explicit chart range.", exc_info=True)
         try:
             span_ms = int(qmax.toMSecsSinceEpoch() - qmin.toMSecsSinceEpoch())
             self._set_x_axis_format_for_span_ms(span_ms)
         except Exception:
-            logger.warning("Exception in set_x_range", exc_info=True)
+            logger.warning("Failed to update X-axis format after applying explicit chart range.", exc_info=True)
         self._refresh_group_timeline_overlays()
         self._request_deferred_refresh()
 
@@ -599,7 +606,7 @@ class TimeSeriesChart(QFrame):
             try:
                 self.reset_requested.emit()
             except Exception:
-                logger.warning("Exception in _bubble_reset", exc_info=True)
+                logger.warning("Failed to emit reset request from time-series chart reset action.", exc_info=True)
 
     def _on_user_range_selected(self, qmin: QDateTime, qmax: QDateTime):
         # Update axis label format based on selected span
@@ -607,7 +614,7 @@ class TimeSeriesChart(QFrame):
             span_ms = int(qmax.toMSecsSinceEpoch() - qmin.toMSecsSinceEpoch())
             self._set_x_axis_format_for_span_ms(span_ms)
         except Exception:
-            logger.warning("Exception in _on_user_range_selected", exc_info=True)
+            logger.warning("Failed to update X-axis label format after user-selected range.", exc_info=True)
         self._refresh_group_timeline_overlays()
 
         start = pd.to_datetime(qmin.toMSecsSinceEpoch(), unit="ms")
@@ -622,13 +629,13 @@ class TimeSeriesChart(QFrame):
                 span_ms = int(qmax.toMSecsSinceEpoch() - qmin.toMSecsSinceEpoch())
                 self._set_x_axis_format_for_span_ms(span_ms)
             except Exception:
-                logger.warning("Exception in _reset_to_data_bounds", exc_info=True)
+                logger.warning("Failed to reset X-axis to data bounds in time-series chart.", exc_info=True)
 
         if reset_y and self._data_y_range is not None:
             try:
                 self.axis_y.setRange(*self._data_y_range)
             except Exception:
-                logger.warning("Exception in _reset_to_data_bounds", exc_info=True)
+                logger.warning("Failed to reset Y-axis to data bounds in time-series chart.", exc_info=True)
         self._refresh_group_timeline_overlays()
 
     def _remove_all_series(self):
@@ -637,7 +644,7 @@ class TimeSeriesChart(QFrame):
                 try:
                     self.chart.removeSeries(series)
                 except Exception:
-                    logger.warning("Exception in _remove_all_series", exc_info=True)
+                    logger.warning("Failed to remove a line-series segment while clearing time-series data.", exc_info=True)
         self._series_segments.clear()
         self._series_colors.clear()
 
@@ -755,7 +762,7 @@ class TimeSeriesChart(QFrame):
         try:
             self.chart.setTitleBrush(QBrush(colors.text))
         except Exception:
-            logger.warning("Exception in _apply_theme", exc_info=True)
+            logger.warning("Failed to set title brush while applying time-series theme.", exc_info=True)
 
         frame_palette = self.palette()
         frame_palette.setColor(QPalette.Window, container_color)
@@ -765,7 +772,7 @@ class TimeSeriesChart(QFrame):
         try:
             self.setAttribute(Qt.WA_StyledBackground, True)
         except Exception:
-            logger.warning("Exception in _apply_theme", exc_info=True)
+            logger.warning("Failed to set styled-background attribute while applying time-series theme.", exc_info=True)
 
         view_palette = self.view.palette()
         view_palette.setColor(QPalette.Window, container_color)
@@ -775,7 +782,7 @@ class TimeSeriesChart(QFrame):
         try:
             self.view.setBackgroundBrush(QBrush(container_color))
         except Exception:
-            logger.warning("Exception in _apply_theme", exc_info=True)
+            logger.warning("Failed to set chart-view background brush while applying time-series theme.", exc_info=True)
 
         viewport_palette = self.view.viewport().palette()
         viewport_palette.setColor(QPalette.Window, container_color)
@@ -785,14 +792,14 @@ class TimeSeriesChart(QFrame):
         try:
             self.view.viewport().setBackgroundRole(QPalette.Window)
         except Exception:
-            logger.warning("Exception in _apply_theme", exc_info=True)
+            logger.warning("Failed to set viewport background role while applying time-series theme.", exc_info=True)
 
         try:
             scene = self.chart.scene()
             if scene is not None:
                 scene.setBackgroundBrush(QBrush(container_color))
         except Exception:
-            logger.warning("Exception in _apply_theme", exc_info=True)
+            logger.warning("Failed to update scene background while applying time-series theme.", exc_info=True)
 
         if self._feature_order and not self._preserve_series_colors:
             regenerated = self._generate_colors(len(self._feature_order))
@@ -854,13 +861,13 @@ class TimeSeriesChart(QFrame):
                 if scene is not None:
                     scene.removeItem(item)
             except Exception:
-                logger.warning("Exception in _clear_group_timeline_overlays", exc_info=True)
+                logger.warning("Failed to remove a group timeline rectangle overlay item.", exc_info=True)
         for item in self._group_box_text_items:
             try:
                 if scene is not None:
                     scene.removeItem(item)
             except Exception:
-                logger.warning("Exception in _clear_group_timeline_overlays", exc_info=True)
+                logger.warning("Failed to remove a group timeline text overlay item.", exc_info=True)
         self._group_box_items = []
         self._group_box_text_items = []
 
@@ -980,15 +987,15 @@ class TimeSeriesChart(QFrame):
             try:
                 self._refresh_group_timeline_overlays()
             except Exception:
-                logger.warning("Exception in _request_deferred_refresh", exc_info=True)
+                logger.warning("Failed to schedule deferred chart scene refresh for time-series chart.", exc_info=True)
             try:
                 self.chart.update()
             except Exception:
-                logger.warning("Exception in _request_deferred_refresh", exc_info=True)
+                logger.warning("Failed to execute deferred chart scene refresh for time-series chart.", exc_info=True)
             try:
                 self.view.viewport().update()
             except Exception:
-                logger.warning("Exception in _request_deferred_refresh", exc_info=True)
+                logger.warning("Failed to execute deferred viewport refresh for time-series chart.", exc_info=True)
 
         QTimer.singleShot(0, _do_refresh)
 
@@ -1024,4 +1031,4 @@ class TimeSeriesChart(QFrame):
 
             self.axis_x.setFormat(fmt)
         except Exception:
-            logger.warning("Exception in _set_x_axis_format_for_span_ms", exc_info=True)
+            logger.warning("Failed to apply X-axis datetime label format for current timespan.", exc_info=True)

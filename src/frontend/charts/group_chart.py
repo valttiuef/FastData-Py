@@ -54,10 +54,7 @@ class _ChartView(QChartView):
     def __init__(self, chart: QChart, parent=None):
         super().__init__(chart, parent)
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
-        try:
-            self.setRubberBand(QChartView.NoRubberBand)
-        except Exception:
-            logger.warning("Exception in __init__", exc_info=True)
+        self.setRubberBand(QChartView.NoRubberBand)
 
     def wheelEvent(self, ev):
         ev.accept()
@@ -122,7 +119,7 @@ class GroupBarChart(QFrame):
             self.view.setMouseTracking(True)
             self.view.setAttribute(Qt.WA_Hover, True)
         except Exception:
-            logger.warning("Exception in __init__", exc_info=True)
+            logger.warning("Failed to enable hover tracking for group chart view.", exc_info=True)
 
         # State
         self._categories: List[str] = []
@@ -147,7 +144,7 @@ class GroupBarChart(QFrame):
         try:
             theme_manager().theme_changed.connect(self._on_theme_changed)
         except AssertionError:
-            logger.warning("Exception in __init__", exc_info=True)
+            logger.warning("Failed to connect theme change signal for group chart.", exc_info=True)
 
         # Connect hover/click signals
         self._connect_signals()
@@ -175,7 +172,7 @@ class GroupBarChart(QFrame):
         try:
             self.chart.setTitleBrush(QBrush(colors.text))
         except Exception:
-            logger.warning("Exception in _apply_theme", exc_info=True)
+            logger.warning("Failed to update title brush while applying group chart theme.", exc_info=True)
 
         frame_palette = self.palette()
         frame_palette.setColor(QPalette.Window, container_color)
@@ -185,7 +182,7 @@ class GroupBarChart(QFrame):
         try:
             self.setAttribute(Qt.WA_StyledBackground, True)
         except Exception:
-            logger.warning("Exception in _apply_theme", exc_info=True)
+            logger.warning("Failed to set styled-background attribute while applying group chart theme.", exc_info=True)
 
         view_palette = self.view.palette()
         view_palette.setColor(QPalette.Window, container_color)
@@ -195,7 +192,7 @@ class GroupBarChart(QFrame):
         try:
             self.view.setBackgroundBrush(QBrush(container_color))
         except Exception:
-            logger.warning("Exception in _apply_theme", exc_info=True)
+            logger.warning("Failed to set view background brush while applying group chart theme.", exc_info=True)
 
         viewport_palette = self.view.viewport().palette()
         viewport_palette.setColor(QPalette.Window, container_color)
@@ -227,7 +224,8 @@ class GroupBarChart(QFrame):
         self._y_label = label
         self.axis_y.setTitleText(label)
 
-    def clear(self):
+    # @ai(gpt-5, codex, refactor, 2026-02-27)
+    def clear(self, *, request_repaint: bool = True):
         """Clear all data from the chart."""
         for s in list(self.series.barSets()):
             try:
@@ -235,19 +233,28 @@ class GroupBarChart(QFrame):
                     try:
                         s.hovered.disconnect()
                     except Exception:
-                        logger.warning("Exception in clear", exc_info=True)
+                        logger.warning("Failed to disconnect hovered signal while clearing group bars.", exc_info=True)
                     try:
                         s.clicked.disconnect()
                     except Exception:
-                        logger.warning("Exception in clear", exc_info=True)
+                        logger.warning("Failed to disconnect clicked signal while clearing group bars.", exc_info=True)
                     self._connected_barsets.discard(s)
             except Exception:
-                logger.warning("Exception in clear", exc_info=True)
+                logger.warning("Failed to clean up connected bar-set signals while clearing group chart.", exc_info=True)
             self.series.remove(s)
         self.axis_x.clear()
         self._categories.clear()
         self._values.clear()
         self._tooltip_overrides.clear()
+        if request_repaint:
+            try:
+                self.chart.update()
+            except Exception:
+                logger.warning("Failed to refresh chart scene after clearing group chart.", exc_info=True)
+            try:
+                self.view.viewport().update()
+            except Exception:
+                logger.warning("Failed to refresh chart viewport after clearing group chart.", exc_info=True)
 
     def set_tooltip_overrides(self, overrides: Optional[dict[tuple[str, str], str]] = None):
         """Set per-bar tooltip detail lines.
@@ -269,7 +276,7 @@ class GroupBarChart(QFrame):
             values: List of values corresponding to each category
             series_name: Name for the data series (used in legend)
         """
-        self.clear()
+        self.clear(request_repaint=False)
         
         if not categories or not values:
             return
@@ -293,7 +300,7 @@ class GroupBarChart(QFrame):
             bar.clicked.connect(self._on_bar_clicked)
             self._connected_barsets.add(bar)
         except Exception:
-            logger.warning("Exception in set_data", exc_info=True)
+            logger.warning("Failed to connect hover/click handlers while setting group chart data.", exc_info=True)
 
         # Set categories
         self.axis_x.append([_short_label(c, 20) for c in self._categories])
@@ -363,7 +370,7 @@ class GroupBarChart(QFrame):
             category_col: Name of the column containing categories
             value_cols: List of column names to use as series (default: all numeric columns)
         """
-        self.clear()
+        self.clear(request_repaint=False)
         
         if df is None or df.empty or category_col not in df.columns:
             return
@@ -417,7 +424,7 @@ class GroupBarChart(QFrame):
                 bar.hovered.connect(self._make_hover_handler(str(col), series_label, categories, values))
                 self._connected_barsets.add(bar)
             except Exception:
-                logger.warning("Exception in set_multi_series", exc_info=True)
+                logger.warning("Failed to connect hover/click handlers for multi-series group bars.", exc_info=True)
         
         # Set categories
         self.axis_x.append([_short_label(c, 20) for c in self._categories])
@@ -485,7 +492,7 @@ class GroupBarChart(QFrame):
                 self.bar_clicked.emit(index)
                 self.category_selected.emit(category, series_name)
             except Exception:
-                logger.warning("Exception in handler", exc_info=True)
+                logger.warning("Failed to update cursor while handling group-bar hover leave.", exc_info=True)
         return handler
 
     def _make_hover_handler(
@@ -503,7 +510,7 @@ class GroupBarChart(QFrame):
                 try:
                     self.view.setCursor(Qt.ArrowCursor)
                 except Exception:
-                    logger.warning("Exception in handler", exc_info=True)
+                    logger.warning("Failed to display tooltip while handling group-bar hover.", exc_info=True)
                 return
 
             if index < 0 or index >= len(categories):
@@ -514,7 +521,7 @@ class GroupBarChart(QFrame):
             try:
                 self.view.setCursor(Qt.PointingHandCursor)
             except Exception:
-                logger.warning("Exception in handler", exc_info=True)
+                logger.warning("Failed to emit bar-click signal for group chart.", exc_info=True)
             extra = self._tooltip_overrides.get((str(series_key), str(category)), "")
             try:
                 QToolTip.showText(
@@ -523,7 +530,7 @@ class GroupBarChart(QFrame):
                     self,
                 )
             except Exception:
-                logger.warning("Exception in handler", exc_info=True)
+                logger.warning("Failed to emit category-selected signal for group chart.", exc_info=True)
 
         return handler
 
@@ -552,7 +559,7 @@ class GroupBarChart(QFrame):
                     self
                 )
         except Exception:
-            logger.warning("Exception in _on_set_hovered", exc_info=True)
+            logger.warning("Failed to update tooltip/cursor on group chart hover.", exc_info=True)
 
     def _on_bar_clicked(self, index: int):
         """Handle bar click events."""
@@ -566,7 +573,7 @@ class GroupBarChart(QFrame):
             self.bar_clicked.emit(index)
             self.category_selected.emit(category, value)
         except Exception:
-            logger.warning("Exception in _on_bar_clicked", exc_info=True)
+            logger.warning("Failed to emit click-selection signals for group chart bar.", exc_info=True)
 
     def _mouse_press_wrapper(self, base_handler):
         """Wrap mouse press to handle clicks on bars."""

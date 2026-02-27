@@ -29,14 +29,8 @@ class InteractiveChartView(QChartView):
         # Rendering and interaction baseline
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.setMouseTracking(True)  # get move events with no buttons
-        try:
-            self.setRubberBand(QChartView.NoRubberBand)
-        except Exception:
-            logger.warning("Exception in __init__", exc_info=True)
-        try:
-            self.setDragMode(QGraphicsView.NoDrag)
-        except Exception:
-            logger.warning("Exception in __init__", exc_info=True)
+        self.setRubberBand(QChartView.NoRubberBand)
+        self.setDragMode(QGraphicsView.NoDrag)
 
         # ---- Zoom state (left button)
         self._rubber_active = False
@@ -81,6 +75,14 @@ class InteractiveChartView(QChartView):
 
     def set_hover_tooltip_callback(self, callback: Callable[[QPointF], str] | None) -> None:
         self._hover_tooltip_callback = callback
+
+    # @ai(gpt-5, codex, refactor, 2026-02-27)
+    def set_live_pan_emit_enabled(self, enabled: bool) -> None:
+        """Enable/disable live range emission while right-drag panning.
+
+        When disabled, range updates are emitted only once on pan release.
+        """
+        self._pan_emit_live = bool(enabled)
 
     # =========================
     # Helpers
@@ -193,7 +195,7 @@ class InteractiveChartView(QChartView):
                         y_min = float(v_min_get())
                         y_max = float(v_max_get())
             except Exception:
-                logger.warning("Exception in mousePressEvent", exc_info=True)
+                logger.warning("Failed to read initial vertical-axis range when starting chart pan.", exc_info=True)
             try:
                 pos = ev.position()
                 self._pan_start_pos = QPointF(pos.x(), pos.y())
@@ -224,7 +226,7 @@ class InteractiveChartView(QChartView):
             try:
                 self.setRubberBand(QChartView.RectangleRubberBand)
             except Exception:
-                logger.warning("Exception in mousePressEvent", exc_info=True)
+                logger.warning("Failed to enable rubber-band mode on left-button press.", exc_info=True)
             self._rubber_active = True
             self._drag_moved = False
 
@@ -258,7 +260,7 @@ class InteractiveChartView(QChartView):
                     # Mirror wheel behavior: fallback to global modifiers when needed.
                     mods = mods | QApplication.keyboardModifiers()
                 except Exception:
-                    logger.warning("Exception in mouseMoveEvent", exc_info=True)
+                    logger.warning("Failed to read keyboard modifiers while panning chart.", exc_info=True)
                 shift_down = bool(mods & Qt.KeyboardModifier.ShiftModifier)
                 ctrl_down = bool(mods & Qt.KeyboardModifier.ControlModifier)
                 lock_y_only = shift_down and not ctrl_down
@@ -280,7 +282,7 @@ class InteractiveChartView(QChartView):
                         )
                         self._pan_x_changed = True
                 except Exception:
-                    logger.warning("Exception in mouseMoveEvent", exc_info=True)
+                    logger.warning("Failed to apply horizontal pan range during chart drag.", exc_info=True)
 
                 # Vertical pan
                 try:
@@ -299,7 +301,7 @@ class InteractiveChartView(QChartView):
                         if v_axes and new_y_max > new_y_min:
                             v_axes[0].setRange(new_y_min, new_y_max)
                 except Exception:
-                    logger.warning("Exception in mouseMoveEvent", exc_info=True)
+                    logger.warning("Failed to apply vertical pan range during chart drag.", exc_info=True)
 
                 # mark that we moved
                 if not self._pan_moved and ((dx_px*dx_px + dy_px*dy_px) >= (self._min_drag_px*self._min_drag_px)):
@@ -336,7 +338,7 @@ class InteractiveChartView(QChartView):
                 ev.accept()
                 return
             except Exception:
-                logger.warning("Exception in mouseMoveEvent", exc_info=True)
+                logger.warning("Failed while processing right-button pan move in interactive chart view.", exc_info=True)
 
         # ----- RUBBER-BAND (left button)
         if ev.buttons() & Qt.LeftButton and self._rubber_active:
@@ -370,7 +372,7 @@ class InteractiveChartView(QChartView):
                         try:
                             custom_tooltip = self._hover_tooltip_callback(self._last_mouse_pos) or ""
                         except Exception:
-                            logger.warning("Exception in mouseMoveEvent", exc_info=True)
+                            logger.warning("Failed to render hover tooltip for snapped chart point.", exc_info=True)
                             custom_tooltip = ""
                     # Keep the vertical hover line visible even when there is no snapped point.
                     self._show_crosshair = True
@@ -409,7 +411,7 @@ class InteractiveChartView(QChartView):
                     try:
                         mods = mods | QApplication.keyboardModifiers()
                     except Exception:
-                        logger.warning("Exception in mouseReleaseEvent", exc_info=True)
+                        logger.warning("Failed to finalize panned axis range on mouse release.", exc_info=True)
                     shift_down = bool(mods & Qt.KeyboardModifier.ShiftModifier)
                     ctrl_down = bool(mods & Qt.KeyboardModifier.ControlModifier)
                     lock_y_only = shift_down and not ctrl_down
@@ -425,7 +427,7 @@ class InteractiveChartView(QChartView):
                         )
                         self._pan_x_changed = True
             except Exception:
-                logger.warning("Exception in mouseReleaseEvent", exc_info=True)
+                logger.warning("Failed while completing right-button pan release handling.", exc_info=True)
 
             self._panning = False
             self._pan_start_pos = None
@@ -453,7 +455,7 @@ class InteractiveChartView(QChartView):
             try:
                 self.setRubberBand(QChartView.NoRubberBand)
             except Exception:
-                logger.warning("Exception in mouseReleaseEvent", exc_info=True)
+                logger.warning("Failed while completing left-button zoom release handling.", exc_info=True)
 
             # Only emit if the user actually dragged enough & rect big enough
             if self._drag_moved:
@@ -498,7 +500,7 @@ class InteractiveChartView(QChartView):
                 # merge with the global keyboard state as a fallback.
                 mods = mods | QApplication.keyboardModifiers()
             except Exception:
-                logger.warning("Exception in wheelEvent", exc_info=True)
+                logger.warning("Failed to read keyboard modifiers during wheel zoom interaction.", exc_info=True)
             shift_down = bool(mods & Qt.KeyboardModifier.ShiftModifier)
             ctrl_down = bool(mods & Qt.KeyboardModifier.ControlModifier)
             lock_y_only = shift_down and not ctrl_down
@@ -542,7 +544,7 @@ class InteractiveChartView(QChartView):
                     )
                     x_range_changed = (new_min != min_ms) or (new_max != max_ms)
                 except Exception:
-                    logger.warning("Exception in wheelEvent", exc_info=True)
+                    logger.warning("Failed to apply horizontal wheel-zoom range.", exc_info=True)
 
             # Y-axis zoom around cursor Y (fallback to center if needed)
             if zoom_y:
@@ -572,7 +574,7 @@ class InteractiveChartView(QChartView):
                                 if new_vmax > new_vmin:
                                     v_ax.setRange(new_vmin, new_vmax)
                 except Exception:
-                    logger.warning("Exception in wheelEvent", exc_info=True)
+                    logger.warning("Failed to apply vertical wheel-zoom range.", exc_info=True)
 
             if x_range_changed:
                 self._emit_axis_range()
@@ -588,7 +590,7 @@ class InteractiveChartView(QChartView):
                 # merge with the global keyboard state as a fallback.
                 mods = mods | QApplication.keyboardModifiers()
             except Exception:
-                logger.warning("Exception in mouseDoubleClickEvent", exc_info=True)
+                logger.warning("Failed to emit reset request for chart double-click interaction.", exc_info=True)
             shift_down = bool(mods & Qt.KeyboardModifier.ShiftModifier)
             ctrl_down = bool(mods & Qt.KeyboardModifier.ControlModifier)
             reset_x = ctrl_down and not shift_down
@@ -632,7 +634,7 @@ class InteractiveChartView(QChartView):
                 if extra:
                     text = f"{text}\n{extra}"
             except Exception:
-                logger.warning("Exception in _update_hover_tooltip_snapped", exc_info=True)
+                logger.warning("Failed to refresh snapped hover tooltip position in interactive chart view.", exc_info=True)
 
         # Place tooltip near the cursor, not the data point (more natural while scanning)
         global_pos = self.mapToGlobal(self.mapFromScene(self._last_mouse_pos.toPoint()))

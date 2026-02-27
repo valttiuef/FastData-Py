@@ -179,6 +179,7 @@ class DataTab(TabWidget):
         self.timeseries_chart = TimeSeriesChart(title="")
         self.timeseries_chart.range_changed.connect(self._on_chart_range_changed)
         self.timeseries_chart.reset_requested.connect(self._on_chart_reset_requested)
+        
         try:
             self.timeseries_chart.chart.legend().setVisible(True)
         except Exception:
@@ -396,6 +397,12 @@ class DataTab(TabWidget):
         self._view_model.set_view_window(start_ts, end_ts)
         series_df = self._view_model.series_for_chart()
         self.timeseries_chart.set_dataframe(series_df)
+        try:
+            # Keep the dragged viewport stable. set_dataframe() derives X-range
+            # from data bounds, which can slightly snap on first drag event.
+            self.timeseries_chart.set_x_range(pd.Timestamp(start_ts), pd.Timestamp(end_ts))
+        except Exception:
+            logger.warning("Failed to restore dragged X-range after time-series refresh.", exc_info=True)
         if y_range is not None:
             try:
                 self.timeseries_chart.axis_y.setRange(*y_range)
