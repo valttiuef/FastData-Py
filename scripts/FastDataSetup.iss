@@ -8,6 +8,9 @@
 #define MyAppVersion GetStringFileInfo(MyAppExePath, "ProductVersion")
 #define MyAppPublisher GetStringFileInfo(MyAppExePath, "CompanyName")
 #define MyAppExeName ExtractFileName(MyAppExePath)  ; <-- fixed here
+#ifexist "..\scripts\installer-changelog.txt"
+  #define MyInstallerChangelog "..\\scripts\\installer-changelog.txt"
+#endif
 
 #pragma message "Building " + MyAppName + " version " + MyAppVersion
 
@@ -48,6 +51,9 @@ UsePreviousPrivileges=no
 UsedUserAreasWarning=no
 
 UninstallDisplayIcon={app}\{#MyAppExeName}
+#ifdef MyInstallerChangelog
+InfoBeforeFile={#MyInstallerChangelog}
+#endif
 ; LicenseFile is optional:
 ; LicenseFile=LICENSE.txt
 

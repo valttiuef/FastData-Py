@@ -70,10 +70,11 @@
       "problemMatcher": []
     },
     {
-      "label": "Build App + Installer (Windows)",
+      "label": "Generate licenses + help docs + Build App + Installer (Windows)",
       "dependsOrder": "sequence",
       "dependsOn": [
         "Generate Third-Party Licenses",
+        "Generate Help Docs",
         "Build EXE with Spec File",
         "Build Installer (Inno Setup)"
       ],
