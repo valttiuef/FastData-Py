@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "FastData"
-version = "0.1.0"
+version = "0.1.1"
 description = "Desktop process data analysis and modeling tool developed in the Visima project at UEF."
 readme = "README.md"
 requires-python = ">=3.11"

@@ -8,8 +8,8 @@ authors:
     given-names: "Valtteri"
     email: "valtti@uef.fi"
 
-version: "0.1.0"
-date-released: "2026-02-06"
+version: "0.1.1"
+date-released: "2026-02-28"
 
 repository-code: "https://github.com/valttiuef/FastData-Py"
 url: "https://github.com/valttiuef/FastData-Py"

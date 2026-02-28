@@ -19,6 +19,35 @@ $repoPath = $repoUrl -replace '^https://github\.com/', '' -replace '/$', ''
 Write-Host "📦 Version: $version" -ForegroundColor Yellow
 Write-Host "📦 App: $appName" -ForegroundColor Yellow
 
+# @ai(gpt-5, codex, refactor, 2026-02-28)
+function Get-ChangelogSection {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Version
+    )
+
+    $changelogPath = "CHANGELOG.md"
+    if (-not (Test-Path $changelogPath)) {
+        return @("- Change log for this version was not found.")
+    }
+
+    $content = Get-Content $changelogPath -Raw
+    $escapedVersion = [regex]::Escape($Version)
+    $pattern = '(?ms)^##\s+\[' + $escapedVersion + '\]\s+-\s+.+?\r?\n([\s\S]*?)(?=^##\s+\[|\z)'
+    $match = [regex]::Match($content, $pattern)
+
+    if (-not $match.Success) {
+        return @("- Change log for this version was not found.")
+    }
+
+    $sectionBody = $match.Groups[1].Value.Trim()
+    if ([string]::IsNullOrWhiteSpace($sectionBody)) {
+        return @("- No end-user notes were added for this version yet.")
+    }
+
+    return $sectionBody
+}
+
 # Check if GitHub CLI is installed
 if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
     Write-Host "❌ GitHub CLI (gh) is not installed or not in PATH!" -ForegroundColor Red
@@ -201,6 +230,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $downloadUrl = "https://github.com/$repoPath/releases/download/v$version/$([System.Uri]::EscapeDataString($versionedName))"
+$whatsNew = Get-ChangelogSection -Version $version
 
 # Create detailed release notes with CORRECT asset URL
 $releaseNotes = @"
@@ -215,9 +245,7 @@ $releaseNotes = @"
 **Release Tag:** v$version
 
 ### What's New in v$version
-- Initial release of FastData
-- Process data analysis and modeling tool
-- Windows installer package
+$whatsNew
 
 ### System Requirements
 - **OS:** Windows 10 or Windows 11 (64-bit)
