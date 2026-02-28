@@ -1,21 +1,62 @@
-# FastData (Visima Process Analyzer)
+# FastData-Py – Industrial Process Data Analysis Desktop Application
 
-<img src="resources/images/splash.png" width="150" alt="Splash screen">
+<img src="resources/images/splash.png" width="150" alt="FastData-Py splash screen">
 
-FastData is a desktop process data analysis application developed by Valtteri Tiitta at the University of Eastern Finland (UEF) as part of the project Materials Solutions in the Green Transition – Visima. The project is co-financed by the European Union.
+**FastData-Py** is a Python-based desktop application for industrial process data analysis, visualization, and machine learning.  
+It is designed for engineers, researchers, and data scientists working with manufacturing, plant, and process datasets who require secure, local-first analytics without cloud dependency.
 
-The application reimagines and extends an earlier MATLAB-based workflow in Python, combining a modern Qt-based graphical user interface with advanced data analysis, machine learning tooling, and integrated large-language-model (LLM) assistants. FastData is designed to support efficient exploration, processing, modeling, and interpretation of industrial process data.
+Developed by Valtteri Tiitta at the University of Eastern Finland (UEF) as part of the project *Materials Solutions in the Green Transition – Visima* (co-financed by the European Union), FastData-Py modernizes and extends an earlier MATLAB-based workflow into a fully integrated Python environment.
 
-FastData follows a local-first architecture: data storage, analysis, modeling, and visualization run entirely on the user’s machine. No cloud backend is required. Internet access is only needed if using OpenAI as an LLM provider; alternatively, local LLM backends such as Ollama can be used to keep all data processing fully offline.
+The application combines:
 
-The tool focuses on loading plant/process data, exploring it through visualizations, regression models, Self-Organizing Maps (SOM), and contextual help that is available directly in the interface. Some features are still under active development.
+- Advanced statistical analysis (PCA, clustering, regression, time-series tools)
+- Self-Organizing Maps (SOM) for nonlinear process visualization
+- Interactive Qt (PySide6) desktop GUI
+- Embedded DuckDB/SQLite data storage
+- Optional large-language-model (LLM) assistance for contextual help
 
-## Key capabilities
-- **Process data management**: load and persist datasets in DuckDB/SQLite files and keep an audit trail of the work session through automatic logging.
-- **Analysis and modeling**: run PCA, clustering, regression, and time-series tooling using scikit-learn; train SOM via MiniSom.
-- **Interactive GUI**: PySide6 front end with tabs, dialogs, charts, and theming for a desktop-first experience.
-- **LLM assist (experimental)**: optional OpenAI/Ollama integration for contextual questions and workflow guidance. Currently lightweight (no persistent history or deep project context tracking), it serves as a foundation for future model- and dataset-aware LLM integration.
-- **Integrated help system**: structured YAML/JSON help files (`resources/help`) rendered directly inside the application so each widget can expose contextual documentation. The LLM assist can reference this help content for dynamic explanations. Documentation can also be generated from these YAML files using `scripts/build_help_docs.py` and the generated documentation can be opened through application.
+## Local-First Architecture
+
+FastData-Py follows a **local-first architecture**:
+
+- All data storage, modeling, and visualization run on the user's machine.
+- No cloud backend is required.
+- Internet access is optional and only needed when using OpenAI as an LLM provider.
+- Fully offline usage is possible via local LLM backends such as Ollama.
+
+This makes FastData-Py suitable for industrial environments where data security, confidentiality, and compliance are critical.
+
+## Typical Use Cases
+
+- Industrial process monitoring and analysis
+- Manufacturing data exploration
+- PCA and clustering of plant variables
+- Regression modeling of process targets
+- Self-Organizing Map visualization of complex systems
+- Local machine learning experimentation on sensitive datasets
+
+FastData-Py aims to provide a practical desktop alternative to cloud-based analytics platforms while maintaining modern data science capabilities in Python.
+
+## Key Capabilities
+
+- **Process Data Management**  
+  Load CSV and Excel datasets and persist them into DuckDB or SQLite databases.  
+  Maintain a reproducible audit trail of analysis sessions through automatic logging.
+
+- **Statistical Analysis & Machine Learning**  
+  Perform PCA, clustering, regression, and time-series modeling using scikit-learn.  
+  Train and visualize Self-Organizing Maps (SOM) via MiniSom for nonlinear pattern discovery.
+
+- **Interactive Desktop GUI**  
+  Modern PySide6 (Qt for Python) interface with tabs, dialogs, charts, theming, and contextual panels designed for desktop-first workflows.
+
+- **LLM Assist (Experimental)**  
+  Optional OpenAI or Ollama integration for contextual assistance and workflow guidance.  
+  Current implementation is lightweight and designed as a foundation for future dataset-aware LLM integration.
+
+- **Integrated Contextual Help System**  
+  Structured YAML/JSON help files (`resources/help`) rendered directly inside the application.  
+  Documentation can be generated from these files using `scripts/build_help_docs.py`.
 
 ## GUI
 
@@ -38,6 +79,53 @@ The tool focuses on loading plant/process data, exploring it through visualizati
 
 ### Chat / Help system
 <img src="resources/screenshots/chat.png" width="600" alt="Chat/Help system screenshot">
+
+## Installation
+
+FastData-Py can be installed using the official Windows installer (recommended) or run from source for development purposes.
+
+---
+
+### Option 1 – Install via Windows Installer (Recommended)
+
+1. Go to the latest release page:  
+   https://github.com/valttiuef/FastData-Py/releases
+
+2. Download the installer from the newest version (e.g. `v0.1.1`).
+
+3. Run the installer and follow the setup instructions.
+
+4. Launch **FastData-Py** from the Start Menu.
+
+This is the recommended option for most users working with industrial or research data.
+
+---
+
+### System Requirements
+
+- Windows 10 or newer
+- 64-bit system
+- No separate Python installation required when using the installer
+
+---
+
+### Option 2 – Run from Source (Developer Mode)
+
+1. **Set up Python 3.9+ and a virtual environment**
+   ```bash
+   python -m venv .venv
+   source .venv/bin/activate
+   python -m pip install --upgrade pip
+   ```
+2. **Install dependencies**
+   ```bash
+   pip install -e .
+   ```
+3. **Run the app**
+   ```bash
+   python src/app.py
+   ```
+   For VS Code users, you can also use the existing tasks: *Activate venv + Install* then *Run app* or press **F5**.
 
 ## Dependencies and licenses
 
