@@ -55,10 +55,11 @@ For user-triggered background jobs (imports, analysis, training, exports):
   - keep status text for phase/context changes only (not numeric progress ticks),
   - do not drive status text from progress callbacks,
   - update progress via callback/signals in the `0..100` range when possible.
-- Status text wording must be minimal and generic:
-  - prefer short phrases like "Running...", "Finished.", "Failed."
-  - do not include detailed explanations, counts, percentages, or error payloads in status text
-  - put details in toasts/logs instead
+- Status text wording must be minimal and contextual:
+  - include the task context in short form, using task-specific action words, for example "Finding correlations...", "Training SOM...", "Importing data...", "Forecasting finished."
+  - do not include counts, percentages, stack traces, or long explanations in status text
+  - for errors, include a short reason only when useful for immediate user context
+  - put deeper details in toasts/logs instead
 - On completion:
   - show success toast,
   - set a clear finished status text,

@@ -29,6 +29,7 @@ class StatisticsTab(TabWidget):
     ):
         self._view_model = StatisticsViewModel(database_model, parent=None)
         self._toast_compute_active = False
+        self._toast_save_active = False
 
         super().__init__(parent)
 
@@ -89,40 +90,49 @@ class StatisticsTab(TabWidget):
         if not status:
             return
 
-        if status.lower().startswith("gathering statistics"):
+        if status.lower().startswith("calculating statistics"):
             self._toast_compute_active = True
+            self._toast_save_active = False
             try:
                 toast_info("Gathering statistics…", title="Statistics", tab_key="statistics")
             except Exception:
                 logger.warning("Exception in _on_status_changed", exc_info=True)
             return
 
-        if self._toast_compute_active and status.lower().startswith("preview ready"):
-            self._toast_compute_active = False
-            self._sidebar.set_export_enabled(True)
-            try:
-                toast_success(status, title="Statistics", tab_key="statistics")
-            except Exception:
-                logger.warning("Exception in _on_status_changed", exc_info=True)
-            return
-
-        if self._toast_compute_active and status.lower().startswith("no rows produced"):
-            self._toast_compute_active = False
-            self._sidebar.set_export_enabled(False)
-            try:
-                toast_warn(status, title="Statistics", tab_key="statistics")
-            except Exception:
-                logger.warning("Exception in _on_status_changed", exc_info=True)
-            return
-
         if status.lower().startswith("saving statistics"):
+            self._toast_compute_active = False
+            self._toast_save_active = True
             try:
                 toast_info("Saving statistics…", title="Statistics", tab_key="statistics")
             except Exception:
                 logger.warning("Exception in _on_status_changed", exc_info=True)
+            return
+
+        if self._toast_compute_active and status.lower().startswith("statistics ready"):
+            self._toast_compute_active = False
+            self._sidebar.set_export_enabled(True)
+            try:
+                toast_success("Statistics preview is ready.", title="Statistics", tab_key="statistics")
+            except Exception:
+                logger.warning("Exception in _on_status_changed", exc_info=True)
+            return
+
+        if self._toast_compute_active and status.lower().startswith("statistics produced no results"):
+            self._toast_compute_active = False
+            self._sidebar.set_export_enabled(False)
+            try:
+                toast_warn("No statistics results were produced.", title="Statistics", tab_key="statistics")
+            except Exception:
+                logger.warning("Exception in _on_status_changed", exc_info=True)
+            return
+
+        if self._toast_save_active and status.lower().startswith("statistics saved"):
+            self._toast_save_active = False
+            return
 
     def _on_statistics_failed(self, message: str) -> None:
         self._toast_compute_active = False
+        self._toast_save_active = False
         self._sidebar.set_export_enabled(False)
         try:
             toast_error(message, title="Statistics failed", tab_key="statistics")
@@ -182,6 +192,7 @@ class StatisticsTab(TabWidget):
             logger.warning("Exception in _on_save_finished", exc_info=True)
 
     def _on_save_failed(self, message: str) -> None:
+        self._toast_save_active = False
         text = message.strip()
         if text.lower().startswith("gather statistics"):
             try:

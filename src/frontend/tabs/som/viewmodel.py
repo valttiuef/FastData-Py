@@ -68,7 +68,7 @@ class SomViewModel(QObject):
         self._selected_feature_payloads: list[dict] = []
         self._timeline_display_selected: list[str] = list(self._TIMELINE_DISPLAY_DEFAULT)
         self._timeline_table_df: pd.DataFrame = pd.DataFrame(
-            columns=["index", "bmu_x", "bmu_y", "bmu", "cluster"]
+            columns=["index", "cluster", "bmu_x", "bmu_y", "bmu", "distance"]
         )
 
         self._training_running = False
@@ -94,7 +94,9 @@ class SomViewModel(QObject):
         self._last_training_context = {}
         self._selected_feature_payloads = []
         self._timeline_display_selected = list(self._TIMELINE_DISPLAY_DEFAULT)
-        self._timeline_table_df = pd.DataFrame(columns=["index", "bmu_x", "bmu_y", "bmu", "cluster"])
+        self._timeline_table_df = pd.DataFrame(
+            columns=["index", "cluster", "bmu_x", "bmu_y", "bmu", "distance"]
+        )
 
     def close_database(self) -> None:
         """Release the data model reference and related state."""
@@ -115,7 +117,9 @@ class SomViewModel(QObject):
         self._last_training_context = {}
         self._selected_feature_payloads = []
         self._timeline_display_selected = list(self._TIMELINE_DISPLAY_DEFAULT)
-        self._timeline_table_df = pd.DataFrame(columns=["index", "bmu_x", "bmu_y", "bmu", "cluster"])
+        self._timeline_table_df = pd.DataFrame(
+            columns=["index", "cluster", "bmu_x", "bmu_y", "bmu", "distance"]
+        )
         self.selected_feature_payloads_changed.emit([])
         self.timeline_display_options_changed.emit(self._timeline_display_payload())
         self.timeline_table_dataframe_changed.emit(self._timeline_table_df.copy())
@@ -211,16 +215,15 @@ class SomViewModel(QObject):
         }
 
     def set_timeline_table_dataframe(self, df: Optional[pd.DataFrame]) -> None:
+        base_columns = ["index", "cluster", "bmu_x", "bmu_y", "bmu", "distance"]
         if df is None or df.empty:
-            normalized = pd.DataFrame(columns=["index", "bmu_x", "bmu_y", "bmu", "cluster"])
+            normalized = pd.DataFrame(columns=base_columns)
         else:
             normalized = df.copy()
-            for column in ("index", "bmu_x", "bmu_y", "bmu", "cluster"):
+            for column in base_columns:
                 if column not in normalized.columns:
                     normalized[column] = pd.NA
-            ordered = ["index", "bmu_x", "bmu_y", "bmu", "cluster"] + [
-                c for c in normalized.columns if c not in {"index", "bmu_x", "bmu_y", "bmu", "cluster"}
-            ]
+            ordered = list(base_columns) + [c for c in normalized.columns if c not in set(base_columns)]
             normalized = normalized.loc[:, ordered]
         self._timeline_table_df = normalized
         self.timeline_table_dataframe_changed.emit(self._timeline_table_df.copy())
@@ -1072,24 +1075,33 @@ class SomViewModel(QObject):
         text = "" if message is None else str(message)
         self.status_changed.emit(text)
 
-    def _cluster_set_running_status(self) -> None:
+    def _handle_service_status_update(self, message: Optional[str]) -> None:
+        text = str(message or "").strip()
+        if self._training_running and text:
+            if self._current_status_text != "Training SOM...":
+                self.status_changed.emit("Training SOM...")
+
+    def _cluster_set_running_status(self, target: str) -> None:
         def _update() -> None:
             set_progress(0)
-            self.status_changed.emit("Running...")
+            target_label = "neurons" if target == "neuron" else "features"
+            self.status_changed.emit(f"Clustering SOM {target_label}...")
 
         run_in_main_thread(_update)
 
-    def _cluster_set_finished_status(self) -> None:
+    def _cluster_set_finished_status(self, target: str) -> None:
         def _update() -> None:
             clear_progress()
-            self.status_changed.emit("Finished.")
+            self.status_changed.emit(f"SOM {target} clustering finished.")
 
         run_in_main_thread(_update)
 
-    def _cluster_set_failed_status(self) -> None:
+    def _cluster_set_failed_status(self, target: str, reason: Optional[str] = None) -> None:
         def _update() -> None:
             clear_progress()
-            self.status_changed.emit("Failed.")
+            text = str(reason).strip() if reason else "unknown error"
+            text = f"SOM {target} clustering failed: {text}"
+            self.status_changed.emit(text)
 
         run_in_main_thread(_update)
 
@@ -1104,6 +1116,7 @@ class SomViewModel(QObject):
         run_in_main_thread(_update)
 
     # ------------------------------------------------------------------
+    # @ai(gpt-5, codex, refactor, 2026-02-28)
     def train(
         self,
         feature_labels: Sequence[str],
@@ -1130,6 +1143,7 @@ class SomViewModel(QObject):
             # Synchronize overlay selections with the features passed to training.
             self.set_selected_feature_payloads(feature_payloads)
         set_progress(0)
+        self.status_changed.emit("Training SOM...")
         self._training_running = True
 
         def _run(stop_event=None, progress_callback=None, status_callback=None):
@@ -1162,12 +1176,16 @@ class SomViewModel(QObject):
 
         def _on_finished(result: SomResult):
             self._training_running = False
+            self.status_changed.emit("SOM training finished.")
             self.training_finished.emit(result)
             if callable(on_finished):
                 on_finished(result)
 
         def _on_error(message: str):
             self._training_running = False
+            text = str(message).strip() if message else "Unknown error"
+            self.status_changed.emit(f"SOM training failed: {text}")
+            clear_progress()
             self.error_occurred.emit(message)
             if callable(on_error):
                 on_error(message)
@@ -1177,9 +1195,11 @@ class SomViewModel(QObject):
         run_in_thread(
             _run,
             on_result=_on_finished,
-            on_progress=lambda p: run_in_main_thread(lambda: set_progress(int(p))),
+            on_progress=lambda p: run_in_main_thread(
+                lambda: set_progress(max(0, min(100, int(p))))
+            ),
             on_error=_on_error,
-            status_callback=self._handle_status_update,
+            status_callback=self._handle_service_status_update,
             owner=self,
             key="som_train",
             cancel_previous=True,
@@ -1200,7 +1220,7 @@ class SomViewModel(QObject):
             raise RuntimeError("Train a SOM model before clustering neurons")
 
         self._neuron_cluster_running = True
-        self._cluster_set_running_status()
+        self._cluster_set_running_status("neuron")
 
         def _run(*, progress_callback=None):
             return self._service.cluster_neurons(
@@ -1212,7 +1232,7 @@ class SomViewModel(QObject):
 
         def _on_finished(result: NeuronClusteringResult):
             self._neuron_cluster_running = False
-            self._cluster_set_finished_status()
+            self._cluster_set_finished_status("neuron")
             self._last_neuron_clusters = result
             # Clear cluster names when new clustering is performed
             self._cluster_names = {}
@@ -1222,7 +1242,7 @@ class SomViewModel(QObject):
 
         def _on_error(message: str):
             self._neuron_cluster_running = False
-            self._cluster_set_failed_status()
+            self._cluster_set_failed_status("neuron", message)
             self.clustering_error.emit(message)
             if callable(on_error):
                 on_error(message)
@@ -1251,7 +1271,7 @@ class SomViewModel(QObject):
             raise RuntimeError("Train a SOM model before clustering features")
 
         self._feature_cluster_running = True
-        self._cluster_set_running_status()
+        self._cluster_set_running_status("feature")
 
         def _run(*, progress_callback=None):
             return self._service.cluster_features(
@@ -1263,7 +1283,7 @@ class SomViewModel(QObject):
 
         def _on_finished(result: FeatureClusteringResult):
             self._feature_cluster_running = False
-            self._cluster_set_finished_status()
+            self._cluster_set_finished_status("feature")
             self._last_feature_clusters = result
             self.feature_clusters_updated.emit(result)
             if callable(on_finished):
@@ -1271,7 +1291,7 @@ class SomViewModel(QObject):
 
         def _on_error(message: str):
             self._feature_cluster_running = False
-            self._cluster_set_failed_status()
+            self._cluster_set_failed_status("feature", message)
             self.clustering_error.emit(message)
             if callable(on_error):
                 on_error(message)

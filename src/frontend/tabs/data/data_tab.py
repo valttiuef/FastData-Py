@@ -92,6 +92,7 @@ class DataTab(TabWidget):
         self._selection_sync_fallback.setInterval(450)
         self._selection_sync_fallback.timeout.connect(self._on_selection_sync_timeout)
         self._last_import_progress_message: Optional[str] = None
+        self._last_progress_phase: Optional[str] = None
         self._show_auto_timestep_status: bool = False
 
         self._wire_signals()
@@ -226,6 +227,7 @@ class DataTab(TabWidget):
         from frontend import utils as futils
         if str(phase) == "preprocess_auto_timestep" and not self._show_auto_timestep_status:
             return
+        phase_text = str(phase or "").strip()
         message = str(msg or "").strip()
         if str(phase) == "file" and message.startswith("Importing "):
             if message != self._last_import_progress_message:
@@ -241,7 +243,14 @@ class DataTab(TabWidget):
                 else:
                     toast_text = tr("Loading file: {name}").format(name=file_name)
                 futils.toast_info(toast_text, title=tr("Import"), tab_key="data")
-        futils.set_status_text(f"[{phase}] {cur}/{tot} {msg}")
+        if phase_text and phase_text != self._last_progress_phase:
+            self._last_progress_phase = phase_text
+            phase_map = {
+                "file": tr("Importing files..."),
+                "preprocess": tr("Preprocessing data..."),
+                "preprocess_auto_timestep": tr("Resolving timestep..."),
+            }
+            futils.set_status_text(phase_map.get(phase_text, tr("Updating data...")))
 
     def _invoke_main_window_action(self, method_name: str) -> None:
         """Call the given method on the top-level window if available."""
@@ -762,12 +771,14 @@ class DataTab(TabWidget):
             self._import_dialog_active = False
 
         self._last_import_progress_message = None
+        self._last_progress_phase = None
 
         # Define worker function to run in background thread
         def _worker(files_list, options, progress_callback=None, stop_event=None):
             # progress_callback expects int percent (0-100)
             try:
                 # Update status in main thread
+                run_in_main_thread(futils.set_progress, 0)
                 run_in_main_thread(futils.set_status_text, tr("Importing data..."))
                 run_in_main_thread(
                     futils.toast_info,
@@ -777,7 +788,7 @@ class DataTab(TabWidget):
                 )
                 # Delegate to model import; model will call the provided progress callback
                 self._view_model.import_files(files_list, options=options, progress_callback=progress_callback)
-                run_in_main_thread(futils.set_status_text, tr("Import complete."))
+                run_in_main_thread(futils.set_status_text, tr("Import finished."))
                 run_in_main_thread(
                     futils.toast_success,
                     tr("Import complete."),
@@ -815,6 +826,7 @@ class DataTab(TabWidget):
 
         def _on_error(msg: str):
             try:
+                futils.set_status_text(tr("Import failed: {error}").format(error=msg))
                 futils.toast_error(
                     tr("Failed to import files: {message}").format(message=msg),
                     title=tr("Import failed"),

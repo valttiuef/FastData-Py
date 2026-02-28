@@ -30,13 +30,14 @@ if TYPE_CHECKING:  # pragma: no cover - imported for typing only
     from .viewmodel import SomViewModel
 
 
-TIMELINE_TABLE_COLUMNS: tuple[str, ...] = ("index", "bmu_x", "bmu_y", "bmu", "cluster")
+TIMELINE_TABLE_COLUMNS: tuple[str, ...] = ("index", "cluster", "bmu_x", "bmu_y", "bmu", "distance")
 TIMELINE_TABLE_COLUMN_LABELS: dict[str, str] = {
-    "index": "Index",
+    "index": "Date",
+    "cluster": "Cluster",
     "bmu_x": "BMU x",
     "bmu_y": "BMU y",
     "bmu": "BMU",
-    "cluster": "Cluster",
+    "distance": "Distance",
 }
 
 
@@ -65,12 +66,15 @@ def set_timeline_table_dataframe(table: Any, df: Optional[pd.DataFrame]) -> pd.D
     )
     if table is None:
         return normalized
+    previous_widths: list[int] = []
+    existing_model = table.model()
+    if existing_model is not None:
+        previous_widths = [int(table.columnWidth(col)) for col in range(existing_model.columnCount())]
+
+    table.set_dataframe(display_df, include_index=False)
     model = table.model()
     if model is None:
         return normalized
-
-    previous_widths = [int(table.columnWidth(col)) for col in range(model.columnCount())]
-    table.set_dataframe(display_df, include_index=False)
 
     if previous_widths and len(previous_widths) == model.columnCount():
         for col, width in enumerate(previous_widths):

@@ -231,6 +231,7 @@ class StatisticsViewModel(QObject):
         )
 
     # ------------------------------------------------------------------
+    # @ai(gpt-5, codex, refactor, 2026-02-28)
     def run_statistics(
         self,
         *,
@@ -251,7 +252,7 @@ class StatisticsViewModel(QObject):
             return
         self.run_enabled_changed.emit(False)
         self.save_enabled_changed.emit(False)
-        self.status_changed.emit("Gathering statistics…")
+        self.status_changed.emit("Calculating statistics...")
         self._compute_running = True
         run_in_thread(
             self.compute,
@@ -380,6 +381,7 @@ class StatisticsViewModel(QObject):
         out = out.dropna(subset=["t"])
         return out
 
+    # @ai(gpt-5, codex, refactor, 2026-02-28)
     def _on_compute_finished(self, result: StatisticsResult) -> None:
         self._compute_running = False
         self.run_enabled_changed.emit(True)
@@ -400,17 +402,18 @@ class StatisticsViewModel(QObject):
                 self.statistics_warning.emit(text)
         row_count = len(preview.index) if not preview.empty else 0
         if row_count:
-            self.status_changed.emit(f"Preview ready ({row_count} rows).")
+            self.status_changed.emit("Statistics ready.")
             self.save_enabled_changed.emit(True)
         else:
-            self.status_changed.emit("No rows produced for the selected inputs.")
+            self.status_changed.emit("Statistics produced no results.")
             self.save_enabled_changed.emit(False)
 
     def _on_compute_error(self, message: str) -> None:
         self._compute_running = False
         self.run_enabled_changed.emit(True)
         self.save_enabled_changed.emit(self.has_savable_result())
-        self.status_changed.emit("Statistics failed.")
+        text = str(message).strip() if message else "Unknown error"
+        self.status_changed.emit(f"Statistics failed: {text}")
         self.statistics_failed.emit(message)
 
     # ------------------------------------------------------------------
@@ -429,7 +432,7 @@ class StatisticsViewModel(QObject):
             result_to_save = replace(result_to_save, preview=preview_override.copy())
         self.run_enabled_changed.emit(False)
         self.save_enabled_changed.emit(False)
-        self.status_changed.emit("Saving statistics…")
+        self.status_changed.emit("Saving statistics...")
         self._save_running = True
         run_in_thread(
             self.save,
@@ -440,11 +443,12 @@ class StatisticsViewModel(QObject):
             key="statistics_save",
         )
 
+    # @ai(gpt-5, codex, refactor, 2026-02-28)
     def _on_save_finished(self, inserted: int) -> None:
         self._save_running = False
         self.run_enabled_changed.emit(True)
         self.save_enabled_changed.emit(self.has_savable_result())
-        self.status_changed.emit(f"Saved {inserted} measurements to the database.")
+        self.status_changed.emit("Statistics saved.")
         try:
             self._data_model.notify_features_changed()
         except Exception:
@@ -455,7 +459,8 @@ class StatisticsViewModel(QObject):
         self._save_running = False
         self.run_enabled_changed.emit(True)
         self.save_enabled_changed.emit(self.has_savable_result())
-        self.status_changed.emit("Saving failed.")
+        text = str(message).strip() if message else "Unknown error"
+        self.status_changed.emit(f"Statistics save failed: {text}")
         self.save_failed.emit(message)
 
     def close(self) -> None:

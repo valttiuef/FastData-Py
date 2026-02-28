@@ -20,6 +20,7 @@ from ...utils import (
     toast_error,
     toast_info,
     toast_success,
+    toast_warn,
 )
 
 
@@ -251,6 +252,7 @@ class ForecastingViewModel(QObject):
     def is_running(self) -> bool:
         return self._running
 
+    # @ai(gpt-5, codex, refactor, 2026-02-28)
     def start_forecasts(
         self,
         *,
@@ -284,7 +286,7 @@ class ForecastingViewModel(QObject):
         except Exception:
             logger.warning("Exception in start_forecasts", exc_info=True)
         self.run_started.emit(expected_runs)
-        self._handle_status_update("Running forecasting experiments…")
+        self._handle_status_update("Generating forecasts...")
         set_progress(0)
         self._running = True
 
@@ -305,7 +307,9 @@ class ForecastingViewModel(QObject):
                 initial_window=initial_window,
                 target_feature=target_feature,
                 progress_callback=progress_callback,
-                status_callback=lambda message: run_in_main_thread(self._handle_status_update, message),
+                status_callback=lambda message: run_in_main_thread(
+                    self._handle_service_status_update, message
+                ),
                 result_callback=result_callback,
                 window_callback=lambda window_info: run_in_main_thread(self._handle_window_progress, window_info),
                 stop_event=stop_event,
@@ -321,6 +325,7 @@ class ForecastingViewModel(QObject):
             key="forecast_run",
         )
 
+    # @ai(gpt-5, codex, refactor, 2026-02-28)
     def _handle_run_success(self, summary: ForecastSummary) -> None:
         self._finalise_thread()
         clear_progress()
@@ -330,12 +335,17 @@ class ForecastingViewModel(QObject):
             count = 0
         if count > 0:
             message = f"Forecasting finished ({count} runs)."
+            status_text = "Forecasting finished."
+            toast_fn = toast_success
         else:
-            message = "Forecasting finished."
+            message = "No forecasting runs were produced."
+            status_text = "Forecasting produced no results."
+            toast_fn = toast_warn
         try:
-            toast_success(message, title="Forecasting", tab_key="forecasting")
+            toast_fn(message, title="Forecasting", tab_key="forecasting")
         except Exception:
             logger.warning("Exception in _handle_run_success", exc_info=True)
+        self._handle_status_update(status_text)
         self.run_finished.emit(summary)
 
     def _handle_partial_run(self, run) -> None:
@@ -343,12 +353,13 @@ class ForecastingViewModel(QObject):
             return
         self.run_partial.emit(run)
 
+    # @ai(gpt-5, codex, refactor, 2026-02-28)
     def _handle_run_error(self, message: str) -> None:
         self._finalise_thread()
         text = str(message).strip() if message else "Unknown error"
         is_cancelled = text.lower() == "forecast run cancelled"
         if is_cancelled:
-            status_text = "Forecast run cancelled."
+            status_text = "Forecasting cancelled."
             self._log_info(status_text)
             try:
                 toast_info(status_text, title="Forecasting", tab_key="forecasting")
@@ -361,12 +372,7 @@ class ForecastingViewModel(QObject):
                 toast_error(text, title="Forecasting failed", tab_key="forecasting")
             except Exception:
                 logger.warning("Exception in _handle_run_error", exc_info=True)
-        self._last_status_message = status_text
-        try:
-            set_status_text(status_text)
-        except Exception:
-            logger.warning("Exception in _handle_run_error", exc_info=True)
-        self.status_changed.emit(status_text)
+        self._handle_status_update(status_text)
         clear_progress()
         self.run_failed.emit(status_text)
 
@@ -391,6 +397,13 @@ class ForecastingViewModel(QObject):
         except Exception:
             logger.warning("Exception in _handle_status_update", exc_info=True)
         self.status_changed.emit(text)
+
+    def _handle_service_status_update(self, message: Optional[str]) -> None:
+        text = str(message or "").strip()
+        if text:
+            self._log_info(text)
+        if self._running:
+            self._handle_status_update("Generating forecasts...")
 
     def _handle_window_progress(self, window_info: dict) -> None:
         """Handle window-level progress updates during forecasting.

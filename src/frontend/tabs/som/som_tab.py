@@ -1198,6 +1198,8 @@ class SomTab(TabWidget):
         row_df = self._result.row_bmus.copy()
         if row_df.empty:
             return row_df
+        if "step" in row_df.columns:
+            row_df = row_df.drop(columns=["step"])
         width = 0
         if isinstance(getattr(self._result, "map_shape", None), tuple) and len(self._result.map_shape) >= 2:
             try:
@@ -1226,6 +1228,9 @@ class SomTab(TabWidget):
         if "cluster" not in row_df.columns:
             row_df = row_df.copy()
             row_df["cluster"] = pd.NA
+        if "distance" not in row_df.columns:
+            row_df = row_df.copy()
+            row_df["distance"] = pd.NA
         row_df = row_df.copy()
         row_df["cluster"] = row_df["cluster"].apply(self._format_cluster_label)
         return row_df
@@ -2018,5 +2023,5 @@ class SomTab(TabWidget):
 
     @staticmethod
     def _empty_timeline_table_dataframe() -> pd.DataFrame:
-        return pd.DataFrame(columns=["index", "bmu_x", "bmu_y", "bmu", "cluster"])
+        return pd.DataFrame(columns=["index", "cluster", "bmu_x", "bmu_y", "bmu", "distance"])
 

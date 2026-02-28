@@ -6,7 +6,6 @@ from ...localization import tr
 from ...models.hybrid_pandas_model import FeatureSelection
 from ...utils import (
     clear_progress,
-    clear_status_text,
     set_progress,
     set_status_text,
     toast_error,
@@ -177,7 +176,7 @@ class ChartsSidebar(SidebarWidget):
         )
         if not started_search:
             clear_progress()
-            clear_status_text()
+            set_status_text(tr("Correlation analysis failed: unavailable."))
             toast_error(
                 tr("Failed to start correlation analysis."),
                 title=tr("Correlation failed"),
@@ -206,5 +205,4 @@ class ChartsSidebar(SidebarWidget):
         self._correlation_target_name = ""
         self.btn_find_correlations.setEnabled(True)
         clear_progress()
-        clear_status_text()
 

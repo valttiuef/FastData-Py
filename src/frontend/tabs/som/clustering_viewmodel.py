@@ -57,15 +57,17 @@ class ClusteringViewModel(QObject):
         return self._service.method_spec(method)
 
     # ------------------------------------------------------------------
-    def _cluster_set_running_status(self) -> None:
+    def _cluster_set_running_status(self, target: str) -> None:
         def _update() -> None:
             set_progress(0)
+            target_label = "neurons" if target == "neuron" else "features"
+            status_text = f"Clustering SOM {target_label}..."
             try:
-                set_status_text("Running...")
+                set_status_text(status_text)
             except Exception:
                 logger.warning("Exception in _cluster_set_running_status", exc_info=True)
             try:
-                self._som_viewmodel.status_changed.emit("Running...")
+                self._som_viewmodel.status_changed.emit(status_text)
             except Exception:
                 logger.warning("Exception in _cluster_set_running_status", exc_info=True)
 
@@ -86,29 +88,32 @@ class ClusteringViewModel(QObject):
 
         run_in_main_thread(_update)
 
-    def _cluster_set_finished_status(self) -> None:
+    def _cluster_set_finished_status(self, target: str) -> None:
         def _reset() -> None:
             clear_progress()
+            status_text = f"SOM {target} clustering finished."
             try:
-                set_status_text("Finished.")
+                set_status_text(status_text)
             except Exception:
                 logger.warning("Exception in _cluster_set_finished_status", exc_info=True)
             try:
-                self._som_viewmodel.status_changed.emit("Finished.")
+                self._som_viewmodel.status_changed.emit(status_text)
             except Exception:
                 logger.warning("Exception in _cluster_set_finished_status", exc_info=True)
 
         run_in_main_thread(_reset)
 
-    def _cluster_set_failed_status(self) -> None:
+    def _cluster_set_failed_status(self, target: str, reason: Optional[str] = None) -> None:
         def _reset() -> None:
             clear_progress()
+            reason_text = str(reason).strip() if reason else "unknown error"
+            text = f"SOM {target} clustering failed: {reason_text}"
             try:
-                set_status_text("Failed.")
+                set_status_text(text)
             except Exception:
                 logger.warning("Exception in _cluster_set_failed_status", exc_info=True)
             try:
-                self._som_viewmodel.status_changed.emit("Failed.")
+                self._som_viewmodel.status_changed.emit(text)
             except Exception:
                 logger.warning("Exception in _cluster_set_failed_status", exc_info=True)
 
@@ -144,7 +149,7 @@ class ClusteringViewModel(QObject):
         k_list_max = self._normalise_max_k(request.max_k, default=16)
 
         self._neuron_running = True
-        self._cluster_set_running_status()
+        self._cluster_set_running_status("neuron")
 
         def _run(*, progress_callback=None):
             return self._service.cluster_neurons(
@@ -162,14 +167,14 @@ class ClusteringViewModel(QObject):
 
         def _on_finished(result: NeuronClusteringResult):
             self._neuron_running = False
-            self._cluster_set_finished_status()
+            self._cluster_set_finished_status("neuron")
             self.neuron_clusters_updated.emit(result)
             if callable(on_finished):
                 on_finished(result)
 
         def _on_error(message: str):
             self._neuron_running = False
-            self._cluster_set_failed_status()
+            self._cluster_set_failed_status("neuron", message)
             self.clustering_error.emit(message)
             if callable(on_error):
                 on_error(message)
@@ -204,7 +209,7 @@ class ClusteringViewModel(QObject):
         k_list_max = self._normalise_max_k(request.max_k, default=20)
 
         self._feature_running = True
-        self._cluster_set_running_status()
+        self._cluster_set_running_status("feature")
 
         def _run(*, progress_callback=None):
             return self._service.cluster_features(
@@ -221,14 +226,14 @@ class ClusteringViewModel(QObject):
 
         def _on_finished(result: FeatureClusteringResult):
             self._feature_running = False
-            self._cluster_set_finished_status()
+            self._cluster_set_finished_status("feature")
             self.feature_clusters_updated.emit(result)
             if callable(on_finished):
                 on_finished(result)
 
         def _on_error(message: str):
             self._feature_running = False
-            self._cluster_set_failed_status()
+            self._cluster_set_failed_status("feature", message)
             self.clustering_error.emit(message)
             if callable(on_error):
                 on_error(message)

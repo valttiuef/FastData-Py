@@ -670,6 +670,7 @@ class RegressionViewModel(QObject):
     def is_running(self) -> bool:
         return self._running
 
+    # @ai(gpt-5, codex, refactor, 2026-02-28)
     def start_regressions(
         self,
         *,
@@ -711,7 +712,7 @@ class RegressionViewModel(QObject):
         except Exception:
             logger.warning("Exception in start_regressions", exc_info=True)
         self.run_started.emit()
-        self._handle_status_update("Running regression experiments…")
+        self._handle_status_update("Training regression models...")
         set_progress(0)
         self._running = True
 
@@ -748,7 +749,7 @@ class RegressionViewModel(QObject):
                 ),
                 progress_callback=progress_callback,
                 status_callback=lambda message: run_in_main_thread(
-                    self._handle_status_update, message
+                    self._handle_service_status_update, message
                 ),
                 result_callback=result_callback,
                 stop_event=stop_event,
@@ -764,6 +765,7 @@ class RegressionViewModel(QObject):
             key="regression_run",
         )
 
+    # @ai(gpt-5, codex, refactor, 2026-02-28)
     def _handle_run_success(self, summary: RegressionSummary) -> None:
         self._finalise_thread()
         clear_progress()
@@ -775,6 +777,7 @@ class RegressionViewModel(QObject):
                 toast_success("Regression finished.", title="Regression", tab_key="regression")
             except Exception:
                 logger.warning("Exception in _handle_run_success", exc_info=True)
+        self._handle_status_update("Regression finished.")
         self.run_finished.emit(summary)
 
     def _handle_partial_run(self, run) -> None:
@@ -782,12 +785,13 @@ class RegressionViewModel(QObject):
             return
         self.run_partial.emit(run)
 
+    # @ai(gpt-5, codex, refactor, 2026-02-28)
     def _handle_run_error(self, message: str) -> None:
         self._finalise_thread()
         text = str(message).strip() if message else "Unknown error"
         is_cancelled = text.lower() == "regression run cancelled"
         if is_cancelled:
-            status_text = "Regression run cancelled."
+            status_text = "Regression cancelled."
             try:
                 toast_info(status_text, title="Regression", tab_key="regression")
             except Exception:
@@ -798,8 +802,7 @@ class RegressionViewModel(QObject):
                 toast_error(text, title="Regression failed", tab_key="regression")
             except Exception:
                 logger.warning("Exception in _handle_run_error", exc_info=True)
-        self._last_status_message = status_text
-        self.status_changed.emit(status_text)
+        self._handle_status_update(status_text)
         clear_progress()
         self.run_failed.emit(status_text)
 
@@ -820,6 +823,13 @@ class RegressionViewModel(QObject):
         if text:
             self._log_info(text)
         self.status_changed.emit(text)
+
+    def _handle_service_status_update(self, message: Optional[str]) -> None:
+        text = str(message or "").strip()
+        if text:
+            self._log_info(text)
+        if self._running:
+            self._handle_status_update("Training regression models...")
 
     def _handle_context_update(self, context: Optional[Mapping[str, object]]) -> None:
         self.run_context_changed.emit(dict(context) if context else None)

@@ -578,13 +578,13 @@ class ChartsTab(TabWidget):
     def _on_correlation_search_finished(self, result) -> None:
         top10 = list(getattr(result, "top10", []) or [])
         if not top10:
-            set_status_text(tr("Correlation analysis finished."))
+            set_status_text(tr("Correlation analysis produced no results."))
             toast_warn(tr("No correlations were found."), title=tr("Charts"), tab_key="charts")
             return
 
         target = getattr(result, "target_feature", None)
         if not isinstance(target, FeatureSelection):
-            set_status_text(tr("Correlation analysis finished."))
+            set_status_text(tr("Correlation analysis produced no results."))
             toast_warn(tr("Target feature is unavailable."), title=tr("Charts"), tab_key="charts")
             return
 
@@ -636,7 +636,7 @@ class ChartsTab(TabWidget):
 
     def _on_correlation_search_failed(self, message: str) -> None:
         text = str(message).strip() if message else tr("Unknown error")
-        set_status_text(tr("Correlation analysis failed."))
+        set_status_text(tr("Correlation analysis failed: {error}").format(error=text))
         toast_error(text, title=tr("Correlation failed"), tab_key="charts")
 
     def _on_correlation_feature_clicked(self, category: str) -> None:
