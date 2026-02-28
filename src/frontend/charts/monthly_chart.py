@@ -216,18 +216,11 @@ class MonthlyBarChart(GroupBarChart):
             self.series.remove(s)
         self.axis_x.clear()
         if reset_axes:
-            try:
-                self.axis_x.setLabelsVisible(False)
-            except Exception:
-                logger.warning("Failed to hide X-axis labels while clearing monthly chart.", exc_info=True)
-            try:
-                self.axis_y.setRange(0.0, 1.0)
-            except Exception:
-                logger.warning("Failed to reset Y-axis range while clearing monthly chart.", exc_info=True)
-        try:
+            self.axis_x.setLabelsVisible(False)
+            self.axis_x.setGridLineVisible(False)
+            self.axis_x.setMinorGridLineVisible(False)
+            self.axis_y.setRange(0.0, 1.0)
             self.chart.setTitle(self._base_title)
-        except Exception:
-            logger.warning("Failed to restore base title while clearing monthly chart.", exc_info=True)
         if reset_navigation:
             self._raw_t = []
             self._raw_v = []
@@ -272,6 +265,9 @@ class MonthlyBarChart(GroupBarChart):
         v = pd.Series(pd.to_numeric(list(v_like), errors="coerce"))
         self._raw_t = t
         self._raw_v = v
+        if t.empty or t.notna().sum() == 0:
+            self.clear()
+            return
 
         # Decide base level by span
         level = self._determine_base_level(t)
@@ -420,6 +416,9 @@ class MonthlyBarChart(GroupBarChart):
     def _render_level(self, t: pd.Series, v: pd.Series, level_code: str):
         # Aggregate
         cats, vals, periods = self._aggregate(level_code, t, v)
+        if not periods:
+            self.clear(reset_navigation=False, reset_axes=True, request_repaint=True)
+            return
         updates_enabled = self.view.updatesEnabled()
         self.view.setUpdatesEnabled(False)
         try:
@@ -455,6 +454,8 @@ class MonthlyBarChart(GroupBarChart):
             self.axis_x.append(self._cats)
             try:
                 self.axis_x.setLabelsVisible(True)
+                self.axis_x.setGridLineVisible(True)
+                self.axis_x.setMinorGridLineVisible(True)
             except Exception:
                 logger.warning("Failed to show X-axis labels after rendering monthly bars.", exc_info=True)
 
@@ -545,6 +546,8 @@ class MonthlyBarChart(GroupBarChart):
             self.axis_x.append(categories)
             try:
                 self.axis_x.setLabelsVisible(True)
+                self.axis_x.setGridLineVisible(True)
+                self.axis_x.setMinorGridLineVisible(True)
             except Exception:
                 logger.warning("Failed to show X-axis labels after rendering multi-series monthly bars.", exc_info=True)
 

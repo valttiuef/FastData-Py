@@ -252,6 +252,10 @@ class GroupBarChart(QFrame):
                 logger.warning("Failed to clean up connected bar-set signals while clearing group chart.", exc_info=True)
             self.series.remove(s)
         self.axis_x.clear()
+        self.axis_x.setLabelsVisible(False)
+        self.axis_x.setGridLineVisible(False)
+        self.axis_x.setMinorGridLineVisible(False)
+        self.axis_y.setRange(0.0, 1.0)
         self._categories.clear()
         self._values.clear()
         self._tooltip_overrides.clear()
@@ -316,6 +320,12 @@ class GroupBarChart(QFrame):
 
         # Set categories
         self.axis_x.append([_short_label(c, 20) for c in self._categories])
+        try:
+            self.axis_x.setLabelsVisible(True)
+            self.axis_x.setGridLineVisible(True)
+            self.axis_x.setMinorGridLineVisible(True)
+        except Exception:
+            logger.warning("Failed to restore X-axis visibility while rendering group chart data.", exc_info=True)
 
         # Set Y range
         if self._values:
@@ -438,6 +448,12 @@ class GroupBarChart(QFrame):
         
         # Set categories
         self.axis_x.append([_short_label(c, 20) for c in self._categories])
+        try:
+            self.axis_x.setLabelsVisible(True)
+            self.axis_x.setGridLineVisible(True)
+            self.axis_x.setMinorGridLineVisible(True)
+        except Exception:
+            logger.warning("Failed to restore X-axis visibility while rendering multi-series group chart.", exc_info=True)
         
         # Update Y range
         all_values = []
