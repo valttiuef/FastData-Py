@@ -4,10 +4,18 @@ from PySide6.QtWidgets import QAbstractItemView, QGroupBox, QPushButton, QSizePo
 from ...localization import tr
 
 from ...models.hybrid_pandas_model import FeatureSelection
-from ...utils import toast_info
+from ...utils import (
+    clear_progress,
+    clear_status_text,
+    set_progress,
+    set_status_text,
+    toast_error,
+    toast_info,
+    toast_warn,
+)
 from ...widgets.data_selector_widget import DataSelectorWidget
 from ...widgets.sidebar_widget import SidebarWidget
-from .viewmodel import ChartsViewModel
+from .viewmodel import CorrelationEntry, CorrelationSearchResult, ChartsViewModel
 import logging
 
 logger = logging.getLogger(__name__)
@@ -19,6 +27,8 @@ class ChartsSidebar(SidebarWidget):
     def __init__(self, view_model: ChartsViewModel, parent=None):
         super().__init__(title=tr("Charts"), parent=parent)
         self._view_model = view_model
+        self._correlation_total = 0
+        self._correlation_target_name = ""
 
         layout = self.content_layout()
 
@@ -52,6 +62,9 @@ class ChartsSidebar(SidebarWidget):
         self.data_selector.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         self.features_widget = self.data_selector.features_widget
         self.features_widget.table_view.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self._view_model.correlation_search_progress.connect(self._on_correlation_search_progress)
+        self._view_model.correlation_search_finished.connect(self._on_correlation_search_done)
+        self._view_model.correlation_search_failed.connect(self._on_correlation_search_done)
 
         layout.addWidget(self.data_selector, 1)
 
@@ -99,23 +112,78 @@ class ChartsSidebar(SidebarWidget):
                 continue
             seen.add(key)
             ordered.append(item)
-        payloads = [self._feature_payload(item) for item in ordered]
-        data_frame = self.data_selector.fetch_base_dataframe_for_features(payloads)
-        if data_frame is None or data_frame.empty:
-            toast_info(tr("No data for the selected filters."), title=tr("Charts"), tab_key="charts")
-            return
-
-        started = self._view_model.start_correlation_search(
-            target_feature=feature,
-            available_features=candidates,
-            data_frame=data_frame,
-        )
+        started = self._view_model.begin_correlation_search()
         if not started:
-            toast_info(
+            toast_warn(
                 tr("Correlation search is already running."),
                 title=tr("Charts"),
                 tab_key="charts",
             )
+            return
+
+        self._correlation_total = max(0, len(ordered) - 1)
+        self._correlation_target_name = feature.display_name()
+        self.btn_find_correlations.setEnabled(False)
+        set_progress(0)
+        set_status_text(tr("Finding correlations..."))
+
+        def _on_progress(percent: int) -> None:
+            checked = 0
+            bounded_percent = max(0, min(100, int(percent)))
+            if self._correlation_total > 0:
+                checked = int(round((bounded_percent / 100.0) * self._correlation_total))
+            self._view_model.notify_correlation_search_progress(
+                checked=checked,
+                total=self._correlation_total,
+                message=tr("Checking feature correlations"),
+            )
+
+        def _on_result(payload: dict) -> None:
+            entries_payload = list(payload.get("entries") or [])
+            result_entries: list[CorrelationEntry] = []
+            for item in entries_payload:
+                if not isinstance(item, dict):
+                    continue
+                selection = item.get("feature")
+                if not isinstance(selection, FeatureSelection):
+                    continue
+                try:
+                    corr = float(item.get("correlation"))
+                except Exception:
+                    continue
+                result_entries.append(
+                    CorrelationEntry(
+                        feature=selection,
+                        correlation=corr,
+                    )
+                )
+            self._view_model.complete_correlation_search(
+                CorrelationSearchResult(
+                    target_feature=feature,
+                    top10=result_entries[:10],
+                )
+            )
+
+        started_search = self.data_selector.find_top_correlations(
+            target_feature=feature,
+            available_features=ordered,
+            limit=10,
+            on_result=_on_result,
+            on_error=lambda message: self._view_model.fail_correlation_search(str(message)),
+            on_progress=_on_progress,
+            owner=self,
+            key="charts_correlation_search",
+            cancel_previous=True,
+        )
+        if not started_search:
+            clear_progress()
+            clear_status_text()
+            toast_error(
+                tr("Failed to start correlation analysis."),
+                title=tr("Correlation failed"),
+                tab_key="charts",
+            )
+            self._view_model.fail_correlation_search(tr("Correlation analysis is unavailable."))
             return
 
         toast_info(
@@ -124,14 +192,19 @@ class ChartsSidebar(SidebarWidget):
             tab_key="charts",
         )
 
-    @staticmethod
-    def _feature_payload(selection: FeatureSelection) -> dict:
-        return {
-            "feature_id": selection.feature_id,
-            "notes": selection.label,
-            "name": selection.base_name,
-            "source": selection.source,
-            "unit": selection.unit,
-            "type": selection.type,
-            "lag_seconds": selection.lag_seconds,
-        }
+    def _on_correlation_search_progress(self, checked: int, total: int, _message: str) -> None:
+        pct = 0
+        total_int = int(total)
+        checked_int = max(0, int(checked))
+        if total_int > 0:
+            pct = int(round((checked_int * 100) / total_int))
+        pct = max(0, min(100, pct))
+        set_progress(pct)
+
+    def _on_correlation_search_done(self, _payload) -> None:
+        self._correlation_total = 0
+        self._correlation_target_name = ""
+        self.btn_find_correlations.setEnabled(True)
+        clear_progress()
+        clear_status_text()
+

@@ -2,6 +2,7 @@
 from __future__ import annotations
 from typing import Any, Mapping, Optional, Sequence
 
+import numpy as np
 import pandas as pd
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QGroupBox, QVBoxLayout
@@ -259,14 +260,43 @@ class DataSelectorViewModel(QObject):
 
     # ------------------------------------------------------------------
     def build_data_filters(self) -> Optional[DataFilters]:
-        return self._widget.build_data_filters()
+        if self._widget.features_widget is None or self._widget.filters_widget is None:
+            return None
+        payloads = self._widget.features_widget.selected_payloads()
+        if not payloads:
+            return None
+        return DataFilters(
+            features=[FeatureSelection.from_payload(p) for p in payloads],
+            start=self._widget.filters_widget.start_timestamp(),
+            end=self._widget.filters_widget.end_timestamp(),
+            group_ids=self._widget.filters_widget.selected_group_ids(),
+            months=self._widget.filters_widget.selected_months(),
+            systems=self._widget.filters_widget.selected_systems(),
+            datasets=self._widget.filters_widget.selected_datasets(),
+            import_ids=self._widget.filters_widget.selected_import_ids(),
+        )
 
     def fetch_base_dataframe(
         self, *, preprocessing_override: Optional[Mapping[str, object]] = None
     ) -> Optional[pd.DataFrame]:
-        return self._widget.fetch_base_dataframe(
-            preprocessing_override=preprocessing_override
+        model = self._data_model
+        filters = self.build_data_filters()
+        if model is None or filters is None:
+            return None
+
+        params = (
+            dict(self._widget.preprocessing_widget.parameters())
+            if self._widget.preprocessing_widget is not None
+            else {}
         )
+        if preprocessing_override:
+            params.update(dict(preprocessing_override))
+
+        try:
+            model.load_base(filters, **params)
+            return model.base_dataframe().copy()
+        except Exception:
+            return None
 
     def fetch_base_dataframe_for_features(
         self,
@@ -279,15 +309,273 @@ class DataSelectorViewModel(QObject):
         datasets: Optional[Sequence[str]] = None,
         group_ids: Optional[Sequence[int]] = None,
     ) -> Optional[pd.DataFrame]:
-        return self._widget.fetch_base_dataframe_for_features(
-            feature_payloads,
-            preprocessing_override=preprocessing_override,
-            start=start,
-            end=end,
-            systems=systems,
-            datasets=datasets,
-            group_ids=group_ids,
+        model = self._data_model
+        payloads = [dict(p) for p in (feature_payloads or []) if isinstance(p, Mapping)]
+        if not payloads:
+            return None
+        if self._widget.filters_widget is None:
+            return None
+        filters = DataFilters(
+            features=[FeatureSelection.from_payload(p) for p in payloads],
+            start=self._widget.filters_widget.start_timestamp() if start is None else start,
+            end=self._widget.filters_widget.end_timestamp() if end is None else end,
+            group_ids=(
+                list(group_ids)
+                if group_ids is not None
+                else self._widget.filters_widget.selected_group_ids()
+            ),
+            months=self._widget.filters_widget.selected_months(),
+            systems=(
+                list(systems)
+                if systems is not None
+                else self._widget.filters_widget.selected_systems()
+            ),
+            datasets=(
+                list(datasets)
+                if datasets is not None
+                else self._widget.filters_widget.selected_datasets()
+            ),
+            import_ids=self._widget.filters_widget.selected_import_ids(),
         )
+        if model is None:
+            return None
+
+        params = (
+            dict(self._widget.preprocessing_widget.parameters())
+            if self._widget.preprocessing_widget is not None
+            else {}
+        )
+        if preprocessing_override:
+            params.update(dict(preprocessing_override))
+
+        try:
+            model.load_base(filters, **params)
+            return model.base_dataframe().copy()
+        except Exception:
+            return None
+
+    @staticmethod
+    def _ordered_unique_features(
+        target_feature: FeatureSelection,
+        available_features: Sequence[FeatureSelection],
+    ) -> list[FeatureSelection]:
+        ordered: list[FeatureSelection] = []
+        seen: set[tuple] = set()
+        for item in [target_feature] + list(available_features):
+            key = item.identity_key()
+            if key in seen:
+                continue
+            seen.add(key)
+            ordered.append(item)
+        return ordered
+
+    @staticmethod
+    def _feature_map_for_columns(
+        columns: Sequence[str],
+        features: Sequence[FeatureSelection],
+    ) -> dict[str, FeatureSelection]:
+        mapping: dict[str, FeatureSelection] = {}
+        for idx, name in enumerate(columns):
+            if idx < len(features):
+                mapping[str(name)] = features[idx]
+            else:
+                mapping[str(name)] = FeatureSelection(base_name=str(name))
+        return mapping
+
+    @staticmethod
+    def _target_column(
+        columns: Sequence[str],
+        mapping: dict[str, FeatureSelection],
+        target_feature: FeatureSelection,
+    ) -> str | None:
+        target_key = target_feature.identity_key()
+        for name in columns:
+            selection = mapping.get(str(name))
+            if selection is not None and selection.identity_key() == target_key:
+                return str(name)
+        return None
+
+    @staticmethod
+    def _compute_correlation_entries(
+        *,
+        frame: pd.DataFrame,
+        target_feature: FeatureSelection,
+        features: Sequence[FeatureSelection],
+        limit: int,
+        progress_callback=None,
+    ) -> tuple[list[dict[str, object]], int]:
+        if frame is None or frame.empty:
+            raise RuntimeError("No data for the selected filters.")
+
+        data_cols = [col for col in frame.columns if col != "t"]
+        if len(data_cols) < 2:
+            raise RuntimeError("No comparable feature columns were found.")
+
+        feature_by_col = DataSelectorViewModel._feature_map_for_columns(data_cols, features)
+        target_col = DataSelectorViewModel._target_column(data_cols, feature_by_col, target_feature)
+        if not target_col:
+            raise RuntimeError("Target feature data is unavailable for current filters.")
+
+        numeric = frame.loc[:, data_cols].apply(pd.to_numeric, errors="coerce")
+        target_series = numeric[target_col]
+        valid_target = target_series.notna()
+        if int(valid_target.sum()) < 3:
+            raise RuntimeError("Target feature has insufficient data for correlation analysis.")
+
+        matrix = numeric.loc[valid_target]
+        target_aligned = target_series.loc[valid_target]
+        y = target_aligned.to_numpy(dtype=np.float64, copy=False)
+        if y.size < 3 or np.nanstd(y) <= 0.0:
+            raise RuntimeError("Target feature has no variation for correlation analysis.")
+
+        y2 = y * y
+        columns = [str(col) for col in matrix.columns]
+        total_checked = max(0, len(columns) - 1)
+        checked = 0
+        block_size = 128
+        entries: list[dict[str, object]] = []
+
+        for start_idx in range(0, len(columns), block_size):
+            block_cols = columns[start_idx : start_idx + block_size]
+            x = matrix.loc[:, block_cols].to_numpy(dtype=np.float64, copy=False)
+            valid = ~np.isnan(x)
+            n = valid.sum(axis=0).astype(np.float64)
+            x_masked = np.where(valid, x, 0.0)
+            y_col = y[:, None]
+            y2_col = y2[:, None]
+
+            sum_x = x_masked.sum(axis=0)
+            sum_y = (valid * y_col).sum(axis=0)
+            sum_x2 = (x_masked * x_masked).sum(axis=0)
+            sum_y2 = (valid * y2_col).sum(axis=0)
+            sum_xy = (x_masked * y_col).sum(axis=0)
+
+            numerator = n * sum_xy - (sum_x * sum_y)
+            denominator_sq = (n * sum_x2 - (sum_x * sum_x)) * (n * sum_y2 - (sum_y * sum_y))
+            denominator_sq = np.maximum(denominator_sq, 0.0)
+            denominator = np.sqrt(denominator_sq)
+            correlations = np.divide(
+                numerator,
+                denominator,
+                out=np.full_like(numerator, np.nan, dtype=np.float64),
+                where=denominator > 0.0,
+            )
+
+            for idx, col in enumerate(block_cols):
+                if col == target_col:
+                    continue
+                checked += 1
+                if n[idx] < 3:
+                    continue
+                corr = float(correlations[idx])
+                if not np.isfinite(corr):
+                    continue
+                entries.append(
+                    {
+                        "feature": feature_by_col.get(col, FeatureSelection(base_name=col)),
+                        "correlation": corr,
+                    }
+                )
+
+            if callable(progress_callback) and total_checked > 0:
+                progress_callback(int((checked * 100) / total_checked))
+
+        if not entries:
+            raise RuntimeError("Unable to calculate correlations for this feature.")
+
+        entries.sort(key=lambda entry: abs(float(entry["correlation"])), reverse=True)
+        return entries[: max(1, int(limit))], total_checked
+
+    # @ai(gpt-5, codex, refactor, 2026-02-28)
+    def find_top_correlations(
+        self,
+        *,
+        target_feature: FeatureSelection,
+        available_features: Sequence[FeatureSelection],
+        limit: int = 10,
+        on_result=None,
+        on_error=None,
+        on_progress=None,
+        owner: object | None = None,
+        key: object | None = "selector_correlation_search",
+        cancel_previous: bool = True,
+    ) -> bool:
+        model = self._data_model
+        if model is None or self._widget.filters_widget is None:
+            if callable(on_error):
+                run_in_main_thread(on_error, "Correlation analysis is unavailable.")
+            return False
+
+        features = self._ordered_unique_features(target_feature, available_features)
+        if len(features) < 2:
+            if callable(on_error):
+                run_in_main_thread(
+                    on_error,
+                    "At least 2 features are required for correlation analysis.",
+                )
+            return False
+
+        filters = DataFilters(
+            features=list(features),
+            start=self._widget.filters_widget.start_timestamp(),
+            end=self._widget.filters_widget.end_timestamp(),
+            group_ids=self._widget.filters_widget.selected_group_ids(),
+            months=self._widget.filters_widget.selected_months(),
+            systems=self._widget.filters_widget.selected_systems(),
+            datasets=self._widget.filters_widget.selected_datasets(),
+            import_ids=self._widget.filters_widget.selected_import_ids(),
+        )
+        params = (
+            dict(self._widget.preprocessing_widget.parameters())
+            if self._widget.preprocessing_widget is not None
+            else {}
+        )
+
+        def _work(progress_callback=None) -> dict[str, object]:
+            model.load_base(filters, **params)
+            frame = model.base_dataframe().copy()
+
+            entries, checked_total = self._compute_correlation_entries(
+                frame=frame,
+                target_feature=target_feature,
+                features=features,
+                limit=limit,
+                progress_callback=lambda value: (
+                    progress_callback(min(99, max(2, int(value))))
+                    if callable(progress_callback)
+                    else None
+                ),
+            )
+            if callable(progress_callback):
+                progress_callback(100)
+            return {
+                "target_feature": target_feature,
+                "entries": entries,
+                "checked_total": int(checked_total),
+            }
+
+        run_in_thread(
+            _work,
+            on_result=(
+                (lambda payload: run_in_main_thread(on_result, payload))
+                if callable(on_result)
+                else None
+            ),
+            on_error=(
+                (lambda message: run_in_main_thread(on_error, str(message)))
+                if callable(on_error)
+                else None
+            ),
+            on_progress=(
+                (lambda value: run_in_main_thread(on_progress, int(value)))
+                if callable(on_progress)
+                else None
+            ),
+            owner=owner or self,
+            key=key,
+            cancel_previous=cancel_previous,
+        )
+        return True
 
 
 class DataSelectorWidget(QGroupBox):
@@ -527,40 +815,38 @@ class DataSelectorWidget(QGroupBox):
 
     # ------------------------------------------------------------------
     def build_data_filters(self) -> Optional[DataFilters]:
-        if self.features_widget is None or self.filters_widget is None:
-            return None
-        payloads = self.features_widget.selected_payloads()
-        if not payloads:
-            return None
-        start = self.filters_widget.start_timestamp()
-        end = self.filters_widget.end_timestamp()
-        return DataFilters(
-            features=[FeatureSelection.from_payload(p) for p in payloads],
-            start=start,
-            end=end,
-            group_ids=self.filters_widget.selected_group_ids(),
-            months=self.filters_widget.selected_months(),
-            systems=self.filters_widget.selected_systems(),
-            datasets=self.filters_widget.selected_datasets(),
-            import_ids=self.filters_widget.selected_import_ids(),
-        )
+        return self.view_model.build_data_filters()
 
     # ------------------------------------------------------------------
     def fetch_base_dataframe(self, *, preprocessing_override: Optional[Mapping[str, object]] = None) -> Optional[pd.DataFrame]:
-        model = self._data_model
-        filters = self.build_data_filters()
-        if model is None or filters is None:
-            return None
+        return self.view_model.fetch_base_dataframe(
+            preprocessing_override=preprocessing_override
+        )
 
-        params = dict(self.preprocessing_widget.parameters()) if self.preprocessing_widget is not None else {}
-        if preprocessing_override:
-            params.update(dict(preprocessing_override))
-
-        try:
-            model.load_base(filters, **params)
-            return model.base_dataframe().copy()
-        except Exception:
-            return None
+    def find_top_correlations(
+        self,
+        *,
+        target_feature: FeatureSelection,
+        available_features: Sequence[FeatureSelection],
+        limit: int = 10,
+        on_result=None,
+        on_error=None,
+        on_progress=None,
+        owner: object | None = None,
+        key: object | None = "selector_correlation_search",
+        cancel_previous: bool = True,
+    ) -> bool:
+        return self.view_model.find_top_correlations(
+            target_feature=target_feature,
+            available_features=available_features,
+            limit=limit,
+            on_result=on_result,
+            on_error=on_error,
+            on_progress=on_progress,
+            owner=owner,
+            key=key,
+            cancel_previous=cancel_previous,
+        )
 
     def fetch_base_dataframe_for_features(
         self,
@@ -573,34 +859,15 @@ class DataSelectorWidget(QGroupBox):
         datasets: Optional[Sequence[str]] = None,
         group_ids: Optional[Sequence[int]] = None,
     ) -> Optional[pd.DataFrame]:
-        model = self._data_model
-        payloads = [dict(p) for p in (feature_payloads or []) if isinstance(p, Mapping)]
-        if not payloads:
-            return None
-        if self.filters_widget is None:
-            return None
-        filters = DataFilters(
-            features=[FeatureSelection.from_payload(p) for p in payloads],
-            start=self.filters_widget.start_timestamp() if start is None else start,
-            end=self.filters_widget.end_timestamp() if end is None else end,
-            group_ids=list(group_ids) if group_ids is not None else self.filters_widget.selected_group_ids(),
-            months=self.filters_widget.selected_months(),
-            systems=list(systems) if systems is not None else self.filters_widget.selected_systems(),
-            datasets=list(datasets) if datasets is not None else self.filters_widget.selected_datasets(),
-            import_ids=self.filters_widget.selected_import_ids(),
+        return self.view_model.fetch_base_dataframe_for_features(
+            feature_payloads,
+            preprocessing_override=preprocessing_override,
+            start=start,
+            end=end,
+            systems=systems,
+            datasets=datasets,
+            group_ids=group_ids,
         )
-        if model is None or filters is None:
-            return None
-
-        params = dict(self.preprocessing_widget.parameters()) if self.preprocessing_widget is not None else {}
-        if preprocessing_override:
-            params.update(dict(preprocessing_override))
-
-        try:
-            model.load_base(filters, **params)
-            return model.base_dataframe().copy()
-        except Exception:
-            return None
 
     # ------------------------------------------------------------------
     def _resolve_log_view_model(self):

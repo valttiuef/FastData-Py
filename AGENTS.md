@@ -38,6 +38,36 @@ Do not introduce new architectural patterns without explicit instruction.
 - Global UI viewmodels (for example help/log) belong in `src/frontend/viewmodels/` and must expose shared getter functions.
 - Initialize shared/global viewmodels once in `src/frontend/windows/main_window.py`, then access them through getters instead of passing/storing ad-hoc per-widget instances.
 
+## Async UX Pattern (Status/Progress/Toasts)
+
+For user-triggered background jobs (imports, analysis, training, exports):
+
+- Keep action button labels stable. Do not repurpose button text for progress.
+- Before starting work:
+  - show an info toast (start message),
+  - set status text describing the task,
+  - initialize progress to `0` when progress tracking is available.
+- During work:
+  - keep status text for phase/context changes only (not numeric progress ticks),
+  - do not drive status text from progress callbacks,
+  - update progress via callback/signals in the `0..100` range when possible.
+- Status text wording must be minimal and generic:
+  - prefer short phrases like "Running...", "Finished.", "Failed."
+  - do not include detailed explanations, counts, percentages, or error payloads in status text
+  - put details in toasts/logs instead
+- On completion:
+  - show success toast,
+  - set a clear finished status text,
+  - clear/hide progress indicator.
+- On warnings / no-result outcomes:
+  - show warning toast,
+  - set status text describing the warning outcome,
+  - clear/hide progress indicator.
+- On errors:
+  - show error toast,
+  - set status text with the failure reason,
+  - clear/hide progress indicator.
+
 ## DataSelectorWidget Rule (Strict)
 
 For tabs/sidebars that include `DataSelectorWidget`:

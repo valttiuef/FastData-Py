@@ -21,7 +21,7 @@ from .viewmodel import ChartsViewModel
 from .chart_card import ChartCard
 from .charts_sidebar import ChartsSidebar
 from ...utils.exporting import export_dataframes, export_charts_excel
-from ...utils import toast_error, toast_info, toast_success, toast_warn
+from ...utils import set_status_text, toast_error, toast_info, toast_success, toast_warn
 from ...widgets.export_dialog import ExportOption, ExportSelectionDialog
 from ...widgets.panel import Panel
 from ..tab_widget import TabWidget
@@ -578,11 +578,13 @@ class ChartsTab(TabWidget):
     def _on_correlation_search_finished(self, result) -> None:
         top10 = list(getattr(result, "top10", []) or [])
         if not top10:
+            set_status_text(tr("Correlation analysis finished."))
             toast_warn(tr("No correlations were found."), title=tr("Charts"), tab_key="charts")
             return
 
         target = getattr(result, "target_feature", None)
         if not isinstance(target, FeatureSelection):
+            set_status_text(tr("Correlation analysis finished."))
             toast_warn(tr("Target feature is unavailable."), title=tr("Charts"), tab_key="charts")
             return
 
@@ -630,9 +632,11 @@ class ChartsTab(TabWidget):
             title=tr("Charts"),
             tab_key="charts",
         )
+        set_status_text(tr("Correlation analysis finished."))
 
     def _on_correlation_search_failed(self, message: str) -> None:
         text = str(message).strip() if message else tr("Unknown error")
+        set_status_text(tr("Correlation analysis failed."))
         toast_error(text, title=tr("Correlation failed"), tab_key="charts")
 
     def _on_correlation_feature_clicked(self, category: str) -> None:

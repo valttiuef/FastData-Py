@@ -45,6 +45,7 @@ class ChartsViewModel(QObject):
     add_chart_requested = Signal()
     remove_chart_requested = Signal()
     chart_configuration_changed = Signal(object)
+    correlation_search_progress = Signal(int, int, str)
     correlation_search_finished = Signal(object)
     correlation_search_failed = Signal(str)
 
@@ -94,6 +95,34 @@ class ChartsViewModel(QObject):
 
     def notify_chart_configuration_changed(self, card) -> None:
         self.chart_configuration_changed.emit(card)
+
+    # @ai(gpt-5, codex, refactor, 2026-02-28)
+    def begin_correlation_search(self) -> bool:
+        if self._correlation_running:
+            return False
+        self._correlation_running = True
+        return True
+
+    def notify_correlation_search_progress(
+        self,
+        *,
+        checked: int,
+        total: int,
+        message: str = "",
+    ) -> None:
+        if not self._correlation_running:
+            return
+        self.correlation_search_progress.emit(
+            max(0, int(checked)),
+            max(0, int(total)),
+            str(message or ""),
+        )
+
+    def complete_correlation_search(self, result: CorrelationSearchResult) -> None:
+        self._on_correlation_search_success(result)
+
+    def fail_correlation_search(self, message: str) -> None:
+        self._on_correlation_search_error(message)
 
     def build_feature_items(
         self,
