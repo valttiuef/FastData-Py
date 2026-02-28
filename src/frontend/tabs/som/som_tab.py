@@ -41,7 +41,11 @@ from ...viewmodels.log_view_model import get_log_view_model
 
 # Tabs
 from .component_planes_tab import ComponentPlanesTab
-from .feature_map_tab import FeatureMapTabWidget
+from .feature_map_tab import (
+    FeatureMapTabWidget,
+    FEATURE_TABLE_COLUMNS,
+    FEATURE_TABLE_COLUMN_LABELS,
+)
 from .sidebar import SomSidebar
 from .timeline_tab import TimelineTabWidget
 from ..tab_widget import TabWidget
@@ -51,6 +55,8 @@ from ..tab_widget import TabWidget
 class SomTab(TabWidget):
     """Interactive tab that exposes SOM training/visualisation controls."""
     _TIMELINE_OVERLAY_MAX_FEATURES = 5
+    _FEATURE_TABLE_COLUMNS = FEATURE_TABLE_COLUMNS
+    _FEATURE_TABLE_COLUMN_LABELS = FEATURE_TABLE_COLUMN_LABELS
 
     def __init__(
         self,
@@ -174,7 +180,7 @@ class SomTab(TabWidget):
     def _init_table_models(self) -> None:
         feature_table = getattr(self, "feature_table", None)
         if feature_table is not None and feature_table.model() is None:
-            feature_table.set_dataframe(pd.DataFrame(), include_index=False)
+            feature_table.set_dataframe(self._empty_feature_table_dataframe(), include_index=False)
             self._feature_table_model = feature_table.model()
 
         timeline_table = getattr(self, "timeline_table", None)
@@ -980,11 +986,11 @@ class SomTab(TabWidget):
                 df["feature"] = df["feature"].apply(self._view_model.feature_display_name)
             except Exception:
                 logger.warning("Exception in _update_feature_table", exc_info=True)
-        if not df.empty:
-            preferred_order = ["feature_id", "feature", "x", "y", "min", "mean", "max", "cluster"]
-            ordered = [col for col in preferred_order if col in df.columns]
-            ordered.extend([col for col in df.columns if col not in ordered])
-            df = df.loc[:, ordered]
+        preferred_order = list(self._FEATURE_TABLE_COLUMNS)
+        ordered = [col for col in preferred_order if col in df.columns]
+        ordered.extend([col for col in df.columns if col not in ordered])
+        df = df.loc[:, ordered] if ordered else self._empty_feature_table_dataframe()
+        df = self._normalize_feature_table_dataframe(df)
         self._fill_table(self.feature_table, df)
         self._update_feature_group_chart()
 
@@ -1967,7 +1973,48 @@ class SomTab(TabWidget):
         model = table.model() if table is not None else None
         if model is None:
             return
-        table.set_dataframe(df, include_index=False)
+        self._set_feature_table_dataframe(table, df)
+
+    @staticmethod
+    def _empty_feature_table_dataframe() -> pd.DataFrame:
+        return pd.DataFrame(columns=list(SomTab._FEATURE_TABLE_COLUMNS))
+
+    @staticmethod
+    def _normalize_feature_table_dataframe(df: Optional[pd.DataFrame]) -> pd.DataFrame:
+        if df is None or df.empty:
+            return SomTab._empty_feature_table_dataframe()
+        out = df.copy()
+        for column in SomTab._FEATURE_TABLE_COLUMNS:
+            if column not in out.columns:
+                out[column] = pd.NA
+        ordered = list(SomTab._FEATURE_TABLE_COLUMNS) + [
+            c for c in out.columns if c not in SomTab._FEATURE_TABLE_COLUMNS
+        ]
+        return out.loc[:, ordered]
+
+    @staticmethod
+    def _set_feature_table_dataframe(table: Any, df: Optional[pd.DataFrame]) -> pd.DataFrame:
+        normalized = SomTab._normalize_feature_table_dataframe(df)
+        display_df = normalized.rename(
+            columns={
+                column: SomTab._FEATURE_TABLE_COLUMN_LABELS.get(column, column)
+                for column in normalized.columns
+            }
+        )
+        if table is None:
+            return normalized
+        model = table.model()
+        if model is None:
+            return normalized
+
+        previous_widths = [int(table.columnWidth(col)) for col in range(model.columnCount())]
+        table.set_dataframe(display_df, include_index=False)
+
+        if previous_widths and len(previous_widths) == model.columnCount():
+            for col, width in enumerate(previous_widths):
+                if width > 0:
+                    table.setColumnWidth(col, width)
+        return normalized
 
     @staticmethod
     def _empty_timeline_table_dataframe() -> pd.DataFrame:

@@ -31,6 +31,13 @@ if TYPE_CHECKING:  # pragma: no cover - imported for typing only
 
 
 TIMELINE_TABLE_COLUMNS: tuple[str, ...] = ("index", "bmu_x", "bmu_y", "bmu", "cluster")
+TIMELINE_TABLE_COLUMN_LABELS: dict[str, str] = {
+    "index": "Index",
+    "bmu_x": "BMU x",
+    "bmu_y": "BMU y",
+    "bmu": "BMU",
+    "cluster": "Cluster",
+}
 
 
 def empty_timeline_table_dataframe() -> pd.DataFrame:
@@ -50,6 +57,12 @@ def normalize_timeline_table_dataframe(df: Optional[pd.DataFrame]) -> pd.DataFra
 
 def set_timeline_table_dataframe(table: Any, df: Optional[pd.DataFrame]) -> pd.DataFrame:
     normalized = normalize_timeline_table_dataframe(df)
+    display_df = normalized.rename(
+        columns={
+            column: TIMELINE_TABLE_COLUMN_LABELS.get(column, column)
+            for column in normalized.columns
+        }
+    )
     if table is None:
         return normalized
     model = table.model()
@@ -57,7 +70,7 @@ def set_timeline_table_dataframe(table: Any, df: Optional[pd.DataFrame]) -> pd.D
         return normalized
 
     previous_widths = [int(table.columnWidth(col)) for col in range(model.columnCount())]
-    table.set_dataframe(normalized, include_index=False)
+    table.set_dataframe(display_df, include_index=False)
 
     if previous_widths and len(previous_widths) == model.columnCount():
         for col, width in enumerate(previous_widths):
@@ -160,7 +173,7 @@ class TimelineTabWidget(QWidget):
             sorting_enabled=True,
         )
         self.timeline_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.timeline_table.set_dataframe(empty_timeline_table_dataframe(), include_index=False)
+        set_timeline_table_dataframe(self.timeline_table, empty_timeline_table_dataframe())
         table_layout.addWidget(self.timeline_table, 1)
         if self._view_model is not None:
             try:

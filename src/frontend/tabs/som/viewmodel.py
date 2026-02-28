@@ -1072,27 +1072,34 @@ class SomViewModel(QObject):
         text = "" if message is None else str(message)
         self.status_changed.emit(text)
 
-    def _cluster_status_message(self, target: str, percent: Optional[int]) -> str:
-        base = f"Clustering SOM {target}…"
-        if percent is None:
-            return base
-        try:
-            pct = int(percent)
-        except Exception:
-            pct = 0
-        pct = max(0, min(100, pct))
-        return f"{base} ({pct}%)"
+    def _cluster_set_running_status(self) -> None:
+        def _update() -> None:
+            set_progress(0)
+            self.status_changed.emit("Running...")
+
+        run_in_main_thread(_update)
+
+    def _cluster_set_finished_status(self) -> None:
+        def _update() -> None:
+            clear_progress()
+            self.status_changed.emit("Finished.")
+
+        run_in_main_thread(_update)
+
+    def _cluster_set_failed_status(self) -> None:
+        def _update() -> None:
+            clear_progress()
+            self.status_changed.emit("Failed.")
+
+        run_in_main_thread(_update)
 
     def _cluster_update_progress(self, target: str, percent: int) -> None:
-        message = self._cluster_status_message(target, percent)
-
         def _update() -> None:
             try:
                 pct = int(percent)
             except Exception:
                 pct = 0
             set_progress(max(0, min(100, pct)))
-            self.status_changed.emit(message)
 
         run_in_main_thread(_update)
 
@@ -1179,9 +1186,7 @@ class SomViewModel(QObject):
         )
 
     # ------------------------------------------------------------------
-    def _cluster_reset_status(self) -> None:
-        run_in_main_thread(self._reset_status)
-
+    # @ai(gpt-5, codex, refactor, 2026-02-28)
     def cluster_neurons(
         self,
         *,
@@ -1195,21 +1200,19 @@ class SomViewModel(QObject):
             raise RuntimeError("Train a SOM model before clustering neurons")
 
         self._neuron_cluster_running = True
-        self._cluster_update_progress("neurons", 0)
+        self._cluster_set_running_status()
 
         def _run(*, progress_callback=None):
-            try:
-                return self._service.cluster_neurons(
-                    n_clusters=n_clusters,
-                    k_list_max=int(max_k),
-                    scoring=scoring,
-                    progress_callback=progress_callback,
-                )
-            finally:
-                self._cluster_reset_status()
+            return self._service.cluster_neurons(
+                n_clusters=n_clusters,
+                k_list_max=int(max_k),
+                scoring=scoring,
+                progress_callback=progress_callback,
+            )
 
         def _on_finished(result: NeuronClusteringResult):
             self._neuron_cluster_running = False
+            self._cluster_set_finished_status()
             self._last_neuron_clusters = result
             # Clear cluster names when new clustering is performed
             self._cluster_names = {}
@@ -1219,7 +1222,7 @@ class SomViewModel(QObject):
 
         def _on_error(message: str):
             self._neuron_cluster_running = False
-            self._cluster_reset_status()
+            self._cluster_set_failed_status()
             self.clustering_error.emit(message)
             if callable(on_error):
                 on_error(message)
@@ -1234,6 +1237,7 @@ class SomViewModel(QObject):
             cancel_previous=True,
         )
 
+    # @ai(gpt-5, codex, refactor, 2026-02-28)
     def cluster_features(
         self,
         *,
@@ -1247,21 +1251,19 @@ class SomViewModel(QObject):
             raise RuntimeError("Train a SOM model before clustering features")
 
         self._feature_cluster_running = True
-        self._cluster_update_progress("features", 0)
+        self._cluster_set_running_status()
 
         def _run(*, progress_callback=None):
-            try:
-                return self._service.cluster_features(
-                    n_clusters=n_clusters,
-                    k_list_max=int(max_k) if max_k is not None else None,
-                    scoring=scoring,
-                    progress_callback=progress_callback,
-                )
-            finally:
-                self._cluster_reset_status()
+            return self._service.cluster_features(
+                n_clusters=n_clusters,
+                k_list_max=int(max_k) if max_k is not None else None,
+                scoring=scoring,
+                progress_callback=progress_callback,
+            )
 
         def _on_finished(result: FeatureClusteringResult):
             self._feature_cluster_running = False
+            self._cluster_set_finished_status()
             self._last_feature_clusters = result
             self.feature_clusters_updated.emit(result)
             if callable(on_finished):
@@ -1269,7 +1271,7 @@ class SomViewModel(QObject):
 
         def _on_error(message: str):
             self._feature_cluster_running = False
-            self._cluster_reset_status()
+            self._cluster_set_failed_status()
             self.clustering_error.emit(message)
             if callable(on_error):
                 on_error(message)

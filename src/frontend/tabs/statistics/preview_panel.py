@@ -17,6 +17,32 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+PREVIEW_TABLE_COLUMNS: tuple[str, ...] = ("Name", "Source", "Unit", "Type", "Notes")
+
+
+def empty_preview_table_dataframe() -> pd.DataFrame:
+    return pd.DataFrame(columns=list(PREVIEW_TABLE_COLUMNS))
+
+
+def normalize_preview_table_dataframe(df: Optional[pd.DataFrame]) -> pd.DataFrame:
+    if df is None or df.empty:
+        return empty_preview_table_dataframe()
+    out = df.copy()
+    for column in PREVIEW_TABLE_COLUMNS:
+        if column not in out.columns:
+            out[column] = pd.NA
+    ordered = list(PREVIEW_TABLE_COLUMNS) + [c for c in out.columns if c not in PREVIEW_TABLE_COLUMNS]
+    return out.loc[:, ordered]
+
+
+def set_preview_table_dataframe(table: FastTable, df: Optional[pd.DataFrame]) -> pd.DataFrame:
+    normalized = normalize_preview_table_dataframe(df)
+    if table is None:
+        return normalized
+    table.set_dataframe(normalized, include_index=False)
+    return normalized
+
+
 
 class StatisticsPreview(Panel):
     """Container for the statistics preview panel."""
@@ -51,9 +77,11 @@ class StatisticsPreview(Panel):
             editable=True,
             parent=table_container,
             initial_uniform_column_widths=True,
+            initial_uniform_column_count=len(PREVIEW_TABLE_COLUMNS),
             context_menu_builder=self._build_table_context_menu,
             sorting_enabled=True,
         )
+        set_preview_table_dataframe(self.preview_table, empty_preview_table_dataframe())
         table_layout.addWidget(self.preview_table, 1)
         self._splitter.addWidget(table_container)
         
@@ -76,6 +104,7 @@ class StatisticsPreview(Panel):
         self._feature_rows: list[dict] = []
         self._last_splitter_sizes: list[int] = []
         self._splitters_initialized = False
+        self._initial_table_layout_applied = False
 
         try:
             self.preview_table.selectionChangedInstant.connect(self._on_table_selection_changed)
@@ -100,6 +129,7 @@ class StatisticsPreview(Panel):
             self._splitters_initialized = self._initialize_splitter_sizes()
         if self._splitters_initialized:
             self._rebalance_splitter()
+            self._apply_initial_table_layout_once()
 
     def _rebalance_splitter(self) -> None:
         height = self._splitter.size().height()
@@ -115,6 +145,15 @@ class StatisticsPreview(Panel):
         half_height = max(1, height // 2)
         self._splitter.setSizes([half_height, height - half_height])
         return True
+
+    def _apply_initial_table_layout_once(self) -> None:
+        if self._initial_table_layout_applied:
+            return
+        self._initial_table_layout_applied = True
+        try:
+            self.preview_table.reapply_uniform_column_widths()
+        except Exception:
+            logger.warning("Exception in _apply_initial_table_layout_once", exc_info=True)
 
     # ------------------------------------------------------------------
     def set_mode(self, mode: str, group_column: Optional[str] = None) -> None:
@@ -210,12 +249,12 @@ class StatisticsPreview(Panel):
         self._feature_rows = raw_rows
 
         if summary is None or summary.empty:
-            self.preview_table.setModel(None)
-            self._preview_model = None
+            set_preview_table_dataframe(self.preview_table, empty_preview_table_dataframe())
+            self._preview_model = self.preview_table.model()
             self.preview_chart.clear()
             return
 
-        self.preview_table.set_dataframe(summary, include_index=False)
+        set_preview_table_dataframe(self.preview_table, summary)
         self._preview_model = self.preview_table.model()
         if self._last_splitter_sizes:
             try:
@@ -231,9 +270,7 @@ class StatisticsPreview(Panel):
         df: Optional[pd.DataFrame],
     ) -> tuple[pd.DataFrame, list[dict]]:
         if df is None or df.empty:
-            empty_columns = ["Name", "Source", "Unit", "Type", "Notes"]
-            empty = pd.DataFrame(columns=empty_columns)
-            return empty, []
+            return empty_preview_table_dataframe(), []
 
         working = df.copy()
         if "statistic" not in working.columns:

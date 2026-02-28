@@ -37,6 +37,10 @@ Do not introduce new architectural patterns without explicit instruction.
 - When fixing issues, never suppress warnings/errors as a workaround; fix the root cause.
 - Global UI viewmodels (for example help/log) belong in `src/frontend/viewmodels/` and must expose shared getter functions.
 - Initialize shared/global viewmodels once in `src/frontend/windows/main_window.py`, then access them through getters instead of passing/storing ad-hoc per-widget instances.
+- Prefer pre-initialized controls/widgets when feasible (tables, charts, selectors) with stable default schemas/states so UI structure is visible before user actions.
+- For pre-initialized tables, keep initial column sets deterministic and preserve user-resized column widths across data refreshes when practical.
+- Prefer user-friendly UI naming wherever possible.
+- Table headers shown to users should use readable labels (Title Case / clear abbreviations), not internal snake_case keys; for example `bmu_x` -> `BMU x`.
 
 ## Async UX Pattern (Status/Progress/Toasts)
 

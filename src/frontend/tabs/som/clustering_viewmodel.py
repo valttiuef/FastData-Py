@@ -57,23 +57,25 @@ class ClusteringViewModel(QObject):
         return self._service.method_spec(method)
 
     # ------------------------------------------------------------------
-    def _cluster_status_message(self, target: str, percent: Optional[int]) -> str:
-        base = f"Clustering SOM {target}…"
-        if percent is None:
-            return base
-        try:
-            pct = int(percent)
-        except Exception:
-            pct = 0
-        pct = max(0, min(100, pct))
-        return f"{base} ({pct}%)"
+    def _cluster_set_running_status(self) -> None:
+        def _update() -> None:
+            set_progress(0)
+            try:
+                set_status_text("Running...")
+            except Exception:
+                logger.warning("Exception in _cluster_set_running_status", exc_info=True)
+            try:
+                self._som_viewmodel.status_changed.emit("Running...")
+            except Exception:
+                logger.warning("Exception in _cluster_set_running_status", exc_info=True)
+
+        run_in_main_thread(_update)
 
     def _cluster_update_progress(self, target: str, percent: int) -> None:
         if target == "neurons" and not self._neuron_running:
             return
         if target == "features" and not self._feature_running:
             return
-        message = self._cluster_status_message(target, percent)
 
         def _update() -> None:
             try:
@@ -81,24 +83,34 @@ class ClusteringViewModel(QObject):
             except Exception:
                 pct = 0
             set_progress(max(0, min(100, pct)))
-            try:
-                self._som_viewmodel.status_changed.emit(message)
-            except Exception:
-                logger.warning("Exception in _update", exc_info=True)
 
         run_in_main_thread(_update)
 
-    def _cluster_reset_status(self) -> None:
+    def _cluster_set_finished_status(self) -> None:
         def _reset() -> None:
             clear_progress()
             try:
-                set_status_text("SOM ready")
+                set_status_text("Finished.")
             except Exception:
-                logger.warning("Exception in _reset", exc_info=True)
+                logger.warning("Exception in _cluster_set_finished_status", exc_info=True)
             try:
-                self._som_viewmodel.status_changed.emit("SOM ready")
+                self._som_viewmodel.status_changed.emit("Finished.")
             except Exception:
-                logger.warning("Exception in _reset", exc_info=True)
+                logger.warning("Exception in _cluster_set_finished_status", exc_info=True)
+
+        run_in_main_thread(_reset)
+
+    def _cluster_set_failed_status(self) -> None:
+        def _reset() -> None:
+            clear_progress()
+            try:
+                set_status_text("Failed.")
+            except Exception:
+                logger.warning("Exception in _cluster_set_failed_status", exc_info=True)
+            try:
+                self._som_viewmodel.status_changed.emit("Failed.")
+            except Exception:
+                logger.warning("Exception in _cluster_set_failed_status", exc_info=True)
 
         run_in_main_thread(_reset)
 
@@ -113,6 +125,7 @@ class ClusteringViewModel(QObject):
         return max(2, k)
 
     # ------------------------------------------------------------------
+    # @ai(gpt-5, codex, refactor, 2026-02-28)
     def cluster_neurons(
         self,
         *,
@@ -131,34 +144,32 @@ class ClusteringViewModel(QObject):
         k_list_max = self._normalise_max_k(request.max_k, default=16)
 
         self._neuron_running = True
-        self._cluster_update_progress("neurons", 0)
+        self._cluster_set_running_status()
 
         def _run(*, progress_callback=None):
-            try:
-                return self._service.cluster_neurons(
-                    codebook=inputs.codebook,
-                    map_shape=inputs.map_shape,
-                    n_clusters=request.n_clusters,
-                    k_list_max=k_list_max,
-                    random_state=42,
-                    scoring=request.scoring,
-                    bmu_indices=inputs.bmu_indices,
-                    progress_callback=progress_callback,
-                    method=request.method,
-                    method_params=request.method_params,
-                )
-            finally:
-                self._cluster_reset_status()
+            return self._service.cluster_neurons(
+                codebook=inputs.codebook,
+                map_shape=inputs.map_shape,
+                n_clusters=request.n_clusters,
+                k_list_max=k_list_max,
+                random_state=42,
+                scoring=request.scoring,
+                bmu_indices=inputs.bmu_indices,
+                progress_callback=progress_callback,
+                method=request.method,
+                method_params=request.method_params,
+            )
 
         def _on_finished(result: NeuronClusteringResult):
             self._neuron_running = False
+            self._cluster_set_finished_status()
             self.neuron_clusters_updated.emit(result)
             if callable(on_finished):
                 on_finished(result)
 
         def _on_error(message: str):
             self._neuron_running = False
-            self._cluster_reset_status()
+            self._cluster_set_failed_status()
             self.clustering_error.emit(message)
             if callable(on_error):
                 on_error(message)
@@ -174,6 +185,7 @@ class ClusteringViewModel(QObject):
         )
 
     # ------------------------------------------------------------------
+    # @ai(gpt-5, codex, refactor, 2026-02-28)
     def cluster_features(
         self,
         *,
@@ -192,33 +204,31 @@ class ClusteringViewModel(QObject):
         k_list_max = self._normalise_max_k(request.max_k, default=20)
 
         self._feature_running = True
-        self._cluster_update_progress("features", 0)
+        self._cluster_set_running_status()
 
         def _run(*, progress_callback=None):
-            try:
-                return self._service.cluster_features(
-                    codebook=inputs.codebook,
-                    feature_names=inputs.feature_names,
-                    n_clusters=request.n_clusters,
-                    k_list_max=k_list_max,
-                    random_state=0,
-                    scoring=request.scoring,
-                    progress_callback=progress_callback,
-                    method=request.method,
-                    method_params=request.method_params,
-                )
-            finally:
-                self._cluster_reset_status()
+            return self._service.cluster_features(
+                codebook=inputs.codebook,
+                feature_names=inputs.feature_names,
+                n_clusters=request.n_clusters,
+                k_list_max=k_list_max,
+                random_state=0,
+                scoring=request.scoring,
+                progress_callback=progress_callback,
+                method=request.method,
+                method_params=request.method_params,
+            )
 
         def _on_finished(result: FeatureClusteringResult):
             self._feature_running = False
+            self._cluster_set_finished_status()
             self.feature_clusters_updated.emit(result)
             if callable(on_finished):
                 on_finished(result)
 
         def _on_error(message: str):
             self._feature_running = False
-            self._cluster_reset_status()
+            self._cluster_set_failed_status()
             self.clustering_error.emit(message)
             if callable(on_error):
                 on_error(message)
