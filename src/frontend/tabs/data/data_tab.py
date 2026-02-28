@@ -145,7 +145,8 @@ class DataTab(TabWidget):
         self.data_info.setFont(font)
 
         info_row = QHBoxLayout()
-        info_row.setContentsMargins(0, 0, 0, 0)
+        # Nudge the info row to visually align with chart plot content.
+        info_row.setContentsMargins(20, 0, 0, 0)
         info_row.setSpacing(8)
         info_row.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         info_row.addWidget(self.data_info)

@@ -461,6 +461,11 @@ class MainWindow(QMainWindow):
         layout = container.layout()
         if layout is None:
             return
+        # Placeholder tabs use padded margins for the loading message. Reset to
+        # content-style margins once the real tab widget is inserted so all tabs
+        # match Data tab spacing.
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
         if label is not None:
             layout.removeWidget(label)
             label.deleteLater()
