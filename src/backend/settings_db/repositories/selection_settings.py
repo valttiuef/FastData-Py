@@ -12,7 +12,7 @@ class SelectionSettingsRepository:
 
     def list_settings(self, con: sqlite3.Connection) -> List[Dict[str, Any]]:
         sql = (
-            "SELECT id, name, payload, auto_load, is_active, updated_at "
+            "SELECT id, name, payload, notes, auto_load, is_active, created_at, updated_at "
             "FROM selection_settings ORDER BY lower(name)"
         )
         rows = con.execute(sql).fetchall()
@@ -20,7 +20,7 @@ class SelectionSettingsRepository:
 
     def get_active(self, con: sqlite3.Connection) -> Optional[Dict[str, Any]]:
         sql = (
-            "SELECT id, name, payload, auto_load, is_active "
+            "SELECT id, name, payload, notes, auto_load, is_active, created_at, updated_at "
             "FROM selection_settings WHERE is_active ORDER BY updated_at DESC LIMIT 1"
         )
         row = con.execute(sql).fetchone()
@@ -28,7 +28,7 @@ class SelectionSettingsRepository:
 
     def get_by_id(self, con: sqlite3.Connection, setting_id: int) -> Optional[Dict[str, Any]]:
         sql = (
-            "SELECT id, name, payload, auto_load, is_active "
+            "SELECT id, name, payload, notes, auto_load, is_active, created_at, updated_at "
             "FROM selection_settings WHERE id = ? LIMIT 1"
         )
         row = con.execute(sql, (int(setting_id),)).fetchone()
@@ -40,6 +40,7 @@ class SelectionSettingsRepository:
         *,
         name: str,
         payload: Dict[str, Any],
+        notes: str = "",
         auto_load: bool = False,
         setting_id: Optional[int] = None,
         activate: bool = False,
@@ -48,22 +49,29 @@ class SelectionSettingsRepository:
         if setting_id is None:
             cur = con.execute(
                 """
-                INSERT INTO selection_settings(name, payload, auto_load, is_active)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO selection_settings(name, payload, notes, auto_load, is_active, created_at)
+                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 """,
-                (name, payload_json, bool(auto_load), bool(activate)),
+                (name, payload_json, str(notes or ""), bool(auto_load), bool(activate)),
             )
             con.commit()
             return int(cur.lastrowid)
         con.execute(
             """
             UPDATE selection_settings
-            SET name = ?, payload = ?, auto_load = ?,
+            SET name = ?, payload = ?, notes = ?, auto_load = ?,
                 is_active = CASE WHEN ? THEN 1 ELSE is_active END,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = ?;
             """,
-            (name, payload_json, bool(auto_load), bool(activate), int(setting_id)),
+            (
+                name,
+                payload_json,
+                str(notes or ""),
+                bool(auto_load),
+                bool(activate),
+                int(setting_id),
+            ),
         )
         con.commit()
         return int(setting_id)
@@ -124,6 +132,8 @@ class SelectionSettingsRepository:
         if row is None:
             return None
         record = dict(row)
+        record["notes"] = str(record.get("notes") or "")
+        record["created_at"] = str(record.get("created_at") or "")
         try:
             record["payload"] = json.loads(record.get("payload") or "{}")
         except Exception:

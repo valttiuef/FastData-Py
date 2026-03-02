@@ -213,16 +213,25 @@ class FeatureSelectionTableModel(QAbstractTableModel):
         if selection_key == self._last_selection_key:
             return
         self._last_selection_key = selection_key
-        selected_ids = set(int(fid) for fid in (payload.feature_ids if payload else []) if fid is not None)
-        selected_labels = set(str(label) for label in (payload.feature_labels if payload else []) if str(label).strip())
+        selections_enabled = bool(payload.selections_enabled()) if payload else False
+        selected_ids = set(
+            int(fid)
+            for fid in ((payload.feature_ids if (payload and selections_enabled) else []) or [])
+            if fid is not None
+        )
+        selected_labels = set(
+            str(label)
+            for label in ((payload.feature_labels if (payload and selections_enabled) else []) or [])
+            if str(label).strip()
+        )
         use_labels = bool(selected_labels)
         filters: Dict[int, FeatureValueFilter] = {}
-        if payload:
+        if payload and selections_enabled:
             for flt in payload.feature_filters:
                 if flt.feature_id is not None:
                     filters[int(flt.feature_id)] = flt
         label_filters: Dict[str, FeatureLabelFilter] = {}
-        if payload:
+        if payload and selections_enabled:
             for flt in payload.feature_filter_labels:
                 label = str(flt.label or "").strip()
                 if label:
@@ -255,10 +264,10 @@ class FeatureSelectionTableModel(QAbstractTableModel):
             else:
                 row["selected"] = bool(select_all_by_default)
             flt = None
-            if use_label_filters and label:
-                flt = label_filters.get(str(label))
-            if flt is None and fid is not None:
+            if fid is not None:
                 flt = filters.get(int(fid))
+            if flt is None and use_label_filters and label:
+                flt = label_filters.get(str(label))
             if flt:
                 row["filter_min"] = flt.min_value
                 row["filter_max"] = flt.max_value
@@ -273,6 +282,7 @@ class FeatureSelectionTableModel(QAbstractTableModel):
     def _selection_key(self, payload: Optional[SelectionSettingsPayload], *, select_all_by_default: bool) -> tuple:
         if payload is None:
             return ("none", bool(select_all_by_default))
+        selections_enabled = bool(payload.selections_enabled())
         selected = tuple(sorted(int(fid) for fid in (payload.feature_ids or []) if fid is not None))
         selected_labels = tuple(sorted(str(label) for label in (payload.feature_labels or []) if str(label).strip()))
         filters = tuple(
@@ -299,7 +309,14 @@ class FeatureSelectionTableModel(QAbstractTableModel):
                 if str(flt.label).strip()
             )
         )
-        return (selected, selected_labels, filters, label_filters, bool(select_all_by_default))
+        return (
+            selected,
+            selected_labels,
+            filters,
+            label_filters,
+            bool(select_all_by_default),
+            selections_enabled,
+        )
 
     def insert_blank_row(self) -> int:
         row = dict(

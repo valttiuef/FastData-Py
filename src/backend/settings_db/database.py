@@ -19,8 +19,10 @@ class SelectionSettingsDatabase:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
             payload TEXT NOT NULL DEFAULT '{}',
+            notes TEXT NOT NULL DEFAULT '',
             auto_load INTEGER NOT NULL DEFAULT 0,
             is_active INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
         """,
@@ -80,6 +82,7 @@ class SelectionSettingsDatabase:
                 # Ensure indexes exist even if created DB is missing them.
                 for script in self._EMBEDDED_SCHEMA[1:]:
                     self._con.executescript(script)
+                self._ensure_selection_settings_columns()
             self._con.commit()
 
     def _load_schema(self) -> None:
@@ -109,6 +112,28 @@ class SelectionSettingsDatabase:
             (str(name),),
         ).fetchone()
         return row is not None
+
+    def _ensure_selection_settings_columns(self) -> None:
+        columns = {
+            str(row[1]).strip().lower()
+            for row in self._con.execute("PRAGMA table_info(selection_settings);").fetchall()
+            if len(row) > 1
+        }
+        if "notes" not in columns:
+            self._con.execute(
+                "ALTER TABLE selection_settings ADD COLUMN notes TEXT NOT NULL DEFAULT '';"
+            )
+        if "created_at" not in columns:
+            self._con.execute(
+                "ALTER TABLE selection_settings ADD COLUMN created_at TEXT;"
+            )
+        self._con.execute(
+            """
+            UPDATE selection_settings
+            SET created_at = COALESCE(NULLIF(created_at, ''), updated_at, CURRENT_TIMESTAMP)
+            WHERE created_at IS NULL OR created_at = '';
+            """
+        )
 
 
 __all__ = ["SelectionSettingsDatabase"]

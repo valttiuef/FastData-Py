@@ -1,5 +1,12 @@
 
 from __future__ import annotations
+# --- @ai START ---
+# model: gpt-5
+# tool: codex-cli
+# role: viewmodel-refactor
+# reviewed: yes
+# date: 2026-03-02
+# --- @ai END ---
 from typing import Any, Dict, List, Optional, Sequence, Set
 
 import logging
@@ -49,13 +56,22 @@ class SelectionsViewModel(QObject):
         self._features_job_id: int = 0
         self._known_feature_ids: Set[int] = set()
         self._features_initialized: bool = False
+        self._apply_scope_filters: bool = True
+        self._feature_scope_filters: dict[str, tuple] = {
+            "systems": (),
+            "datasets": (),
+            "import_ids": (),
+            "tags": (),
+        }
     def _run_in_thread(self, func, *, on_result=None, key: object | None = None):
         run_in_thread(func, on_result=on_result, owner=self, key=key)
 
     def _payload_with_current_global_state(self, payload: SelectionSettingsPayload) -> SelectionSettingsPayload:
         merged = SelectionSettingsPayload.from_dict(payload.to_dict())
-        merged.filters = dict(self._database_model.selection_filters or {})
-        merged.preprocessing = dict(self._database_model.selection_preprocessing or {})
+        if merged.filters_enabled():
+            merged.filters = dict(self._database_model.selection_filters or {})
+        if merged.preprocessing_enabled():
+            merged.preprocessing = dict(self._database_model.selection_preprocessing or {})
         return merged
 
     # ------------------------------------------------------------------
@@ -63,32 +79,44 @@ class SelectionsViewModel(QObject):
         """Load and emit feature list. Call when features actually change."""
         self._features_job_id += 1
         job_id = self._features_job_id
+        scope = dict(self._feature_scope_filters)
 
         def _load():
             try:
-                db = self._database_model.database()
-                features = db.all_features()
-                return features, None
+                systems = list(scope.get("systems") or []) if self._apply_scope_filters else []
+                datasets = list(scope.get("datasets") or []) if self._apply_scope_filters else []
+                import_ids = list(scope.get("import_ids") or []) if self._apply_scope_filters else []
+                tags = list(scope.get("tags") or []) if self._apply_scope_filters else []
+
+                all_features = self._database_model.features_df_unconstrained()
+                filtered_features = self._database_model.features_df_unconstrained(
+                    systems=systems or None,
+                    datasets=datasets or None,
+                    import_ids=import_ids or None,
+                    tags=tags or None,
+                )
+                return all_features, filtered_features, None
             except Exception as exc:
-                return None, f"Unable to load features: {exc}"
+                return None, None, f"Unable to load features: {exc}"
 
         def _apply(result):
             if job_id != self._features_job_id:
                 return
-            features, error = result
+            all_features, features, error = result
             if error:
                 self._emit_error(error)
                 features = pd.DataFrame(
                     columns=["feature_id", "name", "source", "unit", "type", "notes", "lag_seconds"]
                 )
+                all_features = features
             self._pending_deletes.clear()
             try:
                 # Cache features in database model for filtering by selection
                 self._database_model.cache_all_features(None)
-                self._database_model.cache_all_features(features)
+                self._database_model.cache_all_features(all_features)
             except Exception:
                 logger.warning("Exception in _apply", exc_info=True)
-            self._maybe_extend_active_selection(features)
+            self._maybe_extend_active_selection(all_features)
             self.features_changed.emit(features)
 
         self._run_in_thread(_load, on_result=lambda result: run_in_main_thread(_apply, result))
@@ -108,6 +136,8 @@ class SelectionsViewModel(QObject):
                     dict(
                         id=record.get("id"),
                         name=record.get("name") or "Selection",
+                        notes=str(record.get("notes") or ""),
+                        created_at=str(record.get("created_at") or ""),
                         auto_load=bool(record.get("auto_load")),
                         is_active=bool(record.get("is_active")),
                         payload=payload,
@@ -136,6 +166,34 @@ class SelectionsViewModel(QObject):
         """Reload only the feature list."""
         self._refresh_features()
 
+    def set_feature_scope_filters(
+        self,
+        *,
+        systems: Optional[Sequence[str]] = None,
+        datasets: Optional[Sequence[str]] = None,
+        import_ids: Optional[Sequence[int]] = None,
+        tags: Optional[Sequence[str]] = None,
+    ) -> None:
+        # @ai(gpt-5, codex-cli, refactor, 2026-03-02)
+        normalized = {
+            "systems": tuple(str(v).strip() for v in (systems or []) if str(v).strip()),
+            "datasets": tuple(str(v).strip() for v in (datasets or []) if str(v).strip()),
+            "import_ids": tuple(int(v) for v in (import_ids or [])),
+            "tags": tuple(str(v).strip() for v in (tags or []) if str(v).strip()),
+        }
+        if normalized == self._feature_scope_filters:
+            return
+        self._feature_scope_filters = normalized
+        self.refresh_features()
+
+    def set_apply_scope_filters(self, enabled: bool) -> None:
+        # @ai(gpt-5, codex-cli, refactor, 2026-03-02)
+        flag = bool(enabled)
+        if self._apply_scope_filters == flag:
+            return
+        self._apply_scope_filters = flag
+        self.refresh_features()
+
     # ------------------------------------------------------------------
     def _maybe_extend_active_selection(self, features: pd.DataFrame) -> None:
         new_features = self._extract_new_features(features)
@@ -157,6 +215,7 @@ class SelectionsViewModel(QObject):
                 self._database_model.save_selection_setting(
                     name=record.get("name") or "Selection",
                     payload=updated_payload.to_dict(),
+                    notes=str(record.get("notes") or ""),
                     auto_load=bool(record.get("auto_load")),
                     setting_id=record.get("id"),
                     activate=False,
@@ -237,6 +296,9 @@ class SelectionsViewModel(QObject):
             return None
 
         changed = False
+        if not payload.selections_enabled():
+            return None
+
         if payload.feature_labels or payload.feature_ids:
             if payload.feature_labels:
                 existing_labels = set(payload.feature_labels)
@@ -339,12 +401,18 @@ class SelectionsViewModel(QObject):
         self,
         *,
         name: str,
+        notes: str,
         payload: SelectionSettingsPayload,
         auto_load: bool,
         setting_id: Optional[int] = None,
         activate: bool = False,
     ) -> Optional[int]:
-        safe_name = name or "Selection"
+        # @ai(gpt-5, codex-cli, refactor, 2026-03-02)
+        safe_name = str(name or "").strip()
+        if not safe_name:
+            self._emit_error("Selection setting name is required.")
+            return None
+        safe_notes = str(notes or "")
         payload_dict = payload.to_dict()
         payload_copy = SelectionSettingsPayload.from_dict(payload_dict)
 
@@ -353,16 +421,18 @@ class SelectionsViewModel(QObject):
                 new_id = self._database_model.save_selection_setting(
                     name=safe_name,
                     payload=payload_dict,
+                    notes=safe_notes,
                     auto_load=auto_load,
                     setting_id=setting_id,
                     activate=activate,
                 )
-                return new_id, None
+                saved_record = self._database_model.selection_setting(new_id) if new_id is not None else None
+                return new_id, saved_record, None
             except Exception as exc:
-                return None, f"Failed to save selection setting: {exc}"
+                return None, None, f"Failed to save selection setting: {exc}"
 
         def _apply(result):
-            new_id, error = result
+            new_id, saved_record, error = result
             if error:
                 self._emit_error(error)
                 return
@@ -378,11 +448,15 @@ class SelectionsViewModel(QObject):
             record = dict(
                 id=record_id,
                 name=safe_name,
+                notes=str((saved_record or {}).get("notes") or safe_notes),
+                created_at=str((saved_record or {}).get("created_at") or ""),
                 auto_load=bool(auto_load),
                 is_active=is_active,
                 payload=payload_copy,
             )
             if existing_index >= 0:
+                if not record.get("created_at"):
+                    record["created_at"] = str(records[existing_index].get("created_at") or "")
                 if not activate:
                     record["is_active"] = bool(records[existing_index].get("is_active"))
                 records[existing_index] = record
@@ -448,6 +522,9 @@ class SelectionsViewModel(QObject):
             self._settings_cache = records
             self.settings_changed.emit(records)
             active = next((rec for rec in records if rec.get("is_active")), None)
+            # Force emission even when the same setting is re-activated so UI
+            # completion hooks (toasts/status updates) run deterministically.
+            self._active_setting_key = None
             self._emit_active_setting(active)
 
         self._run_in_thread(_activate, on_result=lambda error: run_in_main_thread(_apply, error))
@@ -495,6 +572,9 @@ class SelectionsViewModel(QObject):
             tuple(sorted(payload.feature_labels or [])),
             self._payload_filters_key(payload.filters),
             self._payload_filters_key(payload.preprocessing),
+            bool(payload.selections_enabled()),
+            bool(payload.filters_enabled()),
+            bool(payload.preprocessing_enabled()),
             tuple(
                 sorted(
                     (

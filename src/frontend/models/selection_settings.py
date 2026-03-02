@@ -1,5 +1,12 @@
 
 from __future__ import annotations
+# --- @ai START ---
+# model: gpt-5
+# tool: codex-cli
+# role: data-model-update
+# reviewed: yes
+# date: 2026-03-02
+# --- @ai END ---
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -103,9 +110,21 @@ class SelectionSettingsPayload:
     preprocessing: Dict[str, Any] = field(default_factory=dict)
     feature_filters: List[FeatureValueFilter] = field(default_factory=list)
     feature_filter_labels: List[FeatureLabelFilter] = field(default_factory=list)
+    include_selections: Optional[bool] = None
+    include_filters: Optional[bool] = None
+    include_preprocessing: Optional[bool] = None
+
+    def selections_enabled(self) -> bool:
+        return True if self.include_selections is None else bool(self.include_selections)
+
+    def filters_enabled(self) -> bool:
+        return True if self.include_filters is None else bool(self.include_filters)
+
+    def preprocessing_enabled(self) -> bool:
+        return True if self.include_preprocessing is None else bool(self.include_preprocessing)
 
     def to_dict(self) -> dict:
-        return {
+        payload = {
             "feature_ids": [int(fid) for fid in self.feature_ids],
             "feature_labels": [str(label) for label in self.feature_labels if str(label).strip()],
             "filters": dict(self.filters or {}),
@@ -113,6 +132,13 @@ class SelectionSettingsPayload:
             "feature_filters": [flt.to_dict() for flt in self.feature_filters],
             "feature_filter_labels": [flt.to_dict() for flt in self.feature_filter_labels],
         }
+        if self.include_selections is not None:
+            payload["include_selections"] = bool(self.include_selections)
+        if self.include_filters is not None:
+            payload["include_filters"] = bool(self.include_filters)
+        if self.include_preprocessing is not None:
+            payload["include_preprocessing"] = bool(self.include_preprocessing)
+        return payload
 
     @classmethod
     def from_dict(cls, payload: Optional[dict]) -> "SelectionSettingsPayload":
@@ -144,6 +170,9 @@ class SelectionSettingsPayload:
                 feature_filter_labels.append(FeatureLabelFilter.from_dict(entry))
             except Exception:
                 continue
+        include_selections_raw = payload.get("include_selections")
+        include_filters_raw = payload.get("include_filters")
+        include_preprocessing_raw = payload.get("include_preprocessing")
         return cls(
             feature_ids=feature_ids,
             feature_labels=feature_labels,
@@ -151,6 +180,15 @@ class SelectionSettingsPayload:
             preprocessing=preprocessing,
             feature_filters=feature_filters,
             feature_filter_labels=feature_filter_labels,
+            include_selections=(
+                None if include_selections_raw is None else bool(include_selections_raw)
+            ),
+            include_filters=(
+                None if include_filters_raw is None else bool(include_filters_raw)
+            ),
+            include_preprocessing=(
+                None if include_preprocessing_raw is None else bool(include_preprocessing_raw)
+            ),
         )
 
 

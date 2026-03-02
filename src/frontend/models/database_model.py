@@ -445,6 +445,7 @@ class DatabaseModel(QObject):
         self._emit_in_main_thread(self.selection_state_changed)
 
     def apply_selection_payload(self, payload: Optional[SelectionSettingsPayload]) -> None:
+        # @ai(gpt-5, codex-cli, refactor, 2026-03-02)
         """Apply selection payload to cached state without reloading from the DB."""
         payload_key = self._selection_payload_key_for(payload)
         if payload_key == self._selection_payload_key:
@@ -460,16 +461,28 @@ class DatabaseModel(QObject):
             self._emit_in_main_thread(self.selection_state_changed)
             self._emit_selected_features()
             return
-        selected_ids = {int(fid) for fid in (payload.feature_ids or []) if fid is not None}
-        if payload.feature_labels:
-            selected_ids = self._resolve_feature_ids_from_labels(payload.feature_labels)
+        selected_ids: set[int] = set()
+        if payload.selections_enabled():
+            selected_ids = {int(fid) for fid in (payload.feature_ids or []) if fid is not None}
+            if not selected_ids and payload.feature_labels:
+                selected_ids = self._resolve_feature_ids_from_labels(payload.feature_labels)
         self._selected_feature_ids = selected_ids
         self._filtered_feature_ids = set(self._selected_feature_ids)
-        self._selection_filters = self._normalize_filter_state(payload.filters or {})
-        self._selection_preprocessing = dict(payload.preprocessing or {})
-        value_filters = list(payload.feature_filters or [])
-        if payload.feature_filter_labels:
-            value_filters = self._resolve_value_filters_from_labels(payload.feature_filter_labels)
+        self._selection_filters = (
+            self._normalize_filter_state(payload.filters or {})
+            if payload.filters_enabled()
+            else dict(self._selection_filters or {})
+        )
+        self._selection_preprocessing = (
+            dict(payload.preprocessing or {})
+            if payload.preprocessing_enabled()
+            else dict(self._selection_preprocessing or {})
+        )
+        value_filters = []
+        if payload.selections_enabled():
+            value_filters = list(payload.feature_filters or [])
+            if not value_filters and payload.feature_filter_labels:
+                value_filters = self._resolve_value_filters_from_labels(payload.feature_filter_labels)
         self._value_filters = value_filters
         self._selection_payload_key = payload_key
         self._emit_in_main_thread(self.selection_state_changed)
@@ -507,7 +520,17 @@ class DatabaseModel(QObject):
                 if str(flt.label).strip()
             )
         )
-        return (feature_ids, feature_labels, filters_key, preprocessing_key, feature_filters_key, feature_label_filters_key)
+        return (
+            feature_ids,
+            feature_labels,
+            filters_key,
+            preprocessing_key,
+            feature_filters_key,
+            feature_label_filters_key,
+            bool(payload.selections_enabled()),
+            bool(payload.filters_enabled()),
+            bool(payload.preprocessing_enabled()),
+        )
 
     def _freeze_value(self, value: object) -> tuple:
         if isinstance(value, dict):
@@ -803,6 +826,29 @@ class DatabaseModel(QObject):
             tags=tags,
         )
 
+    def features_df_unconstrained(
+        self,
+        *,
+        systems: Optional[Sequence[str]] = None,
+        datasets: Optional[Sequence[str]] = None,
+        import_ids: Optional[Sequence[int]] = None,
+        tags: Optional[Sequence[str]] = None,
+    ) -> pd.DataFrame:
+        """
+        Return features filtered only by explicit scope/tag arguments.
+
+        Unlike ``features_df``, this does not apply active selection feature-id
+        filtering and does not apply selection-saved tag filters.
+        """
+        df = self._get_cached_features()
+        scoped = self._apply_scope_filters(
+            df,
+            systems=systems,
+            datasets=datasets,
+            import_ids=import_ids,
+        )
+        return self._apply_explicit_tag_filters(scoped, tags)
+
     def features_for_systems_datasets(
         self,
         systems: Optional[Sequence[str]] = None,
@@ -927,6 +973,21 @@ class DatabaseModel(QObject):
             if not normalized_group:
                 continue
             mask &= normalized_rows.apply(lambda row: bool(row.intersection(normalized_group)))
+        return ensured.loc[mask]
+
+    def _apply_explicit_tag_filters(
+        self,
+        df: pd.DataFrame,
+        tags: Optional[Sequence[str]] = None,
+    ) -> pd.DataFrame:
+        if not tags:
+            return df
+        ensured = self._ensure_tags_column(df)
+        normalized_rows = ensured["tags"].apply(self._normalized_tag_set)
+        normalized_group = self._normalized_tag_set(tags)
+        if not normalized_group:
+            return ensured
+        mask = normalized_rows.apply(lambda row: bool(row.intersection(normalized_group)))
         return ensured.loc[mask]
 
     def _ensure_tags_column(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -1409,16 +1470,19 @@ class DatabaseModel(QObject):
         *,
         name: str,
         payload: dict,
+        notes: str = "",
         auto_load: bool = False,
         setting_id: Optional[int] = None,
         activate: bool = False,
     ) -> int:
+        # @ai(gpt-5, codex-cli, refactor, 2026-03-02)
         db = self._selection_db()
         with db.lock:
             new_id = db.selection_settings_repo.upsert(
                 db.connection,
                 name=name,
                 payload=payload,
+                notes=notes,
                 auto_load=bool(auto_load),
                 setting_id=setting_id,
                 activate=False,
@@ -1537,6 +1601,7 @@ class DatabaseModel(QObject):
         return resolved
 
     def load_selection_state(self) -> None:
+        # @ai(gpt-5, codex-cli, refactor, 2026-03-02)
         """
         Load active selection settings from the DB into this model.
 
@@ -1578,23 +1643,35 @@ class DatabaseModel(QObject):
                 self._emit_selected_features()
                 return
 
-            selected_ids = {int(fid) for fid in (payload.feature_ids or []) if fid is not None}
-            if payload.feature_labels:
-                resolved = self._resolve_feature_ids_from_labels(payload.feature_labels)
-                if resolved:
-                    selected_ids = resolved
-                else:
-                    logger.warning(
-                        "Selection payload labels did not resolve to any feature IDs: %s",
-                        list(payload.feature_labels or []),
-                    )
+            selected_ids: set[int] = set()
+            if payload.selections_enabled():
+                selected_ids = {int(fid) for fid in (payload.feature_ids or []) if fid is not None}
+                if not selected_ids and payload.feature_labels:
+                    resolved = self._resolve_feature_ids_from_labels(payload.feature_labels)
+                    if resolved:
+                        selected_ids = resolved
+                    else:
+                        logger.warning(
+                            "Selection payload labels did not resolve to any feature IDs: %s",
+                            list(payload.feature_labels or []),
+                        )
             self._selected_feature_ids = selected_ids
             self._filtered_feature_ids = set(self._selected_feature_ids)
-            self._selection_filters = self._normalize_filter_state(payload.filters or {})
-            self._selection_preprocessing = dict(payload.preprocessing or {})
-            value_filters = list(payload.feature_filters or [])
-            if payload.feature_filter_labels:
-                value_filters = self._resolve_value_filters_from_labels(payload.feature_filter_labels)
+            self._selection_filters = (
+                self._normalize_filter_state(payload.filters or {})
+                if payload.filters_enabled()
+                else dict(self._selection_filters or {})
+            )
+            self._selection_preprocessing = (
+                dict(payload.preprocessing or {})
+                if payload.preprocessing_enabled()
+                else dict(self._selection_preprocessing or {})
+            )
+            value_filters = []
+            if payload.selections_enabled():
+                value_filters = list(payload.feature_filters or [])
+                if not value_filters and payload.feature_filter_labels:
+                    value_filters = self._resolve_value_filters_from_labels(payload.feature_filter_labels)
             self._value_filters = value_filters
             self._selection_payload_key = payload_key
             self._emit_in_main_thread(self.selection_state_changed)

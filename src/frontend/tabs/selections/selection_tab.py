@@ -1,5 +1,12 @@
 
 from __future__ import annotations
+# --- @ai START ---
+# model: gpt-5
+# tool: codex-cli
+# role: behavior-update
+# reviewed: yes
+# date: 2026-03-02
+# --- @ai END ---
 from typing import List, Optional
 
 from PySide6.QtCore import Qt, QTimer
@@ -7,7 +14,7 @@ from PySide6.QtWidgets import QAbstractItemView, QInputDialog, QLineEdit, QMessa
 from ...localization import tr
 
 from ...models.database_model import DatabaseModel
-from ...utils import toast_error, toast_info, toast_success
+from ...utils import toast_error, toast_info, toast_success, toast_warn
 from ...models.selection_settings import SelectionSettingsPayload
 from ...widgets.fast_table import FastPandasProxyModel, FastTable
 from ...widgets.panel import Panel
@@ -97,10 +104,15 @@ class SelectionsTab(TabWidget):
         self.sidebar.load_setting_button.clicked.connect(self._on_load_setting)
         self.sidebar.save_setting_button.clicked.connect(self._on_save_setting)
         self.sidebar.delete_setting_button.clicked.connect(self._on_delete_setting)
-        self.sidebar.settings_list.currentRowChanged.connect(self._on_setting_list_changed)
+        self.sidebar.settings_tree.currentItemChanged.connect(self._on_setting_list_changed)
         self.sidebar.load_db_button.clicked.connect(self._on_load_settings_database)
         self.sidebar.save_db_button.clicked.connect(self._on_save_settings_database)
         self.sidebar.reset_db_button.clicked.connect(self._on_reset_settings_database)
+        if self.sidebar.filters_widget is not None:
+            self.sidebar.filters_widget.systems_changed.connect(self._on_scope_filters_changed)
+            self.sidebar.filters_widget.datasets_changed.connect(self._on_scope_filters_changed)
+            self.sidebar.filters_widget.imports_changed.connect(self._on_scope_filters_changed)
+            self.sidebar.filters_widget.tags_changed.connect(self._on_scope_filters_changed)
         self._search_edit.textChanged.connect(self._on_search_text_changed)
         self._table_model.dataChanged.connect(self._on_table_data_changed)
 
@@ -131,6 +143,25 @@ class SelectionsTab(TabWidget):
             self.sidebar.filters_widget.refresh_filters()
         self._view_model.refresh_features()
 
+    def _on_scope_filters_changed(self, *_args) -> None:
+        fw = self.sidebar.filters_widget
+        if fw is None:
+            return
+        if not self._current_payload.filters_enabled():
+            self._view_model.set_feature_scope_filters(
+                systems=[],
+                datasets=[],
+                import_ids=[],
+                tags=[],
+            )
+            return
+        self._view_model.set_feature_scope_filters(
+            systems=fw.selected_systems(),
+            datasets=fw.selected_datasets(),
+            import_ids=fw.selected_import_ids(),
+            tags=fw.selected_tags(),
+        )
+
     def _on_features_changed(self, df) -> None:
         self._table_model.set_features(df)
         self._table_model.apply_selection(self._current_payload, select_all_by_default=self._select_all_default)
@@ -152,7 +183,19 @@ class SelectionsTab(TabWidget):
         QTimer.singleShot(0, lambda: self._proxy_model.sort(int(column), order))
 
     def _default_record(self) -> dict:
-        return dict(id=None, name=tr("Default"), auto_load=False, is_active=False, payload=SelectionSettingsPayload())
+        return dict(
+            id=None,
+            name=tr("Default"),
+            notes="",
+            created_at="",
+            auto_load=False,
+            is_active=False,
+            payload=SelectionSettingsPayload(
+                include_selections=True,
+                include_filters=False,
+                include_preprocessing=False,
+            ),
+        )
 
     def _on_settings_loaded(self, records: List[dict]) -> None:
         self._settings = list(records)
@@ -163,7 +206,7 @@ class SelectionsTab(TabWidget):
             active_index = 0
         self._settings_with_default = combined
         self.sidebar.set_settings(combined, active_index=active_index)
-        self._on_setting_list_changed(self.sidebar.settings_list.currentRow())
+        self._on_setting_list_changed()
 
         if self._pending_toast_action in {"save_setting", "delete_setting"}:
             action = self._pending_toast_action
@@ -180,24 +223,44 @@ class SelectionsTab(TabWidget):
         payload = record.get("payload") if record else SelectionSettingsPayload()
         if payload is None:
             payload = SelectionSettingsPayload()
+        if not isinstance(payload, SelectionSettingsPayload):
+            payload = SelectionSettingsPayload.from_dict(payload if isinstance(payload, dict) else {})
         self._current_payload = payload
-        self._select_all_default = not bool(record and record.get("id"))
+        self._select_all_default = not bool(record and record.get("id")) or not payload.selections_enabled()
+        self._view_model.set_apply_scope_filters(payload.filters_enabled())
         self._table_model.apply_selection(payload, select_all_by_default=self._select_all_default)
+        current_selector_settings = self.sidebar.get_selection_settings()
         self.sidebar.apply_selection_settings(
             {
-                "preprocessing": dict(payload.preprocessing or {}),
-                "filters": dict(payload.filters or {}),
+                "preprocessing": (
+                    dict(payload.preprocessing or {})
+                    if payload.preprocessing_enabled()
+                    else dict(current_selector_settings.get("preprocessing") or {})
+                ),
+                "filters": (
+                    dict(payload.filters or {})
+                    if payload.filters_enabled()
+                    else dict(current_selector_settings.get("filters") or {})
+                ),
             }
         )
         name = record.get("name") if record else ""
+        notes = record.get("notes") if record else ""
         self.sidebar.set_setting_name(name or "")
+        self.sidebar.set_setting_notes(notes or "")
+        self.sidebar.set_payload_options(
+            include_selections=payload.selections_enabled(),
+            include_filters=payload.filters_enabled(),
+            include_preprocessing=payload.preprocessing_enabled(),
+        )
+        self._on_scope_filters_changed()
         target_id = record.get("id") if record else None
         self._select_setting_in_list(target_id)
         self._apply_active_selection_payload(payload)
         if self._pending_toast_action == "activate_setting":
             self._pending_toast_action = None
             try:
-                toast_success(tr("Selection setting activated."), title=tr("Selections"), tab_key="selections")
+                toast_success(tr("Selection setting activated."), title=tr("Selections"))
             except Exception:
                 logger.warning("Exception in _on_active_setting_changed", exc_info=True)
 
@@ -208,30 +271,49 @@ class SelectionsTab(TabWidget):
             logger.warning("Exception in _apply_active_selection_payload", exc_info=True)
 
     def _select_setting_in_list(self, setting_id: Optional[int]) -> None:
-        count = self.sidebar.settings_list.count()
+        count = self.sidebar.settings_tree.topLevelItemCount()
         for idx in range(count):
-            item = self.sidebar.settings_list.item(idx)
+            item = self.sidebar.settings_tree.topLevelItem(idx)
             if not item:
                 continue
-            data = item.data(Qt.ItemDataRole.UserRole)
+            data = item.data(0, Qt.ItemDataRole.UserRole)
             rec_id = data.get("id") if isinstance(data, dict) else None
             if rec_id == setting_id:
-                if idx != self.sidebar.settings_list.currentRow():
-                    was = self.sidebar.settings_list.blockSignals(True)
-                    self.sidebar.settings_list.setCurrentRow(idx)
-                    self.sidebar.settings_list.blockSignals(was)
+                current_item = self.sidebar.settings_tree.currentItem()
+                if current_item is not item:
+                    was = self.sidebar.settings_tree.blockSignals(True)
+                    self.sidebar.settings_tree.setCurrentItem(item)
+                    self.sidebar.settings_tree.blockSignals(was)
                 return
         if setting_id is None and count:
-            was = self.sidebar.settings_list.blockSignals(True)
-            self.sidebar.settings_list.setCurrentRow(0)
-            self.sidebar.settings_list.blockSignals(was)
+            was = self.sidebar.settings_tree.blockSignals(True)
+            self.sidebar.settings_tree.setCurrentItem(self.sidebar.settings_tree.topLevelItem(0))
+            self.sidebar.settings_tree.blockSignals(was)
 
-    def _on_setting_list_changed(self, index: int) -> None:
+    def _on_setting_list_changed(self, *_args) -> None:
         record = self.sidebar.current_setting()
         if not record:
             self.sidebar.set_setting_name("")
+            self.sidebar.set_setting_notes("")
+            self.sidebar.delete_setting_button.setEnabled(False)
+            self.sidebar.set_payload_options(
+                include_selections=True,
+                include_filters=False,
+                include_preprocessing=False,
+            )
             return
+        can_delete = record.get("id") is not None
+        self.sidebar.delete_setting_button.setEnabled(bool(can_delete))
         self.sidebar.set_setting_name(record.get("name", "") if record.get("id") is not None else "")
+        self.sidebar.set_setting_notes(record.get("notes", "") if record.get("id") is not None else "")
+        payload = record.get("payload")
+        if not isinstance(payload, SelectionSettingsPayload):
+            payload = SelectionSettingsPayload.from_dict(payload if isinstance(payload, dict) else {})
+        self.sidebar.set_payload_options(
+            include_selections=payload.selections_enabled(),
+            include_filters=payload.filters_enabled(),
+            include_preprocessing=payload.preprocessing_enabled(),
+        )
 
     def _selected_rows(self) -> List[int]:
         selection = self.features_table.selectionModel()
@@ -416,23 +498,60 @@ class SelectionsTab(TabWidget):
         selected_features, filters = self._table_model.selection_state()
         selected_labels, label_filters = self._table_model.selection_state_labels()
         selector_settings = self.sidebar.get_selection_settings()
+        payload_options = self.sidebar.payload_options()
+        include_selections = bool(payload_options.get("include_selections"))
+        include_filters = bool(payload_options.get("include_filters"))
+        include_preprocessing = bool(payload_options.get("include_preprocessing"))
         filter_state = dict(selector_settings.get("filters") or {})
         preprocessing = dict(selector_settings.get("preprocessing") or {})
         return SelectionSettingsPayload(
-            feature_ids=selected_features,
-            feature_labels=selected_labels,
-            filters=filter_state,
-            preprocessing=preprocessing,
-            feature_filters=filters,
-            feature_filter_labels=label_filters,
+            feature_ids=selected_features if include_selections else [],
+            feature_labels=selected_labels if include_selections else [],
+            filters=filter_state if include_filters else {},
+            preprocessing=preprocessing if include_preprocessing else {},
+            feature_filters=filters if include_selections else [],
+            feature_filter_labels=label_filters if include_selections else [],
+            include_selections=include_selections,
+            include_filters=include_filters,
+            include_preprocessing=include_preprocessing,
         )
 
     def _on_save_setting(self) -> None:
         record = self.sidebar.current_setting() or {}
         payload = self._gather_payload()
-        setting_id = record.get("id") if record else None
-        name = self.sidebar.setting_display_name() or tr("Custom")
+        current_setting_id = record.get("id") if record else None
+        name = self.sidebar.setting_display_name()
+        if not name:
+            try:
+                toast_warn(
+                    tr("Enter a name before saving selection settings."),
+                    title=tr("Selections"),
+                    tab_key="selections",
+                )
+            except Exception:
+                logger.warning("Exception in _on_save_setting", exc_info=True)
+            return
+        notes = self.sidebar.setting_notes_text()
         activate = bool(record.get("is_active")) if record else False
+
+        existing = self._find_setting_by_name(name)
+        setting_id = None
+        if existing and existing.get("id") != current_setting_id:
+            result = QMessageBox.question(
+                self,
+                tr("Replace selection setting"),
+                tr("A selection setting named '{name}' already exists.\n\nReplace it?").format(name=name),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if result != QMessageBox.StandardButton.Yes:
+                return
+            setting_id = existing.get("id")
+            activate = bool(existing.get("is_active"))
+        elif existing and existing.get("id") == current_setting_id:
+            # Saving with the same loaded name updates that setting.
+            setting_id = current_setting_id
+
         self._pending_toast_action = "save_setting"
         try:
             toast_info(tr("Saving selection setting…"), title=tr("Selections"), tab_key="selections")
@@ -440,11 +559,22 @@ class SelectionsTab(TabWidget):
             logger.warning("Exception in _on_save_setting", exc_info=True)
         self._view_model.save_selection_setting(
             name=name,
+            notes=notes,
             payload=payload,
             auto_load=False,
             setting_id=setting_id,
             activate=activate,
         )
+
+    def _find_setting_by_name(self, name: str) -> Optional[dict]:
+        target = str(name or "").strip().casefold()
+        if not target:
+            return None
+        for rec in self._settings:
+            rec_name = str(rec.get("name") or "").strip().casefold()
+            if rec_name == target:
+                return rec
+        return None
 
     def _on_table_data_changed(self, top_left, bottom_right, roles=None) -> None:
         if top_left is None or bottom_right is None:
@@ -467,7 +597,7 @@ class SelectionsTab(TabWidget):
         setting_id = record.get("id")
         self._pending_toast_action = "activate_setting"
         try:
-            toast_info(tr("Activating selection…"), title=tr("Selections"), tab_key="selections")
+            toast_info(tr("Activating selection…"), title=tr("Selections"))
         except Exception:
             logger.warning("Exception in _on_load_setting", exc_info=True)
         self._view_model.activate_selection(setting_id)
@@ -476,6 +606,16 @@ class SelectionsTab(TabWidget):
         record = self.sidebar.current_setting() or {}
         setting_id = record.get("id")
         if setting_id is None:
+            return
+        name = str(record.get("name") or tr("Selection")).strip() or tr("Selection")
+        result = QMessageBox.question(
+            self,
+            tr("Delete selection setting"),
+            tr("Delete selection setting '{name}'?\n\nThis action cannot be undone.").format(name=name),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if result != QMessageBox.StandardButton.Yes:
             return
         self._pending_toast_action = "delete_setting"
         try:

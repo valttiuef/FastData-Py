@@ -1,16 +1,23 @@
 
 from __future__ import annotations
+# --- @ai START ---
+# model: gpt-5
+# tool: codex-cli
+# role: ui-refactor
+# reviewed: yes
+# date: 2026-03-02
+# --- @ai END ---
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-
     QAbstractItemView,
+    QCheckBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
-    QListWidget,
-    QListWidgetItem,
     QLineEdit,
     QPushButton,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -18,6 +25,7 @@ from ...localization import tr
 
 from ...widgets.data_selector_widget import DataSelectorWidget
 from ...widgets.sidebar_widget import SidebarWidget
+from ...models.selection_settings import SelectionSettingsPayload
 
 
 
@@ -47,19 +55,47 @@ class Sidebar(SidebarWidget):
         layout.addWidget(self.data_selector)
         self.preprocessing_widget = self.data_selector.preprocessing_widget
         self.filters_widget = self.data_selector.filters_widget
+        if self.preprocessing_widget is not None:
+            self.preprocessing_widget.set_collapsed(False)
+        if self.filters_widget is not None:
+            self.filters_widget.set_collapsed(False)
 
         # Selection settings controls
         settings = QGroupBox(tr("Selection settings"))
         settings_layout = QVBoxLayout(settings)
 
-        self.settings_list = QListWidget()
-        self.settings_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.settings_list.setUniformItemSizes(True)
-        settings_layout.addWidget(self.settings_list, 1)
+        self.settings_tree = QTreeWidget()
+        self.settings_tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.settings_tree.setUniformRowHeights(True)
+        self.settings_tree.setRootIsDecorated(False)
+        self.settings_tree.setAlternatingRowColors(True)
+        self.settings_tree.setHeaderLabels(
+            [
+                tr("Name"),
+                tr("Created"),
+                tr("Notes"),
+                tr("Includes"),
+            ]
+        )
+        self.settings_tree.header().setStretchLastSection(True)
+        settings_layout.addWidget(self.settings_tree, 1)
 
         form = QFormLayout()
         self.setting_name = QLineEdit()
+        self.setting_notes = QLineEdit()
         form.addRow(tr("Name"), self.setting_name)
+        form.addRow(tr("Notes"), self.setting_notes)
+        self.include_selections_checkbox = QCheckBox(tr("Selections"))
+        self.include_filters_checkbox = QCheckBox(tr("Filtering"))
+        self.include_preprocessing_checkbox = QCheckBox(tr("Preprocessing"))
+        self.include_selections_checkbox.setChecked(True)
+        self.include_filters_checkbox.setChecked(False)
+        self.include_preprocessing_checkbox.setChecked(False)
+        includes_row = QHBoxLayout()
+        includes_row.addWidget(self.include_selections_checkbox)
+        includes_row.addWidget(self.include_filters_checkbox)
+        includes_row.addWidget(self.include_preprocessing_checkbox)
+        form.addRow(tr("Save"), includes_row)
         settings_layout.addLayout(form)
 
         buttons_row = QHBoxLayout()
@@ -87,28 +123,35 @@ class Sidebar(SidebarWidget):
 
     # --- Settings helpers ------------------------------------------------
     def set_settings(self, records: list[dict], *, active_index: int = 0) -> None:
-        was = self.settings_list.blockSignals(True)
-        self.settings_list.clear()
+        was = self.settings_tree.blockSignals(True)
+        self.settings_tree.clear()
         for record in records:
             name = record.get("name") or tr("Selection")
-            item = QListWidgetItem(str(name))
-            item.setData(Qt.ItemDataRole.UserRole, record)
+            setting_id = record.get("id")
+            created = str(record.get("created_at") or "")
+            notes = str(record.get("notes") or "")
+            includes = self._includes_text(record)
+            item = QTreeWidgetItem([str(name), created, notes, includes])
+            item.setData(0, Qt.ItemDataRole.UserRole, record)
             if record.get("is_active"):
-                font = item.font()
+                font = item.font(0)
                 font.setBold(True)
-                item.setFont(font)
-            item.setToolTip(str(name or tr("Selection")))
-            self.settings_list.addItem(item)
-        index = active_index if 0 <= active_index < self.settings_list.count() else 0
-        if self.settings_list.count():
-            self.settings_list.setCurrentRow(index)
-        self.settings_list.blockSignals(was)
+                for col in range(item.columnCount()):
+                    item.setFont(col, font)
+            tooltip = str(name or tr("Selection"))
+            for col in range(item.columnCount()):
+                item.setToolTip(col, tooltip)
+            self.settings_tree.addTopLevelItem(item)
+        index = active_index if 0 <= active_index < self.settings_tree.topLevelItemCount() else 0
+        if self.settings_tree.topLevelItemCount():
+            self.settings_tree.setCurrentItem(self.settings_tree.topLevelItem(index))
+        self.settings_tree.blockSignals(was)
 
     def current_setting(self) -> dict | None:
-        item = self.settings_list.currentItem()
+        item = self.settings_tree.currentItem()
         if not item:
             return None
-        data = item.data(Qt.ItemDataRole.UserRole)
+        data = item.data(0, Qt.ItemDataRole.UserRole)
         return data if isinstance(data, dict) else None
 
     def selected_setting_id(self) -> int | None:
@@ -126,8 +169,53 @@ class Sidebar(SidebarWidget):
         self.setting_name.setText(name or "")
         self.setting_name.blockSignals(was)
 
+    def set_setting_notes(self, notes: str) -> None:
+        was = self.setting_notes.blockSignals(True)
+        self.setting_notes.setText(notes or "")
+        self.setting_notes.blockSignals(was)
+
     def setting_display_name(self) -> str:
         return (self.setting_name.text() or "").strip()
+
+    def setting_notes_text(self) -> str:
+        return (self.setting_notes.text() or "").strip()
+
+    def set_payload_options(
+        self,
+        *,
+        include_selections: bool,
+        include_filters: bool,
+        include_preprocessing: bool,
+    ) -> None:
+        was_sel = self.include_selections_checkbox.blockSignals(True)
+        was_flt = self.include_filters_checkbox.blockSignals(True)
+        was_pre = self.include_preprocessing_checkbox.blockSignals(True)
+        self.include_selections_checkbox.setChecked(bool(include_selections))
+        self.include_filters_checkbox.setChecked(bool(include_filters))
+        self.include_preprocessing_checkbox.setChecked(bool(include_preprocessing))
+        self.include_selections_checkbox.blockSignals(was_sel)
+        self.include_filters_checkbox.blockSignals(was_flt)
+        self.include_preprocessing_checkbox.blockSignals(was_pre)
+
+    def payload_options(self) -> dict:
+        return {
+            "include_selections": bool(self.include_selections_checkbox.isChecked()),
+            "include_filters": bool(self.include_filters_checkbox.isChecked()),
+            "include_preprocessing": bool(self.include_preprocessing_checkbox.isChecked()),
+        }
+
+    def _includes_text(self, record: dict) -> str:
+        payload = record.get("payload")
+        if not isinstance(payload, SelectionSettingsPayload):
+            payload = SelectionSettingsPayload.from_dict(payload if isinstance(payload, dict) else {})
+        labels: list[str] = []
+        if payload.selections_enabled():
+            labels.append(tr("Selections"))
+        if payload.filters_enabled():
+            labels.append(tr("Filtering"))
+        if payload.preprocessing_enabled():
+            labels.append(tr("Preprocessing"))
+        return ", ".join(labels) if labels else tr("None")
 
     # --- Filters/preprocessing -------------------------------------------
     def preprocessing_parameters(self) -> dict:
