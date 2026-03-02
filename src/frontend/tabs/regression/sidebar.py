@@ -93,6 +93,8 @@ class RegressionSidebar(SidebarWidget):
         self._current_stratify_payload: Optional[dict] = None
         self._user_selected_stratify = False
         self._syncing_stratify = False
+        self._help_dataset_rows: Optional[int] = None
+        self._help_dataset_signature: tuple | None = None
 
         controls_layout = self.content_layout()
 
@@ -335,18 +337,17 @@ class RegressionSidebar(SidebarWidget):
         return ", ".join(labels) if labels else tr("None")
 
     def _dataset_help_html(self) -> str:
-        frame = self._build_help_dataset_frame()
+        self._schedule_help_dataset_refresh()
         feature_count = len(self.selected_input_payloads())
-        if frame is None:
+        if self._help_dataset_rows is None:
             return tr(
                 "<p><b>Dataset:</b> No data loaded yet. Selected features: {count}.</p>"
             ).format(count=feature_count)
-        rows, _cols = frame.shape
         return tr("<p><b>Dataset:</b> {rows} rows, {count} selected features.</p>").format(
-            rows=rows, count=feature_count
+            rows=int(self._help_dataset_rows), count=feature_count
         )
 
-    def _build_help_dataset_frame(self):
+    def _build_help_dataset_payloads(self) -> list[dict]:
         payloads: list[dict] = []
         payloads.extend(self.selected_input_payloads())
         payloads.extend(self.selected_target_payloads())
@@ -367,13 +368,48 @@ class RegressionSidebar(SidebarWidget):
                 seen_ids.add(fid)
             deduped.append(payload)
 
-        if not deduped:
-            return None
+        return deduped
 
-        try:
-            return self.data_selector.fetch_base_dataframe_for_features(deduped)
-        except Exception:
-            return None
+    def _schedule_help_dataset_refresh(self) -> None:
+        deduped = self._build_help_dataset_payloads()
+        signature = tuple(
+            sorted(
+                int(fid)
+                for fid in (
+                    self._payload_id(payload) for payload in deduped
+                )
+                if fid is not None
+            )
+        )
+        if not deduped:
+            self._help_dataset_rows = None
+            self._help_dataset_signature = signature
+            return
+        if signature == self._help_dataset_signature:
+            return
+        self._help_dataset_signature = signature
+
+        def _on_result(frame) -> None:
+            rows = 0
+            try:
+                rows = int(getattr(frame, "shape", (0, 0))[0]) if frame is not None else 0
+            except Exception:
+                rows = 0
+            self._help_dataset_rows = rows if rows > 0 else None
+
+        def _on_error(_message: str) -> None:
+            self._help_dataset_rows = None
+
+        started = self.data_selector.fetch_base_dataframe_for_features_async(
+            deduped,
+            on_result=_on_result,
+            on_error=_on_error,
+            owner=self,
+            key="regression_help_dataset_fetch",
+            cancel_previous=True,
+        )
+        if not started:
+            self._help_dataset_rows = None
 
     # @ai(gpt-5, codex, refactor, 2026-03-02)
     def _on_run_clicked(self) -> None:
@@ -452,14 +488,6 @@ class RegressionSidebar(SidebarWidget):
             if key is not None:
                 seen_ids.add(key)
             all_payloads.append(payload_dict)
-        data_frame = self.data_selector.fetch_base_dataframe_for_features(all_payloads)
-        if data_frame is None:
-            set_status_text("Failed to load regression data.")
-            try:
-                toast_error("Failed to load regression data.", title="Regression failed", tab_key="regression")
-            except Exception:
-                logger.warning("Exception in _on_run_clicked", exc_info=True)
-            return
 
         target_contexts = [
             self._build_run_context(
@@ -503,35 +531,84 @@ class RegressionSidebar(SidebarWidget):
         ):
             return
 
+        self.run_button.setEnabled(False)
+        set_status_text("Fetching regression data...")
         try:
-            self._view_model.start_regressions(
-                data_frame=data_frame,
-                input_features=input_features,
-                target_features=target_features,
-                target_contexts=target_contexts,
-                selectors=selector_keys,
-                models=model_keys,
-                selector_params=selector_params,
-                model_params=model_params,
-                reducers=reducer_keys,
-                reducer_params=reducer_params,
-                cv_strategy=cv_strategy,
-                cv_folds=cv_folds,
-                cv_group_kind=cv_group_kind,
-                shuffle=shuffle,
-                random_state=0,
-                test_size=test_size,
-                test_strategy=test_strategy,
-                stratify_bins=stratify_bins,
-                time_series_gap=time_gap,
-                stratify_feature=stratify_payload,
-            )
+            toast_info("Fetching regression data...", title="Regression", tab_key="regression")
         except Exception:
-            set_status_text("Failed to start regression run.")
+            logger.warning("Exception in _on_run_clicked", exc_info=True)
+
+        def _on_fetch_result(data_frame) -> None:
+            self.run_button.setEnabled(True)
+            if data_frame is None or getattr(data_frame, "empty", True):
+                set_status_text("Regression data unavailable.")
+                try:
+                    toast_error("No regression data for selected filters.", title="Regression failed", tab_key="regression")
+                except Exception:
+                    logger.warning("Exception in _on_run_clicked", exc_info=True)
+                return
+
+            set_status_text("Regression data fetched.")
             try:
-                toast_error("Failed to start regression run.", title="Regression failed", tab_key="regression")
+                toast_info("Data fetched. Starting regression...", title="Regression", tab_key="regression")
             except Exception:
                 logger.warning("Exception in _on_run_clicked", exc_info=True)
+
+            try:
+                self._view_model.start_regressions(
+                    data_frame=data_frame,
+                    input_features=input_features,
+                    target_features=target_features,
+                    target_contexts=target_contexts,
+                    selectors=selector_keys,
+                    models=model_keys,
+                    selector_params=selector_params,
+                    model_params=model_params,
+                    reducers=reducer_keys,
+                    reducer_params=reducer_params,
+                    cv_strategy=cv_strategy,
+                    cv_folds=cv_folds,
+                    cv_group_kind=cv_group_kind,
+                    shuffle=shuffle,
+                    random_state=0,
+                    test_size=test_size,
+                    test_strategy=test_strategy,
+                    stratify_bins=stratify_bins,
+                    time_series_gap=time_gap,
+                    stratify_feature=stratify_payload,
+                )
+            except Exception:
+                set_status_text("Failed to start regression run.")
+                try:
+                    toast_error("Failed to start regression run.", title="Regression failed", tab_key="regression")
+                except Exception:
+                    logger.warning("Exception in _on_run_clicked", exc_info=True)
+
+        def _on_fetch_error(message: str) -> None:
+            self.run_button.setEnabled(True)
+            text = str(message or "Failed to load regression data.")
+            set_status_text(f"Regression data fetch failed: {text}")
+            try:
+                toast_error(text, title="Regression failed", tab_key="regression")
+            except Exception:
+                logger.warning("Exception in _on_run_clicked", exc_info=True)
+
+        started = self.data_selector.fetch_base_dataframe_for_features_async(
+            all_payloads,
+            on_result=_on_fetch_result,
+            on_error=_on_fetch_error,
+            owner=self,
+            key="regression_fetch_data",
+            cancel_previous=True,
+        )
+        if started:
+            return
+        self.run_button.setEnabled(True)
+        set_status_text("Failed to start regression data fetch.")
+        try:
+            toast_error("Failed to start regression data fetch.", title="Regression failed", tab_key="regression")
+        except Exception:
+            logger.warning("Exception in _on_run_clicked", exc_info=True)
 
     # @ai(gpt-5, codex, refactor, 2026-03-02)
     def _build_run_context(
@@ -695,6 +772,8 @@ class RegressionSidebar(SidebarWidget):
         self._view_model.notify_features_changed()
 
     def _on_features_selection_changed(self, *_args) -> None:
+        self._help_dataset_signature = None
+        self._help_dataset_rows = None
         self._notify_features_changed()
 
     def _on_target_selection_changed(self) -> None:
@@ -702,6 +781,8 @@ class RegressionSidebar(SidebarWidget):
         values = [v for v in self.target_combo.selected_values() if isinstance(v, int)]
         self._selected_target_ids = values
         self._selected_target_id = values[0] if values else None
+        self._help_dataset_signature = None
+        self._help_dataset_rows = None
         if not self._user_selected_stratify:
             self._ensure_stratify_default()
         if self._selected_target_ids != previous_ids:
@@ -926,6 +1007,8 @@ class RegressionSidebar(SidebarWidget):
         payload = data if isinstance(data, dict) else None
         self._user_selected_stratify = True
         self._apply_stratify_selection(payload)
+        self._help_dataset_signature = None
+        self._help_dataset_rows = None
         self._notify_features_changed()
 
     def _on_test_stratify_changed(self, index: int) -> None:
@@ -935,6 +1018,8 @@ class RegressionSidebar(SidebarWidget):
         payload = data if isinstance(data, dict) else None
         self._user_selected_stratify = True
         self._apply_stratify_selection(payload)
+        self._help_dataset_signature = None
+        self._help_dataset_rows = None
         self._notify_features_changed()
 
     def preprocessing_parameters(self) -> dict[str, object]:

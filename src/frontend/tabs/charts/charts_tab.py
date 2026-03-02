@@ -45,6 +45,8 @@ class ChartsTab(TabWidget):
         self._last_preprocessing_key: tuple | None = None
         self._selector_requirements_key: tuple | None = None
         self._selection_sync_pending = False
+        self._card_fetch_nonce: int = 0
+        self._card_fetch_tokens: dict[ChartCard, int] = {}
 
         super().__init__(parent)
 
@@ -200,6 +202,7 @@ class ChartsTab(TabWidget):
         while len(self._chart_cards) > count:
             card = self._chart_cards.pop()
             self._card_render_state.pop(card, None)
+            self._card_fetch_tokens.pop(card, None)
             if self._selected_card is card:
                 self._selected_card = None
             card.set_view_model(None)
@@ -230,6 +233,7 @@ class ChartsTab(TabWidget):
             return
         card = self._chart_cards.pop()
         self._card_render_state.pop(card, None)
+        self._card_fetch_tokens.pop(card, None)
         if self._selected_card is card:
             self._selected_card = None
         card.set_view_model(None)
@@ -381,6 +385,12 @@ class ChartsTab(TabWidget):
     def _record_card_state(self, card: ChartCard, key: tuple | None) -> None:
         self._card_render_state[card] = (self._refresh_epoch, key)
 
+    def _next_card_fetch_token(self, card: ChartCard) -> int:
+        self._card_fetch_nonce += 1
+        token = self._card_fetch_nonce
+        self._card_fetch_tokens[card] = token
+        return token
+
     def _update_chart(self, card: ChartCard, *, force: bool = False) -> None:
         chart_type = card.chart_type()
         if chart_type == "correlation_bar":
@@ -425,20 +435,39 @@ class ChartsTab(TabWidget):
             return
         feature_names = [f.display_name() for f in selected_features][:MAX_FEATURES_SHOWN_LEGEND]
         title = self._build_chart_title(feature_names)
+        token = self._next_card_fetch_token(card)
 
-        try:
-            frame = self.sidebar.data_selector.fetch_base_dataframe_for_features(feature_payloads)
-            if chart_type == "monthly":
-                card.set_monthly_frame(frame, title)
-            elif chart_type == "time_series":
-                card.set_time_series_frame(frame, title)
-            elif chart_type == "scatter":
-                self._render_scatter_chart(card, len(selected_features), frame, feature_names)
-            else:
-                card.show_scatter_placeholder()
-            self._record_card_state(card, key)
-        except Exception as exc:
-            card.show_message(tr("Failed to load chart data: {error}").format(error=exc))
+        def _on_result(frame) -> None:
+            if self._card_fetch_tokens.get(card) != token:
+                return
+            try:
+                if chart_type == "monthly":
+                    card.set_monthly_frame(frame, title)
+                elif chart_type == "time_series":
+                    card.set_time_series_frame(frame, title)
+                elif chart_type == "scatter":
+                    self._render_scatter_chart(card, len(selected_features), frame, feature_names)
+                else:
+                    card.show_scatter_placeholder()
+                self._record_card_state(card, key)
+            except Exception as exc:
+                card.show_message(tr("Failed to load chart data: {error}").format(error=exc))
+
+        def _on_error(message: str) -> None:
+            if self._card_fetch_tokens.get(card) != token:
+                return
+            card.show_message(tr("Failed to load chart data: {error}").format(error=str(message)))
+
+        started = self.sidebar.data_selector.fetch_base_dataframe_for_features_async(
+            feature_payloads,
+            on_result=_on_result,
+            on_error=_on_error,
+            owner=self,
+            key=("charts_card_data_fetch", id(card)),
+            cancel_previous=True,
+        )
+        if not started:
+            card.show_message(tr("Failed to load chart data."))
 
     def _correlation_payload_key(self) -> tuple | None:
         payload = self._correlation_bar_payload
@@ -488,26 +517,51 @@ class ChartsTab(TabWidget):
         )
         if not self._should_update_card(card, key, force=force):
             return
+        token = self._next_card_fetch_token(card)
+        feature_payloads = [self._feature_payload(feature) for feature in unique]
 
-        payload = self._build_correlation_payload(target=target, candidates=unique)
-        if not payload:
+        def _on_result(frame) -> None:
+            if self._card_fetch_tokens.get(card) != token:
+                return
+            payload = self._build_correlation_payload_from_frame(
+                target=target,
+                candidates=unique,
+                frame=frame,
+            )
+            if not payload:
+                card.show_message(tr("Unable to calculate correlations for this selection"))
+                self._record_card_state(card, None)
+                return
+            self._correlation_bar_payload = payload
+            self._render_correlation_payload(card, payload)
+            self._record_card_state(card, key)
+
+        def _on_error(_message: str) -> None:
+            if self._card_fetch_tokens.get(card) != token:
+                return
             card.show_message(tr("Unable to calculate correlations for this selection"))
             self._record_card_state(card, None)
-            return
 
-        self._correlation_bar_payload = payload
-        self._render_correlation_payload(card, payload)
-        self._record_card_state(card, key)
+        started = self.sidebar.data_selector.fetch_base_dataframe_for_features_async(
+            feature_payloads,
+            on_result=_on_result,
+            on_error=_on_error,
+            owner=self,
+            key=("charts_card_correlation_fetch", id(card)),
+            cancel_previous=True,
+        )
+        if not started:
+            card.show_message(tr("Unable to calculate correlations for this selection"))
+            self._record_card_state(card, None)
 
-    def _build_correlation_payload(
+    def _build_correlation_payload_from_frame(
         self,
         *,
         target: FeatureSelection,
         candidates: list[FeatureSelection],
+        frame: pd.DataFrame | None,
         limit: int | None = None,
     ) -> dict[str, object] | None:
-        feature_payloads = [self._feature_payload(feature) for feature in candidates]
-        frame = self.sidebar.data_selector.fetch_base_dataframe_for_features(feature_payloads)
         if frame is None or frame.empty:
             return None
 
@@ -816,37 +870,57 @@ class ChartsTab(TabWidget):
         return start.strftime("%Y-%m-%d %H:00")
 
     def _export_results(self) -> None:
-        datasets: dict[str, pd.DataFrame] = {}
-        chart_specs: dict[str, dict[str, object]] = {}
+        fetch_requests: list[tuple[int, ChartCard, list[FeatureSelection], list[dict]]] = []
         for idx, card in enumerate(self._chart_cards, start=1):
-            features = card.selected_features()
-            if not features:
-                continue
-            selected_features = [f for f in features if isinstance(f, FeatureSelection)]
+            selected_features = [f for f in card.selected_features() if isinstance(f, FeatureSelection)]
             if not selected_features:
                 continue
-            feature_payloads = [self._feature_payload(sel) for sel in selected_features]
-            df = self.sidebar.data_selector.fetch_base_dataframe_for_features(feature_payloads)
-            if df is None or df.empty:
-                continue
+            fetch_requests.append(
+                (idx, card, selected_features, [self._feature_payload(sel) for sel in selected_features])
+            )
+        if not fetch_requests:
+            toast_info(tr("No chart data available to export."), title=tr("Charts"), tab_key="charts")
+            return
+
+        datasets: dict[str, pd.DataFrame] = {}
+        chart_specs: dict[str, dict[str, object]] = {}
+        request_index = 0
+        export_button = getattr(self.sidebar, "btn_export", None)
+        if export_button is not None:
+            export_button.setEnabled(False)
+
+        def _finish_collection() -> None:
+            if export_button is not None:
+                export_button.setEnabled(True)
+            self._run_export_dialog(datasets, chart_specs)
+
+        def _process_frame(
+            *,
+            idx: int,
+            card: ChartCard,
+            selected_features: list[FeatureSelection],
+            frame: pd.DataFrame | None,
+        ) -> None:
+            if frame is None or frame.empty:
+                return
             chart_type = card.chart_type()
             try:
                 if chart_type == "monthly":
-                    df, chart_level = self._aggregate_monthly_export_frame(df)
+                    frame, _chart_level = self._aggregate_monthly_export_frame(frame)
                 elif chart_type == "scatter":
                     pass
                 else:
-                    continue
+                    return
             except Exception:
-                continue
-            if df is None or df.empty:
-                continue
+                return
+            if frame is None or frame.empty:
+                return
             name = tr("Chart {index} ({kind})").format(index=idx, kind=chart_type)
-            datasets[name] = df.copy()
-            columns = [str(c) for c in df.columns]
+            datasets[name] = frame.copy()
+            columns = [str(c) for c in frame.columns]
             if chart_type == "scatter":
                 feature_count = len(selected_features)
-                scatter_cols = self._feature_columns(df, feature_count)
+                scatter_cols = self._feature_columns(frame, feature_count)
                 if len(scatter_cols) == 2:
                     chart_specs[name] = {
                         "type": "scatter",
@@ -864,6 +938,44 @@ class ChartsTab(TabWidget):
                     "title": name,
                 }
 
+        def _fetch_next() -> None:
+            nonlocal request_index
+            if request_index >= len(fetch_requests):
+                _finish_collection()
+                return
+            idx, card, selected_features, feature_payloads = fetch_requests[request_index]
+            request_index += 1
+
+            def _on_result(frame) -> None:
+                _process_frame(
+                    idx=idx,
+                    card=card,
+                    selected_features=selected_features,
+                    frame=frame,
+                )
+                _fetch_next()
+
+            def _on_error(_message: str) -> None:
+                _fetch_next()
+
+            started = self.sidebar.data_selector.fetch_base_dataframe_for_features_async(
+                feature_payloads,
+                on_result=_on_result,
+                on_error=_on_error,
+                owner=self,
+                key=("charts_export_fetch", idx),
+                cancel_previous=True,
+            )
+            if not started:
+                _fetch_next()
+
+        _fetch_next()
+
+    def _run_export_dialog(
+        self,
+        datasets: dict[str, pd.DataFrame],
+        chart_specs: dict[str, dict[str, object]],
+    ) -> None:
         if not datasets:
             toast_info(tr("No chart data available to export."), title=tr("Charts"), tab_key="charts")
             return

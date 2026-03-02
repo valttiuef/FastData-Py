@@ -312,7 +312,48 @@ class DataSelectorViewModel(QObject):
             return None
 
     # @ai(gpt-5, codex, refactor, 2026-03-02)
-    def fetch_base_dataframe_for_features(
+    def fetch_base_dataframe_async(
+        self,
+        *,
+        preprocessing_override: Optional[Mapping[str, object]] = None,
+        on_result=None,
+        on_error=None,
+        owner: object | None = None,
+        key: object | None = "selector_base_dataframe_fetch",
+        cancel_previous: bool = True,
+    ) -> bool:
+        model = self._data_model
+        filters = self.build_data_filters()
+        if model is None or filters is None:
+            return False
+        params = self._resolved_preprocessing_params(
+            preprocessing_override=preprocessing_override
+        )
+
+        def _work() -> pd.DataFrame:
+            model.load_base(filters, **params)
+            return model.base_dataframe().copy()
+
+        run_in_thread(
+            _work,
+            on_result=(
+                (lambda frame: run_in_main_thread(on_result, frame))
+                if callable(on_result)
+                else None
+            ),
+            on_error=(
+                (lambda message: run_in_main_thread(on_error, str(message)))
+                if callable(on_error)
+                else None
+            ),
+            owner=owner or self,
+            key=key,
+            cancel_previous=cancel_previous,
+        )
+        return True
+
+    # @ai(gpt-5, codex, refactor, 2026-03-02)
+    def fetch_base_dataframe_for_features_async(
         self,
         feature_payloads: Sequence[Mapping[str, object]],
         *,
@@ -322,13 +363,19 @@ class DataSelectorViewModel(QObject):
         systems: Optional[Sequence[str]] = None,
         datasets: Optional[Sequence[str]] = None,
         group_ids: Optional[Sequence[int]] = None,
-    ) -> Optional[pd.DataFrame]:
+        on_result=None,
+        on_error=None,
+        owner: object | None = None,
+        key: object | None = "selector_base_dataframe_fetch_for_features",
+        cancel_previous: bool = True,
+    ) -> bool:
         model = self._data_model
         payloads = [dict(p) for p in (feature_payloads or []) if isinstance(p, Mapping)]
         if not payloads:
-            return None
-        if self._widget.filters_widget is None:
-            return None
+            return False
+        if self._widget.filters_widget is None or model is None:
+            return False
+
         filters = DataFilters(
             features=[FeatureSelection.from_payload(p) for p in payloads],
             start=self._widget.filters_widget.start_timestamp() if start is None else start,
@@ -351,18 +398,31 @@ class DataSelectorViewModel(QObject):
             ),
             import_ids=self._widget.filters_widget.selected_import_ids(),
         )
-        if model is None:
-            return None
-
         params = self._resolved_preprocessing_params(
             preprocessing_override=preprocessing_override
         )
 
-        try:
+        def _work() -> pd.DataFrame:
             model.load_base(filters, **params)
             return model.base_dataframe().copy()
-        except Exception:
-            return None
+
+        run_in_thread(
+            _work,
+            on_result=(
+                (lambda frame: run_in_main_thread(on_result, frame))
+                if callable(on_result)
+                else None
+            ),
+            on_error=(
+                (lambda message: run_in_main_thread(on_error, str(message)))
+                if callable(on_error)
+                else None
+            ),
+            owner=owner or self,
+            key=key,
+            cancel_previous=cancel_previous,
+        )
+        return True
 
     @staticmethod
     def _ordered_unique_features(
@@ -833,6 +893,26 @@ class DataSelectorWidget(QGroupBox):
             preprocessing_override=preprocessing_override
         )
 
+    # @ai(gpt-5, codex, refactor, 2026-03-02)
+    def fetch_base_dataframe_async(
+        self,
+        *,
+        preprocessing_override: Optional[Mapping[str, object]] = None,
+        on_result=None,
+        on_error=None,
+        owner: object | None = None,
+        key: object | None = "selector_base_dataframe_fetch",
+        cancel_previous: bool = True,
+    ) -> bool:
+        return self.view_model.fetch_base_dataframe_async(
+            preprocessing_override=preprocessing_override,
+            on_result=on_result,
+            on_error=on_error,
+            owner=owner,
+            key=key,
+            cancel_previous=cancel_previous,
+        )
+
     def find_top_correlations(
         self,
         *,
@@ -858,7 +938,8 @@ class DataSelectorWidget(QGroupBox):
             cancel_previous=cancel_previous,
         )
 
-    def fetch_base_dataframe_for_features(
+    # @ai(gpt-5, codex, refactor, 2026-03-02)
+    def fetch_base_dataframe_for_features_async(
         self,
         feature_payloads: Sequence[Mapping[str, object]],
         *,
@@ -868,8 +949,13 @@ class DataSelectorWidget(QGroupBox):
         systems: Optional[Sequence[str]] = None,
         datasets: Optional[Sequence[str]] = None,
         group_ids: Optional[Sequence[int]] = None,
-    ) -> Optional[pd.DataFrame]:
-        return self.view_model.fetch_base_dataframe_for_features(
+        on_result=None,
+        on_error=None,
+        owner: object | None = None,
+        key: object | None = "selector_base_dataframe_fetch_for_features",
+        cancel_previous: bool = True,
+    ) -> bool:
+        return self.view_model.fetch_base_dataframe_for_features_async(
             feature_payloads,
             preprocessing_override=preprocessing_override,
             start=start,
@@ -877,6 +963,11 @@ class DataSelectorWidget(QGroupBox):
             systems=systems,
             datasets=datasets,
             group_ids=group_ids,
+            on_result=on_result,
+            on_error=on_error,
+            owner=owner,
+            key=key,
+            cancel_previous=cancel_previous,
         )
 
     # ------------------------------------------------------------------

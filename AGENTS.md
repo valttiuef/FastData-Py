@@ -78,9 +78,17 @@ For user-triggered background jobs (imports, analysis, training, exports):
 For tabs/sidebars that include `DataSelectorWidget`:
 
 - Treat it as the single source of truth for data selection.
-- Prefer one direct fetch call:
-  - `fetch_base_dataframe`
-  - or `fetch_base_dataframe_for_features`
+- Always use async fetch methods in UI flows:
+  - `fetch_base_dataframe_async`
+  - or `fetch_base_dataframe_for_features_async`
+- Do not use synchronous selector fetch methods on the UI thread, except in clearly non-UI/test-only code.
+- For dynamic refresh flows (for example feature checkbox changes, live chart/data updates):
+  - use cancellable/superseding fetches (`cancel_previous=True` with stable owner/key),
+  - ignore stale results when a newer request exists.
+- For button-triggered flows (for example SOM/Regression train):
+  - show toast/status for "fetching data" and "data fetched → next task",
+  - then pass the fetched `DataFrame` to the next viewmodel action.
+- For dynamic auto-updating flows, do not show fetch start/finish toasts by default.
 - Let the selector apply active filters and preprocessing.
 - Only read filter/preprocessing metadata separately when explicitly needed for non-fetch logic.
 - Pass the resulting `DataFrame` into viewmodel methods.

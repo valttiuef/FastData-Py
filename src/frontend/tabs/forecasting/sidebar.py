@@ -29,7 +29,9 @@ from ...widgets.sidebar_widget import SidebarWidget
 from ...widgets.help_widgets import InfoButton
 from ...viewmodels.help_viewmodel import HelpViewModel, get_help_viewmodel
 from ...param_specs.forecasting import FORECASTING_MODEL_PARAM_SPECS
-from ...utils import toast_error
+from ...utils import set_status_text, toast_error, toast_info
+
+logger = logging.getLogger(__name__)
 
 
 
@@ -275,37 +277,96 @@ class ForecastingSidebar(SidebarWidget):
             return
         preprocessing = self.preprocessing_parameters()
         target_feature = self.target_payload()
-
+        self.run_button.setEnabled(False)
+        set_status_text(tr("Fetching forecasting data..."))
         try:
-            all_payloads = list(features)
-            if isinstance(target_feature, dict) and target_feature not in all_payloads:
-                all_payloads.append(target_feature)
-            data_frame = self.data_selector.fetch_base_dataframe_for_features(
-                all_payloads,
-            )
-            if data_frame is None:
-                raise RuntimeError(tr("Failed to load data for selected inputs."))
-            self._view_model.start_forecasts(
-                data_frame=data_frame,
-                features=features,
-                models=models,
-                data_filters=data_filters,
-                model_params=model_params,
-                forecast_horizon=self.forecast_horizon(),
-                preprocessing=preprocessing,
-                window_strategy=self.window_strategy(),
-                initial_window=self.initial_window_size(),
-                target_feature=target_feature,
-            )
-        except Exception as exc:
-            logger = logging.getLogger(__name__)
-            error_message = tr("Failed to start forecasting: {error}").format(error=exc)
-            logger.error(error_message, exc_info=True)
+            toast_info(tr("Fetching forecasting data..."), title=tr("Forecasting"), tab_key="forecasting")
+        except Exception:
+            logger.warning("Exception in _start_run", exc_info=True)
+
+        def _on_fetch_result(data_frame) -> None:
+            if data_frame is None or getattr(data_frame, "empty", True):
+                self.run_button.setEnabled(True)
+                message = tr("Failed to load data for selected inputs.")
+                set_status_text(message)
+                try:
+                    toast_error(message, title=tr("Forecasting failed"), tab_key="forecasting")
+                except Exception:
+                    logger.warning("Exception in _start_run", exc_info=True)
+                self._view_model.run_failed.emit(message)
+                return
+            set_status_text(tr("Forecasting data fetched."))
             try:
-                toast_error(str(error_message), title=tr("Forecasting failed"), tab_key="forecasting")
+                toast_info(tr("Data fetched. Starting forecasting..."), title=tr("Forecasting"), tab_key="forecasting")
+            except Exception:
+                logger.warning("Exception in _start_run", exc_info=True)
+            try:
+                self._view_model.start_forecasts(
+                    data_frame=data_frame,
+                    features=features,
+                    models=models,
+                    data_filters=data_filters,
+                    model_params=model_params,
+                    forecast_horizon=self.forecast_horizon(),
+                    preprocessing=preprocessing,
+                    window_strategy=self.window_strategy(),
+                    initial_window=self.initial_window_size(),
+                    target_feature=target_feature,
+                )
+            except Exception as exc:
+                self.run_button.setEnabled(True)
+                error_message = tr("Failed to start forecasting: {error}").format(error=exc)
+                logger.error(error_message, exc_info=True)
+                set_status_text(error_message)
+                try:
+                    toast_error(str(error_message), title=tr("Forecasting failed"), tab_key="forecasting")
+                except Exception:
+                    logger.warning("Exception in _start_run", exc_info=True)
+                self._view_model.run_failed.emit(error_message)
+
+        def _on_fetch_error(message: str) -> None:
+            self.run_button.setEnabled(True)
+            error_message = tr("Failed to load forecasting data: {error}").format(error=str(message or ""))
+            set_status_text(error_message)
+            try:
+                toast_error(error_message, title=tr("Forecasting failed"), tab_key="forecasting")
             except Exception:
                 logger.warning("Exception in _start_run", exc_info=True)
             self._view_model.run_failed.emit(error_message)
+
+        # Most flows can use selector-selected features directly.
+        use_selector_selection = not (
+            isinstance(target_feature, dict) and target_feature not in features
+        )
+        if use_selector_selection:
+            started = self.data_selector.fetch_base_dataframe_async(
+                on_result=_on_fetch_result,
+                on_error=_on_fetch_error,
+                owner=self,
+                key="forecasting_fetch_data",
+                cancel_previous=True,
+            )
+        else:
+            all_payloads = list(features)
+            all_payloads.append(target_feature)
+            started = self.data_selector.fetch_base_dataframe_for_features_async(
+                all_payloads,
+                on_result=_on_fetch_result,
+                on_error=_on_fetch_error,
+                owner=self,
+                key="forecasting_fetch_data",
+                cancel_previous=True,
+            )
+        if started:
+            return
+        self.run_button.setEnabled(True)
+        error_message = tr("Failed to start forecasting data fetch.")
+        set_status_text(error_message)
+        try:
+            toast_error(error_message, title=tr("Forecasting failed"), tab_key="forecasting")
+        except Exception:
+            logger.warning("Exception in _start_run", exc_info=True)
+        self._view_model.run_failed.emit(error_message)
 
     def auto_save_enabled(self) -> bool:
         return bool(self.auto_save_checkbox.isChecked())

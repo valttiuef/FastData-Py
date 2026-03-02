@@ -26,7 +26,7 @@ from ...widgets.help_widgets import InfoButton
 from ...widgets.data_selector_widget import DataSelectorWidget
 from ...widgets.sidebar_widget import SidebarWidget
 from ...widgets.multi_check_combo import MultiCheckCombo
-from ...utils import toast_error, toast_info, toast_warn
+from ...utils import set_status_text, toast_error, toast_info, toast_warn
 from ...viewmodels.help_viewmodel import HelpViewModel, get_help_viewmodel
 
 if TYPE_CHECKING:
@@ -222,28 +222,62 @@ class StatisticsSidebar(SidebarWidget):
         stats_preprocessing.pop("stats_period", None)
         stats_preprocessing.pop("separate_timeframes", None)
 
-        data_frame = self.data_selector.fetch_base_dataframe_for_features(
-            payloads,
-            preprocessing_override=stats_preprocessing,
-        )
-        if data_frame is None:
-            self._inform_user(tr("Failed to load data for selected inputs."), level=logging.ERROR)
-            return
+        self._run_button.setEnabled(False)
+        set_status_text(tr("Fetching statistics data..."))
+        self._inform_user(tr("Fetching statistics data..."), level=logging.INFO)
 
-        self._view_model.run_statistics(
-            data_frame=data_frame,
-            feature_payloads=payloads,
-            systems=systems,
-            datasets=Datasets,
-            group_ids=group_ids,
-            start=start,
-            end=end,
-            months=months,
-            statistics=stats,
-            mode=mode,
-            group_column=group_column,
-            preprocessing=preprocessing,
+        def _on_fetch_result(data_frame) -> None:
+            if data_frame is None or getattr(data_frame, "empty", True):
+                self._run_button.setEnabled(True)
+                message = tr("Failed to load data for selected inputs.")
+                set_status_text(message)
+                self._inform_user(message, level=logging.ERROR)
+                return
+            set_status_text(tr("Statistics data fetched."))
+            self._inform_user(tr("Data fetched. Gathering statistics..."), level=logging.INFO)
+            try:
+                self._view_model.run_statistics(
+                    data_frame=data_frame,
+                    feature_payloads=payloads,
+                    systems=systems,
+                    datasets=Datasets,
+                    group_ids=group_ids,
+                    start=start,
+                    end=end,
+                    months=months,
+                    statistics=stats,
+                    mode=mode,
+                    group_column=group_column,
+                    preprocessing=preprocessing,
+                )
+            except Exception as exc:
+                self._run_button.setEnabled(True)
+                message = tr("Failed to start statistics: {error}").format(error=exc)
+                set_status_text(message)
+                self._inform_user(message, level=logging.ERROR)
+
+        def _on_fetch_error(message: str) -> None:
+            self._run_button.setEnabled(True)
+            text = tr("Failed to load statistics data: {error}").format(
+                error=str(message or "")
+            )
+            set_status_text(text)
+            self._inform_user(text, level=logging.ERROR)
+
+        started = self.data_selector.fetch_base_dataframe_async(
+            preprocessing_override=stats_preprocessing,
+            on_result=_on_fetch_result,
+            on_error=_on_fetch_error,
+            owner=self,
+            key="statistics_fetch_data",
+            cancel_previous=True,
         )
+        if started:
+            return
+        self._run_button.setEnabled(True)
+        text = tr("Failed to start statistics data fetch.")
+        set_status_text(text)
+        self._inform_user(text, level=logging.ERROR)
 
     def _get_stats_period(self) -> str | int | None:
         """Get the statistics period from the UI controls."""

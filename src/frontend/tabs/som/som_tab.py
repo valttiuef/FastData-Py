@@ -72,6 +72,10 @@ class SomTab(TabWidget):
         self._feature_clusters = None
         self._som_details_dialog: Optional[SomDetailsDialog] = None
         self._timeline_display_df = self._empty_timeline_table_dataframe()
+        self._timeline_overlay_cache_df = pd.DataFrame()
+        self._timeline_overlay_cache_cols: list[str] = []
+        self._timeline_overlay_signature: tuple | None = None
+        self._timeline_overlay_fetch_signature: tuple | None = None
 
         # Attributes populated by tab builders (_create_content_widget).
         # Declaring them here keeps static analysis aligned with runtime wiring.
@@ -1241,47 +1245,90 @@ class SomTab(TabWidget):
 
         payloads = self._selected_feature_payloads()
         if not payloads:
+            self._timeline_overlay_signature = None
+            self._timeline_overlay_fetch_signature = None
+            self._timeline_overlay_cache_df = pd.DataFrame()
+            self._timeline_overlay_cache_cols = []
             return pd.DataFrame(), []
 
-        try:
-            df = self.sidebar.data_selector.fetch_base_dataframe_for_features(
-                payloads,
-            )
-        except Exception:
-            return pd.DataFrame(), []
-
-        if df is None or df.empty:
-            return pd.DataFrame(), []
-
-        working = df.copy()
-        working["t"] = pd.to_datetime(working.get("t"), errors="coerce")
-        working = working.dropna(subset=["t"]).sort_values("t")
-        if working.empty:
-            return working, []
-        working = working.sort_values("t")
-
-        preferred_columns: list[str] = []
-        for payload in payloads:
-            try:
-                selection = FeatureSelection.from_payload(payload)
-            except TypeError:
-                selection = FeatureSelection(
-                    feature_id=payload.get("feature_id"),
-                    label=payload.get("label"),
-                    base_name=payload.get("base_name"),
-                    source=payload.get("source"),
-                    unit=payload.get("unit"),
-                    type=payload.get("type"),
+        signature = tuple(
+            sorted(
+                int(fid)
+                for fid in (
+                    self._view_model._safe_feature_id(payload) for payload in payloads
                 )
-            preferred_columns.append(selection.display_name())
-        # Keep overlay deterministic and user-driven: first N selected features.
-        selected_columns = [col for col in preferred_columns if col in working.columns]
-        if not selected_columns:
-            selected_columns = [col for col in working.columns if col != "t"]
-        selected_columns = selected_columns[: self._TIMELINE_OVERLAY_MAX_FEATURES]
-        if not selected_columns:
-            return pd.DataFrame(), []
-        return working[["t", *selected_columns]].copy(), selected_columns
+                if fid is not None
+            )
+        )
+        if signature != self._timeline_overlay_signature:
+            self._timeline_overlay_signature = signature
+            self._timeline_overlay_cache_df = pd.DataFrame()
+            self._timeline_overlay_cache_cols = []
+
+        if signature and signature != self._timeline_overlay_fetch_signature:
+            self._timeline_overlay_fetch_signature = signature
+
+            def _on_result(df) -> None:
+                if signature != self._timeline_overlay_signature:
+                    return
+                if df is None or df.empty:
+                    self._timeline_overlay_cache_df = pd.DataFrame()
+                    self._timeline_overlay_cache_cols = []
+                    self._update_timeline_views()
+                    return
+                working = df.copy()
+                working["t"] = pd.to_datetime(working.get("t"), errors="coerce")
+                working = working.dropna(subset=["t"]).sort_values("t")
+                if working.empty:
+                    self._timeline_overlay_cache_df = pd.DataFrame()
+                    self._timeline_overlay_cache_cols = []
+                    self._update_timeline_views()
+                    return
+
+                preferred_columns: list[str] = []
+                for payload in payloads:
+                    try:
+                        selection = FeatureSelection.from_payload(payload)
+                    except TypeError:
+                        selection = FeatureSelection(
+                            feature_id=payload.get("feature_id"),
+                            label=payload.get("label"),
+                            base_name=payload.get("base_name"),
+                            source=payload.get("source"),
+                            unit=payload.get("unit"),
+                            type=payload.get("type"),
+                        )
+                    preferred_columns.append(selection.display_name())
+
+                selected_columns = [col for col in preferred_columns if col in working.columns]
+                if not selected_columns:
+                    selected_columns = [col for col in working.columns if col != "t"]
+                selected_columns = selected_columns[: self._TIMELINE_OVERLAY_MAX_FEATURES]
+                if not selected_columns:
+                    self._timeline_overlay_cache_df = pd.DataFrame()
+                    self._timeline_overlay_cache_cols = []
+                    self._update_timeline_views()
+                    return
+                self._timeline_overlay_cache_df = working[["t", *selected_columns]].copy()
+                self._timeline_overlay_cache_cols = list(selected_columns)
+                self._update_timeline_views()
+
+            def _on_error(_message: str) -> None:
+                if signature != self._timeline_overlay_signature:
+                    return
+                self._timeline_overlay_cache_df = pd.DataFrame()
+                self._timeline_overlay_cache_cols = []
+                self._update_timeline_views()
+
+            self.sidebar.data_selector.fetch_base_dataframe_async(
+                on_result=_on_result,
+                on_error=_on_error,
+                owner=self,
+                key="som_timeline_overlay_fetch",
+                cancel_previous=True,
+            )
+
+        return self._timeline_overlay_cache_df.copy(), list(self._timeline_overlay_cache_cols)
 
     @staticmethod
     def _coerce_utc_naive_timestamps(series: pd.Series) -> pd.Series:

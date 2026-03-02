@@ -87,6 +87,9 @@ class DataTab(TabWidget):
         self._owned_base_cache_key = None
         self._selector_requirements_key: tuple | None = None
         self._selection_sync_pending = False
+        self._reload_request_id = 0
+        self._active_reload_request_id = 0
+        self._inflight_requirements_key: tuple | None = None
         self._selection_sync_fallback = QTimer(self)
         self._selection_sync_fallback.setSingleShot(True)
         self._selection_sync_fallback.setInterval(450)
@@ -495,36 +498,9 @@ class DataTab(TabWidget):
             import_ids=list(flt.import_ids) if flt.import_ids is not None else None,
         )
 
-    @staticmethod
-    def _feature_payload_from_selection(selection) -> dict[str, object]:
-        return {
-            "feature_id": selection.feature_id,
-            "notes": selection.label,
-            "name": selection.base_name,
-            "source": selection.source,
-            "unit": selection.unit,
-            "type": selection.type,
-            "lag_seconds": selection.lag_seconds,
-        }
-
-    def _fetch_chart_base_dataframe(
-        self,
-        chart_flt: DataFilters,
-    ) -> pd.DataFrame | None:
-        payloads = [
-            self._feature_payload_from_selection(selection)
-            for selection in (chart_flt.features or [])
-        ]
-        if not payloads:
-            return None
-        return self.sidebar.data_selector.fetch_base_dataframe_for_features(
-            payloads,
-            start=chart_flt.start,
-            end=chart_flt.end,
-            systems=chart_flt.systems,
-            datasets=chart_flt.datasets,
-            group_ids=chart_flt.group_ids,
-        )
+    def _next_reload_request_id(self) -> int:
+        self._reload_request_id += 1
+        return self._reload_request_id
 
     def _freeze_value(self, value: object) -> tuple:
         if isinstance(value, dict):
@@ -609,8 +585,8 @@ class DataTab(TabWidget):
             current_key = None
         if self._owned_base_cache_key is not None and current_key == self._owned_base_cache_key:
             return
-        self._fetch_chart_base_dataframe(flt)
-        self._capture_owned_base_cache_key()
+        # Trigger an async reload so the cache is built without blocking the UI.
+        self._reload_now(force=True)
 
     def _reload_now(self, *, force: bool = False):
         self._debounce.stop()
@@ -628,63 +604,107 @@ class DataTab(TabWidget):
                 and self._last_reload_epoch == self._reload_epoch
             ):
                 return
+            if (
+                requirements_key is not None
+                and requirements_key == self._inflight_requirements_key
+                and self._last_reload_epoch == self._reload_epoch
+            ):
+                return
         flt = self._build_filters()
         if not flt:
             self._clear_charts(tr("Select at least one feature to load."))
             self._update_features_info_button(None)
             self._last_requirements_key = None
             self._last_reload_epoch = self._reload_epoch
+            self._inflight_requirements_key = None
             self._owned_base_cache_key = None
             return
-        chart_flt = self._build_chart_filters()
-        if not chart_flt:
+        if not self._build_chart_filters():
             self._clear_charts(tr("Select at least one feature to load."))
             self._update_features_info_button(None)
             self._last_requirements_key = None
             self._last_reload_epoch = self._reload_epoch
+            self._inflight_requirements_key = None
             self._owned_base_cache_key = None
             return
 
-        # Build/refresh base cache according to preprocessing params (postprocessed!)
-        base_df = self._fetch_chart_base_dataframe(chart_flt)
+        request_id = self._next_reload_request_id()
+        self._active_reload_request_id = request_id
+        self._inflight_requirements_key = requirements_key
+
+        def _on_fetch_result(base_df) -> None:
+            if request_id != self._active_reload_request_id:
+                return
+            self._inflight_requirements_key = None
+            self._apply_reload_result(
+                flt=flt,
+                requirements_key=requirements_key,
+                base_df=base_df,
+            )
+
+        def _on_fetch_error(_message: str) -> None:
+            if request_id != self._active_reload_request_id:
+                return
+            self._inflight_requirements_key = None
+            self._clear_charts(tr("Failed to load selected data."))
+            self._update_features_info_button(None)
+            self._last_requirements_key = requirements_key
+            self._last_reload_epoch = self._reload_epoch
+
+        started = self.sidebar.data_selector.fetch_base_dataframe_async(
+            on_result=_on_fetch_result,
+            on_error=_on_fetch_error,
+            owner=self,
+            key="data_tab_reload_fetch",
+            cancel_previous=True,
+        )
+        if started:
+            return
+        self._inflight_requirements_key = None
+        self._clear_charts(tr("Failed to start data reload."))
+        self._update_features_info_button(None)
+        self._last_requirements_key = requirements_key
+        self._last_reload_epoch = self._reload_epoch
+
+    def _apply_reload_result(
+        self,
+        *,
+        flt: DataFilters,
+        requirements_key: tuple | None,
+        base_df: pd.DataFrame | None,
+    ) -> None:
         self._capture_owned_base_cache_key()
 
-        # Set initial view window to sidebar dt edits (model may refine/fetch as needed)
         if flt.start is not None and flt.end is not None:
             self._view_model.set_view_window(flt.start, flt.end)
 
-        # ---- Monthly/Daily/Hourly bars: derive from POSTPROCESSED BASE DATA ----
         try:
-            if base_df is None:
-                base_df = pd.DataFrame(columns=["t"])
-            df = base_df.copy()
-
-            feature_cols = [c for c in df.columns if c != "t"]
-            requested_features = len(feature_cols)
+            working_df = (
+                pd.DataFrame(columns=["t"])
+                if base_df is None
+                else base_df.copy()
+            )
+            feature_cols = [c for c in working_df.columns if c != "t"]
             display_cols = feature_cols[:MAX_FEATURES_SHOWN_LEGEND]
             if display_cols:
                 if len(display_cols) == 1:
                     col = display_cols[0]
-                    values = pd.to_numeric(df[col], errors="coerce")
-                    self.monthly_chart.set_data(df["t"], values, series_name=col)
+                    values = pd.to_numeric(working_df[col], errors="coerce")
+                    self.monthly_chart.set_data(working_df["t"], values, series_name=col)
                 else:
-                    self.monthly_chart.set_frame(df[["t"] + display_cols])
+                    self.monthly_chart.set_frame(working_df[["t"] + display_cols])
                 self.monthly_chart.chart.legend().setVisible(True)
         except Exception:
-            logger.warning("Exception in _reload_now", exc_info=True)
+            logger.warning("Exception in _apply_reload_result", exc_info=True)
 
-        # ---- line chart (raw chart) from model view slice as before ----
         series_df = self._view_model.series_for_chart()
         self.timeseries_chart.set_dataframe(series_df)
         self._set_monthly_chart_title(flt)
 
-        # Info line: show true data bounds for selected features (ignore UI time filters)
         flt_for_bounds = flt.clone_with_range(None, None)
         b0, b1 = self._view_model.time_bounds(flt_for_bounds)
-        start_ts = b0
-        end_ts = b1
         self.data_info.setText(
-            self._build_data_info_text(flt, start_ts, end_ts, rows=len(series_df))
+            self._build_data_info_text(flt, b0, b1, rows=len(series_df))
         )
         self._update_features_info_button(flt)
         self._last_requirements_key = requirements_key

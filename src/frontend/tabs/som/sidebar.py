@@ -40,7 +40,7 @@ from ...widgets.sidebar_widget import SidebarWidget
 from ...models.hybrid_pandas_model import HybridPandasModel
 
 from .clustering_viewmodel import ClusteringRequest, ClusteringViewModel
-from ...utils import toast_error, toast_info, toast_warn
+from ...utils import set_status_text, toast_error, toast_info, toast_warn
 from ...viewmodels.help_viewmodel import HelpViewModel, get_help_viewmodel
 
 if TYPE_CHECKING:
@@ -487,27 +487,57 @@ class SomSidebar(SidebarWidget):
         map_height = self._parse_dimension(self.map_height_edit.text())
 
         epochs = self.epochs_spin.value() or None
-        data_frame = self.data_selector.fetch_base_dataframe_for_features(
-            selected_payloads,
-        )
-        if data_frame is None or data_frame.empty:
-            self._log(tr("No measurements available for the selected features."), level=logging.INFO)
-            return
+        self.train_button.setEnabled(False)
+        set_status_text(tr("Fetching SOM data..."))
+        self._log(tr("Fetching SOM data..."), level=logging.INFO)
 
-        try:
-            self._view_model.train_som(
-                [name for payload in selected_payloads if (name := self._feature_display_name(payload))],
-                feature_payloads=selected_payloads,
-                map_shape=(map_width, map_height),
-                sigma=self.sigma_spin.value(),
-                learning_rate=self.lr_spin.value(),
-                epochs=epochs,
-                normalisation=self.norm_combo.currentData(),
-                training_mode=self.training_mode_combo.currentData(),
-                data_frame=data_frame,
-            )
-        except Exception as e:
-            self._log(tr("Failed to start training: {error}").format(error=e), level=logging.ERROR)
+        feature_names = [
+            name for payload in selected_payloads if (name := self._feature_display_name(payload))
+        ]
+
+        def _on_fetch_result(data_frame) -> None:
+            if data_frame is None or getattr(data_frame, "empty", True):
+                self.train_button.setEnabled(True)
+                set_status_text(tr("SOM data unavailable."))
+                self._log(tr("No measurements available for the selected features."), level=logging.INFO)
+                return
+
+            set_status_text(tr("SOM data fetched."))
+            self._log(tr("Data fetched. Training SOM..."), level=logging.INFO)
+            try:
+                self._view_model.train_som(
+                    feature_names,
+                    feature_payloads=selected_payloads,
+                    map_shape=(map_width, map_height),
+                    sigma=self.sigma_spin.value(),
+                    learning_rate=self.lr_spin.value(),
+                    epochs=epochs,
+                    normalisation=self.norm_combo.currentData(),
+                    training_mode=self.training_mode_combo.currentData(),
+                    data_frame=data_frame,
+                )
+            except Exception as e:
+                self.train_button.setEnabled(True)
+                self._log(tr("Failed to start training: {error}").format(error=e), level=logging.ERROR)
+
+        def _on_fetch_error(message: str) -> None:
+            self.train_button.setEnabled(True)
+            text = str(message or tr("Failed to load SOM data."))
+            set_status_text(tr("SOM data fetch failed: {error}").format(error=text))
+            self._log(text, level=logging.ERROR)
+
+        started = self.data_selector.fetch_base_dataframe_async(
+            on_result=_on_fetch_result,
+            on_error=_on_fetch_error,
+            owner=self,
+            key="som_train_fetch_data",
+            cancel_previous=True,
+        )
+        if started:
+            return
+        self.train_button.setEnabled(True)
+        set_status_text(tr("Failed to start SOM data fetch."))
+        self._log(tr("Failed to start SOM data fetch."), level=logging.ERROR)
 
     def _on_cluster_features_clicked(self) -> None:
         """Handle Cluster features button click."""
