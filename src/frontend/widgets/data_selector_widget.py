@@ -276,6 +276,23 @@ class DataSelectorViewModel(QObject):
             import_ids=self._widget.filters_widget.selected_import_ids(),
         )
 
+    def _resolved_preprocessing_params(
+        self, *, preprocessing_override: Optional[Mapping[str, object]] = None
+    ) -> dict[str, object]:
+        params = (
+            dict(self._widget.preprocessing_widget.parameters())
+            if self._widget.preprocessing_widget is not None
+            else {}
+        )
+        if preprocessing_override:
+            params.update(dict(preprocessing_override))
+        timestep = params.get("timestep")
+        if timestep is None or str(timestep).strip().lower() == "none":
+            # Raw mode must not fill gaps because no timestep cadence is used.
+            params["fill"] = "none"
+        return params
+
+    # @ai(gpt-5, codex, refactor, 2026-03-02)
     def fetch_base_dataframe(
         self, *, preprocessing_override: Optional[Mapping[str, object]] = None
     ) -> Optional[pd.DataFrame]:
@@ -284,13 +301,9 @@ class DataSelectorViewModel(QObject):
         if model is None or filters is None:
             return None
 
-        params = (
-            dict(self._widget.preprocessing_widget.parameters())
-            if self._widget.preprocessing_widget is not None
-            else {}
+        params = self._resolved_preprocessing_params(
+            preprocessing_override=preprocessing_override
         )
-        if preprocessing_override:
-            params.update(dict(preprocessing_override))
 
         try:
             model.load_base(filters, **params)
@@ -298,6 +311,7 @@ class DataSelectorViewModel(QObject):
         except Exception:
             return None
 
+    # @ai(gpt-5, codex, refactor, 2026-03-02)
     def fetch_base_dataframe_for_features(
         self,
         feature_payloads: Sequence[Mapping[str, object]],
@@ -340,13 +354,9 @@ class DataSelectorViewModel(QObject):
         if model is None:
             return None
 
-        params = (
-            dict(self._widget.preprocessing_widget.parameters())
-            if self._widget.preprocessing_widget is not None
-            else {}
+        params = self._resolved_preprocessing_params(
+            preprocessing_override=preprocessing_override
         )
-        if preprocessing_override:
-            params.update(dict(preprocessing_override))
 
         try:
             model.load_base(filters, **params)

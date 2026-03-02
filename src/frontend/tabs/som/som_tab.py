@@ -1243,7 +1243,6 @@ class SomTab(TabWidget):
         if not payloads:
             return pd.DataFrame(), []
 
-        selector_filters = self.sidebar.data_selector.build_data_filters()
         try:
             df = self.sidebar.data_selector.fetch_base_dataframe_for_features(
                 payloads,
@@ -1257,12 +1256,6 @@ class SomTab(TabWidget):
         working = df.copy()
         working["t"] = pd.to_datetime(working.get("t"), errors="coerce")
         working = working.dropna(subset=["t"]).sort_values("t")
-        if working.empty:
-            return working, []
-
-        months = set((selector_filters.months or []) if selector_filters is not None else [])
-        if months:
-            working = working[working["t"].dt.month.isin(months)]
         if working.empty:
             return working, []
         working = working.sort_values("t")

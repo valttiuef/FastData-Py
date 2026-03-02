@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
     QSizePolicy,
     QSpinBox,
@@ -36,6 +37,7 @@ from ...widgets.help_widgets import InfoButton
 from ...widgets.multi_check_combo import MultiCheckCombo
 from ...widgets.sidebar_widget import SidebarWidget
 from ...viewmodels.help_viewmodel import HelpViewModel, get_help_viewmodel
+from ...utils import set_status_text, toast_error, toast_info
 from ...param_specs.regression import (
     REGRESSION_MODEL_PARAM_SPECS,
     REGRESSION_SELECTOR_PARAM_SPECS,
@@ -373,8 +375,315 @@ class RegressionSidebar(SidebarWidget):
         except Exception:
             return None
 
+    # @ai(gpt-5, codex, refactor, 2026-03-02)
     def _on_run_clicked(self) -> None:
-        self._view_model.request_run()
+        if self._view_model.is_running():
+            set_status_text("Regression run already in progress.")
+            try:
+                toast_info("Regression run already in progress.", title="Regression", tab_key="regression")
+            except Exception:
+                logger.warning("Exception in _on_run_clicked", exc_info=True)
+            return
+
+        input_features = self.selected_input_payloads()
+        target_features = self.selected_target_payloads()
+        missing: list[str] = []
+        if not input_features:
+            missing.append("input features")
+        if not target_features:
+            missing.append("target feature(s)")
+
+        model_keys = self.selected_model_keys()
+        if not model_keys:
+            missing.append("regression model")
+
+        selector_keys = self.selected_selector_keys()
+        if not selector_keys:
+            missing.append("feature selection method")
+
+        if missing:
+            missing_text = ", ".join(missing)
+            message = f"Cannot run regression: missing {missing_text}."
+            set_status_text(message)
+            try:
+                toast_error(message, title="Regression failed", tab_key="regression")
+            except Exception:
+                logger.warning("Exception in _on_run_clicked", exc_info=True)
+            return
+
+        selector_keys = selector_keys or ["none"]
+        selector_params = self.selector_parameters()
+        model_params = self.model_parameters()
+        reducer_keys = self.selected_reducer_keys() or ["none"]
+        reducer_params = self.reducer_parameters()
+
+        cv_strategy = self.cv_combo.currentData() or "none"
+        cv_folds = self.cv_folds.value()
+        cv_group_kind = self.selected_group_kind()
+        shuffle = self.cv_shuffle.isChecked()
+        time_gap = self.cv_gap.value()
+
+        stratify_payload = self.selected_stratify_payload()
+        if self.enable_test_split.isChecked():
+            test_size = float(self.test_size.value())
+            if test_size >= 1:
+                test_size = int(round(test_size))
+            test_strategy = self.test_strategy.currentData() or "random"
+            stratify_bins = self.stratify_bins.value()
+        else:
+            test_size = 0.0
+            test_strategy = "random"
+            stratify_bins = self.stratify_bins.value()
+
+        selector_settings = self.data_selector.get_settings()
+        all_payloads: list[dict] = []
+        seen_ids: set[int] = set()
+        for payload in [*input_features, *target_features, *([stratify_payload] if stratify_payload else [])]:
+            if not isinstance(payload, dict):
+                continue
+            payload_dict = dict(payload)
+            fid = payload_dict.get("feature_id")
+            try:
+                key = int(fid) if fid is not None else None
+            except Exception:
+                key = None
+            if key is not None and key in seen_ids:
+                continue
+            if key is not None:
+                seen_ids.add(key)
+            all_payloads.append(payload_dict)
+        data_frame = self.data_selector.fetch_base_dataframe_for_features(all_payloads)
+        if data_frame is None:
+            set_status_text("Failed to load regression data.")
+            try:
+                toast_error("Failed to load regression data.", title="Regression failed", tab_key="regression")
+            except Exception:
+                logger.warning("Exception in _on_run_clicked", exc_info=True)
+            return
+
+        target_contexts = [
+            self._build_run_context(
+                input_features,
+                target_feature,
+                stratify_payload,
+                selector_settings,
+                selector_params,
+                model_params,
+                reducer_keys,
+                reducer_params,
+                cv_strategy,
+                cv_folds,
+                cv_group_kind,
+                shuffle,
+                test_size,
+                test_strategy,
+                stratify_bins,
+                time_gap,
+            )
+            for target_feature in target_features
+        ]
+
+        total_runs = len(target_features) * len(selector_keys) * len(reducer_keys) * len(model_keys)
+        if not self._confirm_run(
+            input_features=input_features,
+            targets=target_features,
+            model_keys=model_keys,
+            selector_keys=selector_keys,
+            reducer_keys=reducer_keys,
+            total_runs=total_runs,
+            cv_strategy=cv_strategy,
+            cv_folds=cv_folds,
+            cv_group_kind=cv_group_kind,
+            shuffle=shuffle,
+            time_gap=time_gap,
+            test_size=test_size,
+            test_strategy=test_strategy,
+            stratify_bins=stratify_bins,
+            stratify_payload=stratify_payload,
+        ):
+            return
+
+        try:
+            self._view_model.start_regressions(
+                data_frame=data_frame,
+                input_features=input_features,
+                target_features=target_features,
+                target_contexts=target_contexts,
+                selectors=selector_keys,
+                models=model_keys,
+                selector_params=selector_params,
+                model_params=model_params,
+                reducers=reducer_keys,
+                reducer_params=reducer_params,
+                cv_strategy=cv_strategy,
+                cv_folds=cv_folds,
+                cv_group_kind=cv_group_kind,
+                shuffle=shuffle,
+                random_state=0,
+                test_size=test_size,
+                test_strategy=test_strategy,
+                stratify_bins=stratify_bins,
+                time_series_gap=time_gap,
+                stratify_feature=stratify_payload,
+            )
+        except Exception:
+            set_status_text("Failed to start regression run.")
+            try:
+                toast_error("Failed to start regression run.", title="Regression failed", tab_key="regression")
+            except Exception:
+                logger.warning("Exception in _on_run_clicked", exc_info=True)
+
+    # @ai(gpt-5, codex, refactor, 2026-03-02)
+    def _build_run_context(
+        self,
+        input_features,
+        target_feature,
+        stratify_feature,
+        selector_settings,
+        selector_params,
+        model_params,
+        reducer_keys,
+        reducer_params,
+        cv_strategy,
+        cv_folds,
+        cv_group_kind,
+        shuffle,
+        test_size,
+        test_strategy,
+        stratify_bins,
+        time_gap,
+    ) -> dict[str, object]:
+        settings = dict(selector_settings or {})
+        filters_state = settings.get("filters")
+        preprocessing_state = settings.get("preprocessing")
+        filters_payload = dict(filters_state) if isinstance(filters_state, dict) else {}
+        preprocessing_payload = (
+            dict(preprocessing_state) if isinstance(preprocessing_state, dict) else {}
+        )
+        filters = {
+            "systems": list(filters_payload.get("systems") or []),
+            "Datasets": list(filters_payload.get("datasets") or []),
+            "group_ids": list(filters_payload.get("group_ids") or []),
+            "start": filters_payload.get("start"),
+            "end": filters_payload.get("end"),
+        }
+        return {
+            "inputs": [dict(p) for p in input_features],
+            "target": dict(target_feature) if target_feature else {},
+            "stratify": dict(stratify_feature) if stratify_feature else {},
+            "filters": filters,
+            "preprocessing": preprocessing_payload,
+            "model_params": dict(model_params or {}),
+            "selector_params": dict(selector_params or {}),
+            "dimensionality_reduction": {
+                "enabled": any(key != "none" for key in (reducer_keys or [])),
+                "methods": list(reducer_keys or []),
+                "params": dict(reducer_params or {}),
+            },
+            "split": {
+                "cv_strategy": cv_strategy,
+                "cv_folds": cv_folds,
+                "cv_group_kind": cv_group_kind,
+                "shuffle": shuffle,
+                "test_size": test_size,
+                "test_strategy": test_strategy,
+                "stratify_bins": stratify_bins,
+                "time_series_gap": time_gap,
+            },
+        }
+
+    # @ai(gpt-5, codex, refactor, 2026-03-02)
+    def _confirm_run(
+        self,
+        *,
+        input_features: list[dict],
+        targets: list[dict],
+        model_keys: list[str],
+        selector_keys: list[str],
+        reducer_keys: list[str],
+        total_runs: int,
+        cv_strategy: str,
+        cv_folds: int,
+        cv_group_kind: Optional[str],
+        shuffle: bool,
+        time_gap: int,
+        test_size: float,
+        test_strategy: str,
+        stratify_bins: int,
+        stratify_payload: Optional[dict],
+    ) -> bool:
+        target_labels = [self.payload_label(t) for t in targets]
+        input_labels = [self.payload_label(p) for p in input_features]
+        model_labels = [self.model_label_for_key(k) for k in model_keys]
+        selector_labels = [self.selector_label_for_key(k) for k in selector_keys]
+        selector_text = ", ".join(selector_labels) if selector_labels else "None"
+        cv_label = self.cv_combo.currentText()
+        test_label = self.test_strategy.currentText()
+        stratify_label = self.payload_label(stratify_payload) if stratify_payload else "None"
+        reducer_text = "Disabled"
+        if reducer_keys and any(k != "none" for k in reducer_keys):
+            labels = [self.reducer_label_for_key(k) for k in reducer_keys if k != "none"]
+            reducer_text = ", ".join(labels) if labels else "Disabled"
+
+        def _format_list(labels: list[str], *, max_items: int = 10) -> str:
+            if not labels:
+                return "None"
+            if len(labels) <= max_items:
+                return ", ".join(labels)
+            return ", ".join(labels[:max_items]) + ", ..."
+
+        if cv_strategy == "none":
+            cv_text = "Disabled"
+        else:
+            cv_text = f"{cv_label} ({cv_folds} folds)"
+            if cv_strategy == "time_series":
+                cv_text += f", gap {time_gap}"
+            if cv_strategy in {"kfold", "stratified_kfold"}:
+                cv_text += f", shuffle {'on' if shuffle else 'off'}"
+            if cv_strategy == "stratified_kfold":
+                cv_text += f", bins {stratify_bins}, by {stratify_label}"
+            if cv_strategy == "group_kfold":
+                cv_text += f", group {cv_group_kind or 'None'}"
+
+        if test_size > 0:
+            if test_size >= 1:
+                test_text = f"{test_label} ({int(round(test_size))} rows)"
+            else:
+                test_text = f"{test_label} ({int(round(test_size * 100))}%)"
+            if test_strategy == "stratified":
+                test_text += f", bins {stratify_bins}, by {stratify_label}"
+        else:
+            test_text = tr("Disabled")
+        message = tr(
+            "Confirm regression run:\n\n"
+            "Targets ({targets_count}): {targets}\n"
+            "Inputs ({inputs_count}): {inputs}\n"
+            "Models: {models}\n"
+            "Selectors: {selectors}\n\n"
+            "Dimensionality reduction: {reducers}\n"
+            "Cross-validation: {cv}\n"
+            "Test split: {test}\n\n"
+            "Total models to train: {total}"
+        ).format(
+            targets_count=len(target_labels),
+            targets=_format_list(target_labels),
+            inputs_count=len(input_labels),
+            inputs=_format_list(input_labels),
+            models=", ".join(model_labels),
+            selectors=selector_text,
+            reducers=reducer_text,
+            cv=cv_text,
+            test=test_text,
+            total=total_runs,
+        )
+        confirm = QMessageBox.question(
+            self,
+            tr("Run regression?"),
+            message,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return confirm == QMessageBox.StandardButton.Yes
 
     def auto_save_enabled(self) -> bool:
         return bool(self.auto_save_checkbox.isChecked())

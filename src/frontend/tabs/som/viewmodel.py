@@ -924,6 +924,7 @@ class SomViewModel(QObject):
         raise RuntimeError("SomViewModel requires a pre-fetched DataFrame from DataSelectorWidget.")
 
     # ------------------------------------------------------------------
+    # @ai(gpt-5, codex, refactor, 2026-03-02)
     def train_from_labels(
         self,
         feature_labels: Sequence[str],
@@ -950,7 +951,7 @@ class SomViewModel(QObject):
         if not feature_labels:
             raise ValueError("Select at least one feature")
 
-        model = self._ensure_data_model()
+        self._ensure_data_model()
 
         if feature_payloads is None:
             feature_payloads = self._payloads_for_labels(feature_labels)
@@ -962,10 +963,6 @@ class SomViewModel(QObject):
         self._feature_display_map = self._build_feature_display_map(feature_payloads)
 
         params = dict(preprocessing or {})
-        params.setdefault("timestep", "auto")
-        params.setdefault("fill", "none")
-        params.setdefault("moving_average", None)
-        params.setdefault("agg", params.get("agg", "avg"))
         params.pop("target_points", None)
 
         months_set = {int(m) for m in (months or []) if m is not None}
@@ -1117,7 +1114,7 @@ class SomViewModel(QObject):
 
     # ------------------------------------------------------------------
     # @ai(gpt-5, codex, refactor, 2026-02-28)
-    def train(
+    def train_som(
         self,
         feature_labels: Sequence[str],
         *,

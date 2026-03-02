@@ -725,20 +725,21 @@ class HybridPandasModel(DatabaseModel):
     ) -> tuple[int, bool, int | None]:
         """
         Decide an effective cadence (seconds) for a time window by:
-        1) honoring explicit user timestep exactly (when mode="explicit"),
+        1) using explicit user timestep as the initial cadence (when mode="explicit"),
         2) otherwise choosing a nice step to hit target_points,
-        3) capping bin count to a safe max to avoid huge arrays,
+        3) capping bin count to a safe max to avoid huge arrays.
+           Explicit cadence may still be widened to satisfy the cap.
         Returns: (step_seconds, capped_flag, user_secs)
         """
         # User offset (ignored here) and explicit seconds (None if value is auto/none/invalid)
         _, user_secs = self._parse_seconds_freq(user_timestep)
 
         if str(mode) == "explicit" and user_secs is not None and int(user_secs) > 0:
-            # Explicit mode must preserve the exact user-entered cadence.
-            return int(user_secs), False, int(user_secs)
-
-        # Start from a step that would hit target_points, biased by user's seconds if any
-        step = self._choose_nice_step_seconds(max(1, duration_s), target_points, user_secs)
+            # Start from the exact user cadence; cap handling below may widen it.
+            step = int(user_secs)
+        else:
+            # Start from a step that would hit target_points, biased by user's seconds if any.
+            step = self._choose_nice_step_seconds(max(1, duration_s), target_points, user_secs)
 
         # Guard against pathological bin counts (choose a sensible default ceiling)
         # Use the larger of 5×target or 200k as a sane ceiling; tune if needed
@@ -753,6 +754,7 @@ class HybridPandasModel(DatabaseModel):
 
         return step, capped, user_secs
 
+    # @ai(gpt-5, codex, refactor, 2026-03-02)
     def _normalize_timestep_mode(self, timestep: object) -> str:
         """
         Normalize UI timestep input into one of:
@@ -761,7 +763,7 @@ class HybridPandasModel(DatabaseModel):
         - "explicit": user provided concrete timestep value
         """
         if timestep is None:
-            return "auto"
+            return "none"
         if isinstance(timestep, str):
             value = timestep.strip().lower()
             if value == "" or value == "auto":
@@ -883,19 +885,30 @@ class HybridPandasModel(DatabaseModel):
         window_start, window_end = self._expand_range_for_lag(w0, w1)
         window_filters = self._filters.clone_with_range(window_start, window_end) if self._filters else DataFilters(features=[], start=window_start, end=window_end)
         cnt = self._count_rows(window_filters)
-        use_raw = (cnt <= self._small_threshold)
+        timestep_mode = self._normalize_timestep_mode(self._params.get("timestep"))
+        cap_count = cnt
+        if timestep_mode == "none":
+            feature_count = len(getattr(window_filters, "features", []) or [])
+            if feature_count > 1:
+                ts_count = self._count_unique_timestamps(window_filters)
+                if ts_count > 0:
+                    cap_count = ts_count
+        if timestep_mode == "none":
+            # Raw mode should preserve original timestamps unless the hard cap is exceeded.
+            use_raw = cap_count <= self._hard_cap
+        else:
+            use_raw = cnt <= self._small_threshold
 
         step = None
 
         # Resolve cadence depending on timestep mode.
-        timestep_mode = self._normalize_timestep_mode(self._params.get("timestep"))
         should_resolve = False
         if timestep_mode == "auto":
             should_resolve = True
         elif timestep_mode == "explicit":
             should_resolve = True
         else:  # none
-            should_resolve = cnt > self._hard_cap
+            should_resolve = cap_count > self._hard_cap
 
         if should_resolve:
             duration_s = max(1, int((w1 - w0).total_seconds()))
@@ -1027,7 +1040,15 @@ class HybridPandasModel(DatabaseModel):
                 if ts_count > 0:
                     cap_count = ts_count
 
-        use_raw = params.get("ignore_target_points", ignore_target_points) or (raw_count <= self._small_threshold)
+        user_timestep = params.get("timestep", timestep)
+        timestep_mode = self._normalize_timestep_mode(user_timestep)
+        use_raw = bool(params.get("ignore_target_points", ignore_target_points))
+        if not use_raw:
+            if timestep_mode == "none":
+                # In raw mode, feature cardinality can multiply row count; cap on timestamp rows.
+                use_raw = cap_count <= self._hard_cap
+            else:
+                use_raw = raw_count <= self._small_threshold
 
         tmin, tmax = self._span_of(merged_filters)
         duration_s = max(1, int((tmax - tmin).total_seconds())) if (tmin and tmax and tmax > tmin) else 1
@@ -1038,8 +1059,6 @@ class HybridPandasModel(DatabaseModel):
         # - auto: always resolve a timestep
         # - none: keep raw unless hard cap is exceeded
         # - explicit: use user timestep exactly
-        user_timestep = params.get("timestep", timestep)
-        timestep_mode = self._normalize_timestep_mode(user_timestep)
         self._current_cap = self._hard_cap if timestep_mode in ("none", "explicit") else self._soft_cap
 
         should_resolve = False
@@ -1600,6 +1619,7 @@ class HybridPandasModel(DatabaseModel):
                 return s
         return NICE_STEPS[-1]
 
+    # @ai(gpt-5, codex, refactor, 2026-03-02)
     def _postprocess_timeseries(
         self,
         df: pd.DataFrame,
@@ -1662,14 +1682,16 @@ class HybridPandasModel(DatabaseModel):
         else:
             d2 = d.set_index("t")[value_cols]
 
-        # fill
-        if fill in ("prev"):
-            d2 = d2.ffill().bfill()
-        elif fill in ("next"):
-            d2 = d2.bfill().ffill()
-        elif fill == "zero":
-            d2 = d2.fillna(0.0)
-        # "none" -> leave NaN
+        # Fill only when a timestep cadence exists.
+        # Raw mode (no cadence) must not synthesize values between irregular timestamps.
+        if chosen_freq is not None:
+            if fill in ("prev"):
+                d2 = d2.ffill().bfill()
+            elif fill in ("next"):
+                d2 = d2.bfill().ffill()
+            elif fill == "zero":
+                d2 = d2.fillna(0.0)
+            # "none" -> leave NaN
 
         # moving average (in seconds). "auto" means 5x resolved timestep.
         ma_value = moving_average
@@ -1807,6 +1829,7 @@ class HybridPandasModel(DatabaseModel):
                     out.add(pd.Timestamp(ts))
         return out
 
+    # @ai(gpt-5, codex, fix, 2026-03-02)
     def _filter_frame_by_group_ranges(
         self,
         frame: pd.DataFrame,
@@ -1840,8 +1863,30 @@ class HybridPandasModel(DatabaseModel):
             return out.iloc[0:0]
 
         ranges = ranges.sort_values(["start_ts", "end_ts"]).reset_index(drop=True)
-        start_values = ranges["start_ts"].to_numpy(dtype="datetime64[ns]")
-        end_values = ranges["end_ts"].to_numpy(dtype="datetime64[ns]")
+        if ranges.empty:
+            return out.iloc[0:0]
+
+        # Coalesce overlapping/adjacent ranges so membership checks remain correct.
+        merged_starts: list[pd.Timestamp] = []
+        merged_ends: list[pd.Timestamp] = []
+        current_start = pd.Timestamp(ranges.iloc[0]["start_ts"])
+        current_end = pd.Timestamp(ranges.iloc[0]["end_ts"])
+        for row in ranges.iloc[1:].itertuples(index=False):
+            row_start = pd.Timestamp(row.start_ts)
+            row_end = pd.Timestamp(row.end_ts)
+            if row_start <= current_end:
+                if row_end > current_end:
+                    current_end = row_end
+                continue
+            merged_starts.append(current_start)
+            merged_ends.append(current_end)
+            current_start = row_start
+            current_end = row_end
+        merged_starts.append(current_start)
+        merged_ends.append(current_end)
+
+        start_values = np.array(merged_starts, dtype="datetime64[ns]")
+        end_values = np.array(merged_ends, dtype="datetime64[ns]")
         t_values = out["t"].to_numpy(dtype="datetime64[ns]")
         idx = np.searchsorted(start_values, t_values, side="right") - 1
         keep = np.zeros(len(out), dtype=bool)

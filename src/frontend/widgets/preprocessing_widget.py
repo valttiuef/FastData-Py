@@ -171,6 +171,7 @@ class PreprocessingWidget(CollapsibleSection):
         self.agg_combo.currentIndexChanged.connect(
             lambda idx: self._emit_now("agg", self.agg_combo.itemData(idx))
         )
+        self._sync_timestep_dependent_controls()
 
     # ------------------------------------------------------------------
     def _make_label(self, text: str) -> "QLabel":
@@ -198,7 +199,14 @@ class PreprocessingWidget(CollapsibleSection):
             seconds = label_to_seconds(str(selected), TIMESTEP_OPTIONS)
             if seconds is not None:
                 self.timestep_edit.setText(str(seconds))
+        self._sync_timestep_dependent_controls()
         self._queue_emit("timestep", self.parameters().get("timestep"))
+
+    def _sync_timestep_dependent_controls(self) -> None:
+        selected = str(self.timestep_combo.currentData() or "").strip().lower()
+        is_none_timestep = selected == "none"
+        self.timestep_edit.setEnabled(not is_none_timestep)
+        self.fill_combo.setEnabled(not is_none_timestep)
 
     def _on_moving_average_combo_changed(self) -> None:
         """Handle moving average combo box selection - populate edit field with seconds."""
@@ -362,6 +370,7 @@ class PreprocessingWidget(CollapsibleSection):
 
         self._set_combo_value(self.fill_combo, params.get("fill"))
         self._set_combo_value(self.agg_combo, params.get("agg"))
+        self._sync_timestep_dependent_controls()
 
     def get_settings(self) -> dict[str, Any]:
         return self.parameters()

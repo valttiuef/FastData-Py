@@ -26,9 +26,8 @@ class RegressionViewModel(QObject):
     """Qt-friendly interface for regression experiments used by the tab UI."""
 
     database_changed = Signal(object)
-    run_requested = Signal()
     features_changed = Signal()
-    run_started = Signal()
+    run_started = Signal(object)
     run_progress = Signal(int)
     run_partial = Signal(object)
     run_finished = Signal(object)
@@ -70,10 +69,6 @@ class RegressionViewModel(QObject):
         return self._data_model
 
     # ------------------------------------------------------------------
-    def request_run(self) -> None:
-        """Notify listeners that a regression run has been requested."""
-        self.run_requested.emit()
-
     def notify_features_changed(self) -> None:
         """Notify listeners that feature selections have changed."""
         self.features_changed.emit()
@@ -711,7 +706,16 @@ class RegressionViewModel(QObject):
             toast_info("Starting regression experiments…", title="Regression", tab_key="regression")
         except Exception:
             logger.warning("Exception in start_regressions", exc_info=True)
-        self.run_started.emit()
+        reducer_list = list(reducers or ["none"])
+        if not reducer_list:
+            reducer_list = ["none"]
+        expected_runs = (
+            len(target_features)
+            * len(selectors)
+            * len(reducer_list)
+            * len(models)
+        )
+        self.run_started.emit(int(max(0, expected_runs)))
         self._handle_status_update("Training regression models...")
         set_progress(0)
         self._running = True

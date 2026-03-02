@@ -487,11 +487,6 @@ class SomSidebar(SidebarWidget):
         map_height = self._parse_dimension(self.map_height_edit.text())
 
         epochs = self.epochs_spin.value() or None
-        filters = self.data_selector.build_data_filters()
-        if filters is None:
-            self._log(tr("Unable to build filters for selected features."), level=logging.INFO)
-            return
-        preprocessing = self.data_selector.preprocessing_widget.parameters()
         data_frame = self.data_selector.fetch_base_dataframe_for_features(
             selected_payloads,
         )
@@ -500,16 +495,9 @@ class SomSidebar(SidebarWidget):
             return
 
         try:
-            self._view_model.train(
+            self._view_model.train_som(
                 [name for payload in selected_payloads if (name := self._feature_display_name(payload))],
                 feature_payloads=selected_payloads,
-                start=filters.start,
-                end=filters.end,
-                systems=filters.systems,
-                datasets=filters.datasets,
-                group_ids=filters.group_ids,
-                months=filters.months,
-                preprocessing=preprocessing,
                 map_shape=(map_width, map_height),
                 sigma=self.sigma_spin.value(),
                 learning_rate=self.lr_spin.value(),
