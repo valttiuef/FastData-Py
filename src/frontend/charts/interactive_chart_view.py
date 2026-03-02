@@ -29,8 +29,8 @@ class InteractiveChartView(QChartView):
         # Rendering and interaction baseline
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.setMouseTracking(True)  # get move events with no buttons
-        self.setRubberBand(QChartView.NoRubberBand)
-        self.setDragMode(QGraphicsView.NoDrag)
+        self.setRubberBand(QChartView.RubberBand.NoRubberBand)
+        self.setDragMode(QGraphicsView.DragMode.NoDrag)
 
         # ---- Zoom state (left button)
         self._rubber_active = False
@@ -181,7 +181,7 @@ class InteractiveChartView(QChartView):
     # Events
     # =========================
     def mousePressEvent(self, ev):
-        if ev.button() == Qt.RightButton:
+        if ev.button() == Qt.MouseButton.RightButton:
             # Begin pan
             min_ms, max_ms = self._get_x_axis_ms_range()
             y_min, y_max = None, None
@@ -214,17 +214,17 @@ class InteractiveChartView(QChartView):
                 self._pan_last_emit_min_ms = self._pan_start_min_ms
                 self._pan_last_emit_max_ms = self._pan_start_max_ms
                 self._pan_last_emit_pos_x = self._pan_start_pos.x()
-                self.setCursor(Qt.ClosedHandCursor)
+                self.setCursor(Qt.CursorShape.ClosedHandCursor)
                 QToolTip.hideText()
                 self._show_crosshair = False
                 self.viewport().update()
             ev.accept()
             return
 
-        if ev.button() == Qt.LeftButton:
+        if ev.button() == Qt.MouseButton.LeftButton:
             # Start rubber band immediately so QChartView tracks it
             try:
-                self.setRubberBand(QChartView.RectangleRubberBand)
+                self.setRubberBand(QChartView.RubberBand.RectangleRubberBand)
             except Exception:
                 logger.warning("Failed to enable rubber-band mode on left-button press.", exc_info=True)
             self._rubber_active = True
@@ -248,7 +248,7 @@ class InteractiveChartView(QChartView):
         pos = ev.position()
 
         # ----- PANNING (right button)
-        if ev.buttons() & Qt.RightButton and self._panning and self._pan_start_pos is not None:
+        if ev.buttons() & Qt.MouseButton.RightButton and self._panning and self._pan_start_pos is not None:
             try:
                 dx_px = pos.x() - self._pan_start_pos.x()
                 dy_px = pos.y() - self._pan_start_pos.y()
@@ -341,16 +341,16 @@ class InteractiveChartView(QChartView):
                 logger.warning("Failed while processing right-button pan move in interactive chart view.", exc_info=True)
 
         # ----- RUBBER-BAND (left button)
-        if ev.buttons() & Qt.LeftButton and self._rubber_active:
+        if ev.buttons() & Qt.MouseButton.LeftButton and self._rubber_active:
             if self._distance_sq_from_press(pos) >= (self._min_drag_px * self._min_drag_px):
                 self._drag_moved = True
-            self.setCursor(Qt.CrossCursor)
+            self.setCursor(Qt.CursorShape.CrossCursor)
             QToolTip.hideText()
             super().mouseMoveEvent(ev)
             return
 
         # ----- HOVER (no buttons): show crosshair + snapped tooltip
-        if not (ev.buttons() & (Qt.LeftButton | Qt.RightButton)):
+        if not (ev.buttons() & (Qt.MouseButton.LeftButton | Qt.MouseButton.RightButton)):
             self._last_mouse_pos = QPointF(pos.x(), pos.y())
             if self.chart().plotArea().contains(self._last_mouse_pos):
                 x_ms, y_val, screen_pt = self._snap_to_nearest_point(self._last_mouse_pos)
@@ -394,7 +394,7 @@ class InteractiveChartView(QChartView):
 
     def mouseReleaseEvent(self, ev):
         # ----- Finish panning
-        if ev.button() == Qt.RightButton and self._panning:
+        if ev.button() == Qt.MouseButton.RightButton and self._panning:
             # Apply one final pan update at release position so the committed
             # range matches where the drag ended (no small backward snap).
             try:
@@ -435,7 +435,7 @@ class InteractiveChartView(QChartView):
             self._pan_start_max_ms = None
             self._pan_start_y_min = None
             self._pan_start_y_max = None
-            self.setCursor(Qt.ArrowCursor)
+            self.setCursor(Qt.CursorShape.ArrowCursor)
 
             if self._pan_moved and self._pan_x_changed:
                 self._emit_axis_range()
@@ -451,9 +451,9 @@ class InteractiveChartView(QChartView):
         super().mouseReleaseEvent(ev)
 
         # ----- Finish rubber-band zoom
-        if ev.button() == Qt.LeftButton and self._rubber_active:
+        if ev.button() == Qt.MouseButton.LeftButton and self._rubber_active:
             try:
-                self.setRubberBand(QChartView.NoRubberBand)
+                self.setRubberBand(QChartView.RubberBand.NoRubberBand)
             except Exception:
                 logger.warning("Failed while completing left-button zoom release handling.", exc_info=True)
 
@@ -583,7 +583,7 @@ class InteractiveChartView(QChartView):
             ev.accept()
 
     def mouseDoubleClickEvent(self, ev):
-        if ev.button() == Qt.LeftButton:
+        if ev.button() == Qt.MouseButton.LeftButton:
             mods = ev.modifiers()
             try:
                 # Some event paths can miss keyboard modifiers on Windows;
@@ -666,4 +666,5 @@ class InteractiveChartView(QChartView):
             painter.drawEllipse(self._snap_screen_pt, r, r)
 
         painter.restore()
+
 

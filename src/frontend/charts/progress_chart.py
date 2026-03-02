@@ -23,13 +23,13 @@ class ProgressChart(BaseChart):
         self.axis_x = QValueAxis()
         self.axis_x.setLabelFormat("%d")
         self.axis_x.setTitleText("Run")
-        self.chart.addAxis(self.axis_x, Qt.AlignBottom)
+        self.chart.addAxis(self.axis_x, Qt.AlignmentFlag.AlignBottom)
         self.series.attachAxis(self.axis_x)
 
         self.axis_y = QValueAxis()
         self.axis_y.setLabelFormat("%.2f")
         self.axis_y.setTitleText("R² score")
-        self.chart.addAxis(self.axis_y, Qt.AlignLeft)
+        self.chart.addAxis(self.axis_y, Qt.AlignmentFlag.AlignLeft)
         self.series.attachAxis(self.axis_y)
 
         self.apply_current_theme()

@@ -429,13 +429,13 @@ def _make_collapsible_group(title: str, inner: QWidget) -> QWidget:
     toggle.setText(title)
     toggle.setCheckable(True)
     toggle.setChecked(False)
-    toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-    toggle.setArrowType(Qt.RightArrow)
+    toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+    toggle.setArrowType(Qt.ArrowType.RightArrow)
     toggle.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
     def _on_toggled(checked: bool):
         inner.setVisible(checked)
-        toggle.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)
+        toggle.setArrowType(Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow)
 
     toggle.toggled.connect(_on_toggled)
 
@@ -500,14 +500,14 @@ class ImportOptionsDialog(QDialog):
         self.file_label = QLabel(
             tr("Files selected: {count}  |  First: {name}").format(count=len(self.files), name=first_name)
         )
-        self.file_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.file_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         top.addWidget(self.file_label, 1)
 
         # Small icon-only refresh button (refresh preview using current settings)
         self._refresh_btn = QToolButton(self)
-        self._refresh_btn.setToolButtonStyle(Qt.ToolButtonIconOnly)
+        self._refresh_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         try:
-            icon = self.style().standardIcon(QStyle.SP_BrowserReload)
+            icon = self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserStop)
         except Exception:
             icon = None
         if icon:
@@ -1015,4 +1015,5 @@ class ImportOptionsDialog(QDialog):
         if request_id != self._preview_request_id:
             return
         self.preview_table.set_dataframe(pd.DataFrame([{"Preview error": str(message)}]), include_index=False)
+
 

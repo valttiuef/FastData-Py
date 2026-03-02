@@ -106,12 +106,12 @@ class TimeSeriesChart(QFrame):
         self.axis_x = QDateTimeAxis()
         self.axis_x.setFormat("yyyy-MM-dd HH:mm")
         self.axis_x.setTitleText("Time")
-        self.chart.addAxis(self.axis_x, Qt.AlignBottom)
+        self.chart.addAxis(self.axis_x, Qt.AlignmentFlag.AlignBottom)
 
         self.axis_y = QValueAxis()
         self.axis_y.setLabelFormat("%.3f")
         self.axis_y.setTitleText("Value")
-        self.chart.addAxis(self.axis_y, Qt.AlignLeft)
+        self.chart.addAxis(self.axis_y, Qt.AlignmentFlag.AlignLeft)
 
         self.view = InteractiveChartView(self.chart)
         self.view._owner = self  # best-effort
@@ -775,7 +775,7 @@ class TimeSeriesChart(QFrame):
         self.setPalette(frame_palette)
         self.setAutoFillBackground(True)
         try:
-            self.setAttribute(Qt.WA_StyledBackground, True)
+            self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         except Exception:
             logger.warning("Failed to set styled-background attribute while applying time-series theme.", exc_info=True)
 
@@ -1037,3 +1037,4 @@ class TimeSeriesChart(QFrame):
             self.axis_x.setFormat(fmt)
         except Exception:
             logger.warning("Failed to apply X-axis datetime label format for current timespan.", exc_info=True)
+

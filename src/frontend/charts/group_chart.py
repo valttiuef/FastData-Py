@@ -54,7 +54,7 @@ class _ChartView(QChartView):
     def __init__(self, chart: QChart, parent=None):
         super().__init__(chart, parent)
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
-        self.setRubberBand(QChartView.NoRubberBand)
+        self.setRubberBand(QChartView.RubberBand.NoRubberBand)
 
     def wheelEvent(self, ev):
         ev.accept()
@@ -107,8 +107,8 @@ class GroupBarChart(QFrame):
         self.axis_y.setLabelFormat("%.3f")
         self.axis_x.setTitleText("")
         self.axis_y.setTitleText(y_label)
-        self.chart.addAxis(self.axis_x, Qt.AlignBottom)
-        self.chart.addAxis(self.axis_y, Qt.AlignLeft)
+        self.chart.addAxis(self.axis_x, Qt.AlignmentFlag.AlignBottom)
+        self.chart.addAxis(self.axis_y, Qt.AlignmentFlag.AlignLeft)
         self.series.attachAxis(self.axis_x)
         self.series.attachAxis(self.axis_y)
 
@@ -119,7 +119,7 @@ class GroupBarChart(QFrame):
         self._native_mouse_double_click_event = self.view.mouseDoubleClickEvent
         try:
             self.view.setMouseTracking(True)
-            self.view.setAttribute(Qt.WA_Hover, True)
+            self.view.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         except Exception:
             logger.warning("Failed to enable hover tracking for group chart view.", exc_info=True)
 
@@ -177,18 +177,18 @@ class GroupBarChart(QFrame):
             logger.warning("Failed to update title brush while applying group chart theme.", exc_info=True)
 
         frame_palette = self.palette()
-        frame_palette.setColor(QPalette.Window, container_color)
-        frame_palette.setColor(QPalette.Base, container_color)
+        frame_palette.setColor(QPalette.ColorRole.Window, container_color)
+        frame_palette.setColor(QPalette.ColorRole.Base, container_color)
         self.setPalette(frame_palette)
         self.setAutoFillBackground(True)
         try:
-            self.setAttribute(Qt.WA_StyledBackground, True)
+            self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         except Exception:
             logger.warning("Failed to set styled-background attribute while applying group chart theme.", exc_info=True)
 
         view_palette = self.view.palette()
-        view_palette.setColor(QPalette.Window, container_color)
-        view_palette.setColor(QPalette.Base, container_color)
+        view_palette.setColor(QPalette.ColorRole.Window, container_color)
+        view_palette.setColor(QPalette.ColorRole.Base, container_color)
         self.view.setPalette(view_palette)
         self.view.setAutoFillBackground(True)
         try:
@@ -197,8 +197,8 @@ class GroupBarChart(QFrame):
             logger.warning("Failed to set view background brush while applying group chart theme.", exc_info=True)
 
         viewport_palette = self.view.viewport().palette()
-        viewport_palette.setColor(QPalette.Window, container_color)
-        viewport_palette.setColor(QPalette.Base, container_color)
+        viewport_palette.setColor(QPalette.ColorRole.Window, container_color)
+        viewport_palette.setColor(QPalette.ColorRole.Base, container_color)
         self.view.viewport().setPalette(viewport_palette)
         self.view.viewport().setAutoFillBackground(True)
 
@@ -514,7 +514,7 @@ class GroupBarChart(QFrame):
             if not status:
                 QToolTip.hideText()
                 try:
-                    self.view.setCursor(Qt.ArrowCursor)
+                    self.view.setCursor(Qt.CursorShape.ArrowCursor)
                 except Exception:
                     logger.warning("Failed to display tooltip while handling group-bar hover.", exc_info=True)
                 return
@@ -525,7 +525,7 @@ class GroupBarChart(QFrame):
             category = categories[index]
             value = values[index] if index < len(values) else 0.0
             try:
-                self.view.setCursor(Qt.PointingHandCursor)
+                self.view.setCursor(Qt.CursorShape.PointingHandCursor)
             except Exception:
                 logger.warning("Failed to emit bar-click signal for group chart.", exc_info=True)
             extra = self._tooltip_overrides.get((str(series_key), str(category)), "")
@@ -548,7 +548,7 @@ class GroupBarChart(QFrame):
     def _on_set_hovered(self, status: bool, index: int):
         """Handle bar hover events."""
         self._hover_idx = index if status else None
-        self.view.setCursor(Qt.PointingHandCursor if status else Qt.ArrowCursor)
+        self.view.setCursor(Qt.CursorShape.PointingHandCursor if status else Qt.CursorShape.ArrowCursor)
         
         if not status:
             QToolTip.hideText()
@@ -584,11 +584,12 @@ class GroupBarChart(QFrame):
     def _mouse_press_wrapper(self, base_handler):
         """Wrap mouse press to handle clicks on bars."""
         def handler(ev):
-            if ev.button() == Qt.LeftButton and self._hover_idx is not None:
+            if ev.button() == Qt.MouseButton.LeftButton and self._hover_idx is not None:
                 self._on_bar_clicked(self._hover_idx)
             return base_handler(ev)
         return handler
 
 
 __all__ = ["GroupBarChart"]
+
 

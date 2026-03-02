@@ -50,12 +50,12 @@ class _Toast(QWidget):
 
         # Frameless, non-blocking, stays on top of your app
         self.setWindowFlags(
-            Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.BypassWindowManagerHint
+            Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.BypassWindowManagerHint
         )
-        self.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.setAttribute(Qt.WA_DeleteOnClose, True)
-        self.setAttribute(Qt.WA_ShowWithoutActivating, True)
-        self.setFocusPolicy(Qt.NoFocus)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         if self._on_click is not None:
             self.setCursor(Qt.CursorShape.PointingHandCursor)
 
@@ -386,3 +386,4 @@ class ToastManager:
                 y -= (h + self.gap)
             except RuntimeError:
                 continue
+

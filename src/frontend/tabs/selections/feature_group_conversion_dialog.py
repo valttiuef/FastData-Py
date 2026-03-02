@@ -84,7 +84,7 @@ class FeatureGroupConversionDialog(QDialog):
             self.rename_table.horizontalHeader().setStretchLastSection(True)
             for idx, value in enumerate(self._unique_values):
                 original_item = QTableWidgetItem(value)
-                original_item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
+                original_item.setFlags(Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled)
                 renamed_item = QTableWidgetItem(value)
                 self.rename_table.setItem(idx, 0, original_item)
                 self.rename_table.setItem(idx, 1, renamed_item)
@@ -129,3 +129,4 @@ class FeatureGroupConversionDialog(QDialog):
             "save_as_timeframes": bool(self.save_as_timeframes_checkbox.isChecked()),
             "value_name_map": name_map,
         }
+

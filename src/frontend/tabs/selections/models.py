@@ -58,8 +58,8 @@ class FeatureSelectionTableModel(QAbstractTableModel):
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: N802
         return 0 if parent.isValid() else len(self.COLUMN_DEFINITIONS)
 
-    def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.DisplayRole):  # noqa: N802
-        if role != Qt.DisplayRole:
+    def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole):  # noqa: N802
+        if role != Qt.ItemDataRole.DisplayRole:
             return None
         if orientation == Qt.Orientation.Horizontal:
             try:
@@ -70,47 +70,47 @@ class FeatureSelectionTableModel(QAbstractTableModel):
 
     def flags(self, index: QModelIndex):  # noqa: N802
         if not index.isValid():
-            return Qt.NoItemFlags
+            return Qt.ItemFlag.NoItemFlags
         key = self.COLUMN_DEFINITIONS[index.column()][0]
-        base = Qt.ItemIsSelectable | Qt.ItemIsEnabled
+        base = Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled
         if key == "feature_id":
             return base
         if key in {"selected", "filter_global"}:
-            return base | Qt.ItemIsUserCheckable | Qt.ItemIsEditable
-        return base | Qt.ItemIsEditable
+            return base | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEditable
+        return base | Qt.ItemFlag.ItemIsEditable
 
-    def data(self, index: QModelIndex, role: int = Qt.DisplayRole):  # noqa: N802
+    def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole):  # noqa: N802
         if not index.isValid():
             return None
         row = self._rows[index.row()]
         key = self.COLUMN_DEFINITIONS[index.column()][0]
         value = row.get(key)
         if key in {"selected", "filter_global"}:
-            if role == Qt.CheckStateRole:
+            if role == Qt.ItemDataRole.CheckStateRole:
                 return Qt.CheckState.Checked if bool(value) else Qt.CheckState.Unchecked
-            if role in (Qt.DisplayRole, Qt.EditRole):
+            if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole):
                 return "Enabled" if bool(value) else "Disabled"
             return None
         if key == "feature_id":
-            if role in (Qt.DisplayRole, Qt.EditRole):
+            if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole):
                 return "" if value in (None, "") else str(value)
             return None
         if key == "tags":
             tags = ", ".join(row.get("tags") or [])
-            if role in (Qt.DisplayRole, Qt.EditRole):
+            if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole):
                 return tags
             return None
-        if role == Qt.DisplayRole:
+        if role == Qt.ItemDataRole.DisplayRole:
             if value in (None, ""):
                 return ""
             return str(value)
-        if role == Qt.EditRole:
+        if role == Qt.ItemDataRole.EditRole:
             if value is None:
                 return ""
             return str(value) if isinstance(value, (int, float)) else value
         return None
 
-    def setData(self, index: QModelIndex, value: Any, role: int = Qt.EditRole):  # noqa: N802
+    def setData(self, index: QModelIndex, value: Any, role: int = Qt.ItemDataRole.EditRole):  # noqa: N802
         if not index.isValid():
             return False
         row = self._rows[index.row()]
@@ -118,7 +118,7 @@ class FeatureSelectionTableModel(QAbstractTableModel):
         col_idx = index.column()
         key = self.COLUMN_DEFINITIONS[index.column()][0]
         if key in {"selected", "filter_global"}:
-            if role == Qt.CheckStateRole:
+            if role == Qt.ItemDataRole.CheckStateRole:
                 try:
                     state = Qt.CheckState(value)
                 except Exception:
@@ -126,16 +126,16 @@ class FeatureSelectionTableModel(QAbstractTableModel):
                 row[key] = state == Qt.CheckState.Checked
                 if 0 <= row_idx < len(self._df.index):
                     self._df.iat[row_idx, col_idx] = row.get(key)
-                self.dataChanged.emit(index, index, [Qt.CheckStateRole, Qt.DisplayRole])
+                self.dataChanged.emit(index, index, [Qt.ItemDataRole.CheckStateRole, Qt.ItemDataRole.DisplayRole])
                 return True
-            if role == Qt.EditRole:
+            if role == Qt.ItemDataRole.EditRole:
                 row[key] = bool(value)
                 if 0 <= row_idx < len(self._df.index):
                     self._df.iat[row_idx, col_idx] = row.get(key)
-                self.dataChanged.emit(index, index, [Qt.CheckStateRole, Qt.DisplayRole])
+                self.dataChanged.emit(index, index, [Qt.ItemDataRole.CheckStateRole, Qt.ItemDataRole.DisplayRole])
                 return True
             return False
-        if role != Qt.EditRole:
+        if role != Qt.ItemDataRole.EditRole:
             return False
         if key in {"filter_min", "filter_max"}:
             text = "" if value is None else str(value).strip()
@@ -155,13 +155,13 @@ class FeatureSelectionTableModel(QAbstractTableModel):
             row["tags"] = self._coerce_tags(value)
             if 0 <= row_idx < len(self._df.index):
                 self._df.iat[row_idx, col_idx] = row.get("tags")
-            self.dataChanged.emit(index, index, [Qt.DisplayRole, Qt.EditRole])
+            self.dataChanged.emit(index, index, [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole])
             return True
         else:
             row[key] = "" if value is None else str(value)
         if 0 <= row_idx < len(self._df.index):
             self._df.iat[row_idx, col_idx] = row.get(key)
-        self.dataChanged.emit(index, index, [Qt.DisplayRole, Qt.EditRole])
+        self.dataChanged.emit(index, index, [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole])
         return True
 
     # --- Data manipulation ----------------------------------------------
@@ -205,7 +205,7 @@ class FeatureSelectionTableModel(QAbstractTableModel):
             self.dataChanged.emit(
                 self.index(0, 0),
                 self.index(new_count - 1, self.columnCount() - 1),
-                [Qt.DisplayRole, Qt.EditRole, Qt.CheckStateRole],
+                [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole, Qt.ItemDataRole.CheckStateRole],
             )
 
     def apply_selection(self, payload: Optional[SelectionSettingsPayload], *, select_all_by_default: bool = False) -> None:
@@ -417,7 +417,7 @@ class FeatureSelectionTableModel(QAbstractTableModel):
                     if 0 <= row_index < len(self._df.index):
                         self._df.iat[row_index, selected_col] = bool(enabled)
                     idx = self.index(row_index, selected_col)
-                    self.dataChanged.emit(idx, idx, [Qt.CheckStateRole, Qt.DisplayRole])
+                    self.dataChanged.emit(idx, idx, [Qt.ItemDataRole.CheckStateRole, Qt.ItemDataRole.DisplayRole])
 
     def _normalize_value(self, value: Any) -> Any:
         if value is None:
@@ -487,3 +487,4 @@ class FeatureSelectionTableModel(QAbstractTableModel):
 
 __all__ = ["FeatureSelectionTableModel"]
 logger = logging.getLogger(__name__)
+

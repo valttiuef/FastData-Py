@@ -152,7 +152,7 @@ class LogWindow(QWidget):
         cursor.movePosition(QTextCursor.MoveOperation.End)
 
         fmt = QTextCharFormat()
-        default_color = self._view.palette().color(QPalette.Text)
+        default_color = self._view.palette().color(QPalette.ColorRole.Text)
         fmt.setForeground(default_color)
         color = self._color_for_level(event.level)
         if color is not None:

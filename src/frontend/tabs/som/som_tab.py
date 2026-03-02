@@ -194,7 +194,7 @@ class SomTab(TabWidget):
             return
         if tooltip:
             try:
-                widget.setAttribute(Qt.WA_AlwaysShowToolTips, True)
+                widget.setAttribute(Qt.WidgetAttribute.WA_AlwaysShowToolTips, True)
             except Exception:
                 logger.warning("Exception in _register_training_widget", exc_info=True)
         self._training_widgets.append((widget, tooltip))
@@ -2024,4 +2024,5 @@ class SomTab(TabWidget):
     @staticmethod
     def _empty_timeline_table_dataframe() -> pd.DataFrame:
         return pd.DataFrame(columns=["index", "cluster", "bmu_x", "bmu_y", "bmu", "distance"])
+
 

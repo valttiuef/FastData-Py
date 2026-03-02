@@ -80,7 +80,7 @@ class FeaturesTableModel(QAbstractTableModel):
             self.dataChanged.emit(
                 self.index(0, 0),
                 self.index(new_shape[0] - 1, new_shape[1] - 1),
-                [Qt.DisplayRole, Qt.EditRole],
+                [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole],
             )
 
     def _normalize_for_table(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -115,17 +115,17 @@ class FeaturesTableModel(QAbstractTableModel):
             return 0
         return int(self._df.shape[1])
 
-    def data(self, index, role=Qt.DisplayRole):  # noqa: N802
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):  # noqa: N802
         if not index.isValid() or self._df is None:
             return None
 
-        if role not in (Qt.DisplayRole, Qt.EditRole):
+        if role not in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole):
             return None
 
         r, c = int(index.row()), int(index.column())
 
         # Display cache helps a lot during repaints and sort-triggered redraws
-        if role == Qt.DisplayRole:
+        if role == Qt.ItemDataRole.DisplayRole:
             hit = self._disp_cache.get((r, c))
             if hit is not None:
                 return hit
@@ -140,13 +140,13 @@ class FeaturesTableModel(QAbstractTableModel):
             as_int = self._coerce_int_display(val)
             if as_int is not None:
                 out = str(as_int)
-                if role == Qt.DisplayRole and len(self._disp_cache) < 200_000:
+                if role == Qt.ItemDataRole.DisplayRole and len(self._disp_cache) < 200_000:
                     self._disp_cache[(r, c)] = out
                 return out
 
         if isinstance(val, (list, tuple, set)) and not val:
             out = ""
-            if role == Qt.DisplayRole and len(self._disp_cache) < 200_000:
+            if role == Qt.ItemDataRole.DisplayRole and len(self._disp_cache) < 200_000:
                 self._disp_cache[(r, c)] = out
             return out
 
@@ -155,7 +155,7 @@ class FeaturesTableModel(QAbstractTableModel):
         except Exception:
             out = str(val)
 
-        if role == Qt.DisplayRole and len(self._disp_cache) < 200_000:
+        if role == Qt.ItemDataRole.DisplayRole and len(self._disp_cache) < 200_000:
             self._disp_cache[(r, c)] = out
         return out
 
@@ -190,8 +190,8 @@ class FeaturesTableModel(QAbstractTableModel):
         except Exception:
             return None
 
-    def headerData(self, section, orientation, role=Qt.DisplayRole):  # noqa: N802
-        if role == Qt.DisplayRole:
+    def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):  # noqa: N802
+        if role == Qt.ItemDataRole.DisplayRole:
             if orientation == Qt.Orientation.Horizontal:
                 try:
                     key = str(self._df.columns[section])

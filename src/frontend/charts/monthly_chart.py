@@ -238,7 +238,7 @@ class MonthlyBarChart(GroupBarChart):
         self._multi_category_bounds = {}
         self._multi_current_agg = None
         try:
-            self.view.setCursor(Qt.ArrowCursor)
+            self.view.setCursor(Qt.CursorShape.ArrowCursor)
         except Exception:
             logger.warning("Failed to reset cursor while clearing monthly chart.", exc_info=True)
         try:
@@ -592,7 +592,7 @@ class MonthlyBarChart(GroupBarChart):
         def handler(status: bool, index: int):
             if not status:
                 try:
-                    self.view.setCursor(Qt.ArrowCursor)
+                    self.view.setCursor(Qt.CursorShape.ArrowCursor)
                 except Exception:
                     logger.warning("Failed to reset cursor while handling multi-bar hover leave.", exc_info=True)
                 QToolTip.hideText()
@@ -602,7 +602,7 @@ class MonthlyBarChart(GroupBarChart):
             category = self._multi_categories[index]
             value = values[index] if index < len(values) else 0.0
             try:
-                self.view.setCursor(Qt.PointingHandCursor)
+                self.view.setCursor(Qt.CursorShape.PointingHandCursor)
             except Exception:
                 logger.warning("Failed to display tooltip while handling multi-bar hover.", exc_info=True)
             try:
@@ -685,7 +685,7 @@ class MonthlyBarChart(GroupBarChart):
         if self._multi_mode:
             return
         self._hover_idx = idx
-        self.view.setCursor(Qt.PointingHandCursor if idx is not None else Qt.ArrowCursor)
+        self.view.setCursor(Qt.CursorShape.PointingHandCursor if idx is not None else Qt.CursorShape.ArrowCursor)
         self._update_highlight()
         if idx is None:
             QToolTip.hideText(); return
@@ -703,7 +703,7 @@ class MonthlyBarChart(GroupBarChart):
             if self._multi_mode:
                 return base_handler(ev)
             # Right click steps back a single drill level
-            if ev.button() == Qt.RightButton:
+            if ev.button() == Qt.MouseButton.RightButton:
                 try:
                     self._drill_up()
                 except Exception:
@@ -711,7 +711,7 @@ class MonthlyBarChart(GroupBarChart):
                 return base_handler(ev)
 
             # Left click -> drill down if hovered
-            if ev.button() == Qt.LeftButton:
+            if ev.button() == Qt.MouseButton.LeftButton:
                 try:
                     if self._hover_idx is not None:
                         self._pending_click_index = int(self._hover_idx)
@@ -730,7 +730,7 @@ class MonthlyBarChart(GroupBarChart):
 
     def _mouse_double_click_wrapper(self, base_handler):
         def handler(ev):
-            if ev.button() == Qt.LeftButton:
+            if ev.button() == Qt.MouseButton.LeftButton:
                 self._pending_click_index = None
                 if self._single_click_timer.isActive():
                     self._single_click_timer.stop()
@@ -902,3 +902,4 @@ class MonthlyBarChart(GroupBarChart):
         self._hover_item.setVisible(True)
 
     # baseline removed; hover overlay only
+
