@@ -1,10 +1,10 @@
-
 from __future__ import annotations
 from typing import Callable, Iterable, List, Tuple, Any, Optional
 
 from PySide6.QtCore import Signal, Qt, QEvent, QTimer
-from PySide6.QtGui import QStandardItemModel, QStandardItem
+from PySide6.QtGui import QStandardItemModel, QStandardItem, QCursor
 from PySide6.QtWidgets import QComboBox, QListView, QAbstractItemView, QMenu
+
 from ..localization import tr
 import logging
 
@@ -31,17 +31,25 @@ class MultiCheckCombo(QComboBox):
     """
     selection_changed = Signal()
     context_action_triggered = Signal(str, object)
+
     _ACTION_ROLE = Qt.ItemDataRole.UserRole + 1
     _ACTION_TOGGLE_ALL = "__action_toggle_all__"
 
     def __init__(self, parent=None, placeholder: str = "All", summary_max: int = 4):
         super().__init__(parent)
+
         self._placeholder = tr(placeholder) if placeholder else tr("All")
         self._summary_max = max(1, int(summary_max))
         self._internal_change = False
         self._summary_formatter: Optional[Callable[[List[str], int, int], str]] = None
         self._max_checked: Optional[int] = None
         self._context_actions: list[tuple[str, str]] = []
+
+        # --- popup toggle robustness ---
+        self._popup_open = False                 # our own truth
+        self._combo_press_active = False
+        self._press_intent_toggle = False        # whether we want to toggle on release
+        self._suppress_next_open = False         # set when popup closed due to clicking the combo
 
         # Model
         model = QStandardItemModel(self)
@@ -55,27 +63,24 @@ class MultiCheckCombo(QComboBox):
         view.setUniformItemSizes(True)
         self.setView(view)
 
-        # IMPORTANT: consume clicks on the viewport so the delegate won't toggle a second time
+        # Consume clicks on viewport to toggle check state ourselves
         self.view().viewport().installEventFilter(self)
 
-        # Use read-only line edit for display; open popup on any click
+        # Read-only line edit for display
         self.setEditable(True)
-        line_edit = self.lineEdit()
-        if line_edit is not None:
-            line_edit.setReadOnly(True)
-            line_edit.setPlaceholderText(self._placeholder)
+        le = self.lineEdit()
+        if le is not None:
+            le.setReadOnly(True)
+            le.setPlaceholderText(self._placeholder)
+
         self.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)  # type: ignore
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)  # type: ignore
         self.setModelColumn(0)
 
-        # Track mouse press to prevent instant close after we open the popup.
-        self._block_hide_while_pressed = False
-
-        # Open popup when clicking anywhere on the combo or line edit
+        # Open/close popup when clicking anywhere on combo or line edit
         self.installEventFilter(self)
-        line_edit = self.lineEdit()
-        if line_edit is not None:
-            line_edit.installEventFilter(self)
+        if le is not None:
+            le.installEventFilter(self)
 
         self._refresh_summary()
 
@@ -89,16 +94,11 @@ class MultiCheckCombo(QComboBox):
         self._refresh_summary()
 
     def set_summary_formatter(self, formatter: Callable[[List[str], int, int], str]):
-        """formatter(labels:list[str], checked:int, total:int) -> str"""
         self._summary_formatter = formatter
         self._refresh_summary()
 
     def set_max_checked(self, maximum: Optional[int]):
-        """Limit how many items can be checked simultaneously (``None`` disables the limit)."""
-        if maximum is None:
-            self._max_checked = None
-        else:
-            self._max_checked = max(1, int(maximum))
+        self._max_checked = None if maximum is None else max(1, int(maximum))
         self._enforce_max_checked()
 
     def max_checked(self) -> Optional[int]:
@@ -120,20 +120,21 @@ class MultiCheckCombo(QComboBox):
     def set_items(self, items: Iterable[Tuple[str, Any]], check_all: bool = False):
         m: QStandardItemModel = self.model()  # type: ignore[assignment]
         self._internal_change = True
-        
-        # Hide popup before modifying model to avoid visual glitches
-        was_visible = self.view().isVisible()
-        if was_visible:
+
+        if self._popup_open:
             self.hidePopup()
-        
+
         try:
             m.blockSignals(True)
             m.clear()
             self._append_action_items(m)
             for label, value in items:
                 it = QStandardItem(str(label))
-                # Make sure items are selectable (for keyboard focus) and user-checkable
-                it.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsUserCheckable)  # type: ignore
+                it.setFlags(
+                    Qt.ItemFlag.ItemIsEnabled
+                    | Qt.ItemFlag.ItemIsSelectable
+                    | Qt.ItemFlag.ItemIsUserCheckable
+                )  # type: ignore
                 it.setCheckable(True)
                 it.setCheckState(Qt.CheckState.Checked if check_all else Qt.CheckState.Unchecked)  # type: ignore
                 it.setData(value, Qt.ItemDataRole.UserRole)
@@ -141,14 +142,16 @@ class MultiCheckCombo(QComboBox):
         finally:
             m.blockSignals(False)
             self._internal_change = False
+
         self._enforce_max_checked()
         self._refresh_summary()
         self._clear_current_index(self.lineEdit().text() if self.lineEdit() is not None else None)
-        # Refresh the view to ensure it displays the updated items
+
         try:
             self.view().reset()
         except Exception:
             logger.warning("Exception in set_items", exc_info=True)
+
         if not self.signalsBlocked():
             self.selection_changed.emit()
 
@@ -169,18 +172,18 @@ class MultiCheckCombo(QComboBox):
             m.blockSignals(True)
             for row in range(m.rowCount()):
                 it = m.item(row)
-                if not it:
-                    continue
-                if self._is_action_item(it):
+                if not it or self._is_action_item(it):
                     continue
                 val = it.data(Qt.ItemDataRole.UserRole)
                 it.setCheckState(Qt.CheckState.Checked if val in vs else Qt.CheckState.Unchecked)  # type: ignore
         finally:
             m.blockSignals(False)
             self._internal_change = False
+
         self._enforce_max_checked()
         self._refresh_summary()
         self._clear_current_index(self.lineEdit().text() if self.lineEdit() is not None else None)
+
         if not self.signalsBlocked():
             self.selection_changed.emit()
 
@@ -188,7 +191,6 @@ class MultiCheckCombo(QComboBox):
         self.set_selected_values([])
 
     def set_context_actions(self, actions: Iterable[Tuple[str, str]]) -> None:
-        """Configure right-click context actions for real data rows in the popup."""
         out: list[tuple[str, str]] = []
         for key, label in actions or []:
             action_key = str(key or "").strip()
@@ -197,16 +199,17 @@ class MultiCheckCombo(QComboBox):
                 out.append((action_key, action_label))
         self._context_actions = out
 
+    # ---------- events ----------
     def eventFilter(self, obj, ev):
         try:
-            event_type = ev.type()
+            et = ev.type()
         except Exception:
             return super().eventFilter(obj, ev)
 
-        # 1) Toggle items by consuming viewport mouse events
+        # 1) popup viewport: toggle check state ourselves
         if obj is self.view().viewport():
-            if event_type in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease, QEvent.Type.MouseButtonDblClick):  # type: ignore
-                if event_type == QEvent.Type.MouseButtonPress:  # type: ignore
+            if et in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease, QEvent.Type.MouseButtonDblClick):  # type: ignore
+                if et == QEvent.Type.MouseButtonPress:  # type: ignore
                     idx = self.view().indexAt(ev.pos())
                     if idx.isValid():
                         m: QStandardItemModel = self.model()  # type: ignore[assignment]
@@ -221,23 +224,80 @@ class MultiCheckCombo(QComboBox):
                                 return True
                             if self._handle_action_item(it):
                                 return True
-                            it.setCheckState(Qt.CheckState.Unchecked if it.checkState() == Qt.CheckState.Checked else Qt.CheckState.Checked)  # type: ignore
+                            it.setCheckState(
+                                Qt.CheckState.Unchecked
+                                if it.checkState() == Qt.CheckState.Checked
+                                else Qt.CheckState.Checked
+                            )  # type: ignore
                 return True
             return False
 
-        # 2) Open popup on click anywhere on the combobox or line edit
+        # 2) combo / lineEdit: deterministic toggle
         if obj is self or obj is self.lineEdit():
-            if event_type == QEvent.Type.MouseButtonPress:  # type: ignore
-                if not self.view().isVisible():
-                    self._block_hide_while_pressed = True
-                    # Keep the popup open and briefly block hide from the same press
-                    # Clear the block after a short delay so subsequent clicks can close it
-                    self.showPopup()
-                    QTimer.singleShot(200, self._clear_block_hide_while_pressed)
+            if et == QEvent.Type.MouseButtonPress:  # type: ignore
+                if getattr(ev, "button", lambda: None)() == Qt.MouseButton.LeftButton:
+                    self._combo_press_active = True
+
+                    # If the popup just closed because user clicked the combo, do NOT reopen.
+                    if self._suppress_next_open:
+                        self._press_intent_toggle = False
+                        return True
+
+                    # Decide intent based on our flag (NOT isVisible()).
+                    self._press_intent_toggle = True
+                    return True
+                return True
+
+            if et == QEvent.Type.MouseButtonRelease:  # type: ignore
+                if getattr(ev, "button", lambda: None)() == Qt.MouseButton.LeftButton:
+                    was_press = self._combo_press_active
+                    self._combo_press_active = False
+
+                    # Clear suppression after the click cycle finishes.
+                    if self._suppress_next_open:
+                        self._suppress_next_open = False
+                        return True
+
+                    if was_press and self._press_intent_toggle:
+                        if self._popup_open:
+                            self.hidePopup()
+                        else:
+                            QTimer.singleShot(0, self.showPopup)
+                    return True
+
+                self._combo_press_active = False
+                return True
+
+            if et == QEvent.Type.MouseButtonDblClick:  # type: ignore
                 return True
 
         return super().eventFilter(obj, ev)
 
+    def showPopup(self):
+        self.view().setMinimumWidth(max(self.view().sizeHintForColumn(0) + 24, self.width()))
+        super().showPopup()
+        self._popup_open = True
+
+    def hidePopup(self):
+        # If the cursor is over the combo at the moment the popup closes,
+        # it was very likely closed by clicking the combo again. Suppress reopening.
+        try:
+            over_combo = self.rect().contains(self.mapFromGlobal(QCursor.pos()))
+        except Exception:
+            over_combo = False
+
+        super().hidePopup()
+        self._popup_open = False
+
+        if over_combo:
+            self._suppress_next_open = True
+            # also auto-clear in case some weird path never gets the release
+            QTimer.singleShot(250, self._clear_suppress_next_open)
+
+    def _clear_suppress_next_open(self):
+        self._suppress_next_open = False
+
+    # ---------- context menu ----------
     def _show_context_menu_for_item(self, global_pos, item: QStandardItem) -> None:
         if item is None or self._is_action_item(item) or not self._context_actions:
             return
@@ -251,25 +311,10 @@ class MultiCheckCombo(QComboBox):
         action_key = str(chosen.data() or "").strip()
         if not action_key:
             return
-        payload = {
-            "value": item.data(Qt.ItemDataRole.UserRole),
-            "label": item.text(),
-        }
+        payload = {"value": item.data(Qt.ItemDataRole.UserRole), "label": item.text()}
         self.context_action_triggered.emit(action_key, payload)
 
-    def showPopup(self):
-        self.view().setMinimumWidth(max(self.view().sizeHintForColumn(0) + 24, self.width()))
-        super().showPopup()
-
-    def hidePopup(self):
-        if self._block_hide_while_pressed:
-            return
-        super().hidePopup()
-
-    def _clear_block_hide_while_pressed(self):
-        """Clear the temporary block flag after a short delay."""
-        self._block_hide_while_pressed = False
-
+    # ---------- model changes ----------
     def _on_item_changed(self, it: QStandardItem):
         if self._internal_change or it is None:
             return
@@ -283,15 +328,18 @@ class MultiCheckCombo(QComboBox):
             return
         maximum = max(1, int(self._max_checked))
         m: QStandardItemModel = self.model()  # type: ignore[assignment]
+
         checked_items: list[QStandardItem] = []
         for row in range(m.rowCount()):
             item = m.item(row)
             if item is None or self._is_action_item(item):
                 continue
-            if item and item.checkState() == Qt.CheckState.Checked:  # type: ignore
+            if item.checkState() == Qt.CheckState.Checked:  # type: ignore
                 checked_items.append(item)
+
         if len(checked_items) <= maximum:
             return
+
         keep: list[QStandardItem] = []
         if prefer is not None and prefer in checked_items:
             keep.append(prefer)
@@ -301,6 +349,7 @@ class MultiCheckCombo(QComboBox):
             keep.append(item)
             if len(keep) >= maximum:
                 break
+
         self._internal_change = True
         try:
             m.blockSignals(True)
@@ -311,6 +360,7 @@ class MultiCheckCombo(QComboBox):
             m.blockSignals(False)
             self._internal_change = False
 
+    # ---------- summary ----------
     def _refresh_summary(self):
         m: QStandardItemModel = self.model()  # type: ignore[assignment]
         total = 0
@@ -318,10 +368,11 @@ class MultiCheckCombo(QComboBox):
             it = m.item(row)
             if it is not None and not self._is_action_item(it):
                 total += 1
+
         if total == 0:
-            line_edit = self.lineEdit()
-            if line_edit is not None:
-                line_edit.setText(self._placeholder)
+            le = self.lineEdit()
+            if le is not None:
+                le.setText(self._placeholder)
             self.setToolTip(self._placeholder)
             self._clear_current_index()
             self._update_toggle_action_label()
@@ -333,7 +384,7 @@ class MultiCheckCombo(QComboBox):
             it = m.item(row)
             if it is None or self._is_action_item(it):
                 continue
-            if it and it.checkState() == Qt.CheckState.Checked:  # type: ignore
+            if it.checkState() == Qt.CheckState.Checked:  # type: ignore
                 checked += 1
                 if len(labels) < self._summary_max:
                     labels.append(it.text())
@@ -347,13 +398,14 @@ class MultiCheckCombo(QComboBox):
                 text = tr("All selected ({count})").format(count=total)
             else:
                 text = ", ".join(labels) + ("…" if checked > self._summary_max else "")
+
         text = text or self._placeholder
-        line_edit = self.lineEdit()
-        if line_edit is not None:
-            line_edit.setText(text)
-        # Avoid QComboBox forcing a row label into the line edit when the popup closes.
+        le = self.lineEdit()
+        if le is not None:
+            le.setText(text)
+
         self._clear_current_index(text)
-        # Helpful tooltip with full list
+
         all_checked = []
         for i in range(m.rowCount()):
             item = m.item(i)
@@ -364,6 +416,7 @@ class MultiCheckCombo(QComboBox):
         self.setToolTip(", ".join(all_checked) if all_checked else self._placeholder)
         self._update_toggle_action_label()
 
+    # ---------- action row helpers ----------
     def _append_action_items(self, model: QStandardItemModel) -> None:
         item = QStandardItem(tr("Check all"))
         item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)  # type: ignore
@@ -374,8 +427,7 @@ class MultiCheckCombo(QComboBox):
     def _is_action_item(self, item: Optional[QStandardItem]) -> bool:
         if item is None:
             return False
-        action = item.data(self._ACTION_ROLE)
-        return action == self._ACTION_TOGGLE_ALL
+        return item.data(self._ACTION_ROLE) == self._ACTION_TOGGLE_ALL
 
     def _handle_action_item(self, item: QStandardItem) -> bool:
         action = item.data(self._ACTION_ROLE)
@@ -417,13 +469,16 @@ class MultiCheckCombo(QComboBox):
                 item.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)  # type: ignore
         finally:
             self._internal_change = False
+
         self._enforce_max_checked()
         self._refresh_summary()
         self._clear_current_index(self.lineEdit().text() if self.lineEdit() is not None else None)
+
         try:
             self.view().viewport().update()
         except Exception:
             logger.warning("Exception in _set_all_checked", exc_info=True)
+
         if not self.signalsBlocked():
             self.selection_changed.emit()
 
@@ -434,6 +489,6 @@ class MultiCheckCombo(QComboBox):
         finally:
             self.blockSignals(was_blocked)
         if text is not None:
-            line_edit = self.lineEdit()
-            if line_edit is not None:
-                line_edit.setText(text)
+            le = self.lineEdit()
+            if le is not None:
+                le.setText(text)
