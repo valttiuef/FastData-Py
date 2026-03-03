@@ -1,7 +1,20 @@
-cff-version: 1.2.0
+cff-version: 1.2.1
 title: "FastData"
-message: "If you use this software in research, please cite it. FastData relies on established scientific Python libraries for machine learning and self-organizing maps; please cite them separately where appropriate."
 type: software
+
+message: >
+  If you use this software in research, please cite it.
+  FastData uses scikit-learn and MiniSom as computational backends for
+  machine learning and self-organizing maps, while all data handling,
+  visualization, and graphical interfaces are implemented independently
+  within FastData. Please cite the underlying scientific Python libraries
+  separately where appropriate.
+
+abstract: >
+  FastData is a desktop application for data analysis and machine learning,
+  built with PySide6. It integrates scikit-learn and MiniSom as computational
+  engines while providing custom implementations for data management,
+  visualization, and interactive analysis workflows.
 
 authors:
   - family-names: "Tiitta"
