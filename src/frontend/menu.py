@@ -1,7 +1,10 @@
+import logging
+
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import QApplication, QMessageBox
 from .localization import tr
 
+logger = logging.getLogger(__name__)
 
 
 def init_menu_bar(window):
@@ -83,8 +86,13 @@ def init_menu_bar(window):
     action_light.setShortcut(QKeySequence("Ctrl+Shift+L"))
     action_dark.setShortcut(QKeySequence("Ctrl+Shift+D"))
 
-    action_light.triggered.connect(lambda: window.apply_theme("light", apply_runtime=False))
-    action_dark.triggered.connect(lambda: window.apply_theme("dark", apply_runtime=False))
+    action_light.triggered.connect(lambda: _change_theme_with_confirmation(window, "light"))
+    action_dark.triggered.connect(lambda: _change_theme_with_confirmation(window, "dark"))
+
+    theme_menu.addSeparator()
+    action_apply_theme = QAction(tr("Apply Theme"), window)
+    action_apply_theme.triggered.connect(lambda: _apply_saved_theme_now(window))
+    theme_menu.addAction(action_apply_theme)
 
     help_menu = menubar.addMenu(tr("Help"))
     about_action = QAction(tr("About"), window)
@@ -96,6 +104,7 @@ def init_menu_bar(window):
 
     window.action_light = action_light
     window.action_dark = action_dark
+    window.action_apply_theme = action_apply_theme
     window.action_show_log = log_action
     window.action_open_chat = chat_action
 
@@ -124,3 +133,36 @@ def _confirm_refresh_databases(window):
     )
     if reply == QMessageBox.StandardButton.Yes:
         window.refresh_databases()
+
+
+def _change_theme_with_confirmation(window, theme: str) -> None:
+    reply = QMessageBox.question(
+        window,
+        tr("Apply Theme"),
+        tr("Apply the selected theme now?\n\nThis can take some time."),
+        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        QMessageBox.StandardButton.No,
+    )
+    apply_now = reply == QMessageBox.StandardButton.Yes
+    window.apply_theme(theme, apply_runtime=apply_now)
+    if apply_now:
+        message = tr("Theme applied.")
+        window.set_status_text(message)
+        try:
+            window.toast_manager.success(message, title=tr("Theme"))
+        except Exception:
+            logger.warning("Exception in _change_theme_with_confirmation", exc_info=True)
+
+
+def _apply_saved_theme_now(window) -> None:
+    theme = getattr(window.settings_model, "theme", "") or getattr(window, "current_theme", "dark")
+    if theme not in ("dark", "light"):
+        theme = "dark"
+
+    window.apply_theme(theme, apply_runtime=True)
+    message = tr("Theme applied.")
+    window.set_status_text(message)
+    try:
+        window.toast_manager.success(message, title=tr("Theme"))
+    except Exception:
+        logger.warning("Exception in _apply_saved_theme_now", exc_info=True)

@@ -944,7 +944,7 @@ class MainWindow(QMainWindow):
             ad.setChecked(theme == "dark")
 
         if not apply_runtime and theme != previous_theme:
-            message = self.tr("Theme preference saved. Restart the application for the change to take effect.")
+            message = self.tr("Theme preference saved. Apply from View > Theme > Apply Theme or restart the application.")
             self.set_status_text(message)
             try:
                 self.toast_manager.info(message, title=self.tr("Restart required"))
