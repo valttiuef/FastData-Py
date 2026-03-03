@@ -3,7 +3,7 @@ from __future__ import annotations
 from bisect import bisect_left
 from typing import Callable
 
-from PySide6.QtCore import Qt, QDateTime, QPoint, QPointF, QRectF, QEvent, Signal, QElapsedTimer
+from PySide6.QtCore import Qt, QDateTime, QPoint, QPointF, QRectF, QEvent, Signal, QElapsedTimer, QTimer
 from PySide6.QtGui import QPainter, QPen, QBrush, QColor
 from PySide6.QtWidgets import QApplication, QGraphicsView, QToolTip
 from PySide6.QtCharts import QChart, QChartView, QXYSeries
@@ -22,6 +22,7 @@ class InteractiveChartView(QChartView):
     """
     user_range_selected = Signal(QDateTime, QDateTime)
     user_reset_requested = Signal(bool, bool)  # (reset_x, reset_y)
+    axis_lock_hint_changed = Signal(bool, bool)  # (x_locked, y_locked)
 
     def __init__(self, chart: QChart, parent=None):
         super().__init__(chart, parent)
@@ -31,6 +32,7 @@ class InteractiveChartView(QChartView):
         self.setMouseTracking(True)  # get move events with no buttons
         self.setRubberBand(QChartView.RubberBand.NoRubberBand)
         self.setDragMode(QGraphicsView.DragMode.NoDrag)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         # ---- Zoom state (left button)
         self._rubber_active = False
@@ -72,6 +74,12 @@ class InteractiveChartView(QChartView):
         self._cross_pen.setWidthF(1.0)
         self._dot_brush = QBrush(QColor(200, 200, 200, 180))
         self._hover_tooltip_callback: Callable[[QPointF], str] | None = None
+        self._axis_x_locked: bool = False
+        self._axis_y_locked: bool = False
+        self._hint_hide_timer = QTimer(self)
+        self._hint_hide_timer.setSingleShot(True)
+        self._hint_hide_timer.setInterval(260)
+        self._hint_hide_timer.timeout.connect(self._clear_axis_lock_hint)
 
     def set_hover_tooltip_callback(self, callback: Callable[[QPointF], str] | None) -> None:
         self._hover_tooltip_callback = callback
@@ -122,6 +130,38 @@ class InteractiveChartView(QChartView):
     def _chart_series0(self):
         s = self.chart().series()
         return s[0] if s else None
+
+    def _modifiers_with_fallback(self, mods) -> Qt.KeyboardModifiers:
+        try:
+            return mods | QApplication.keyboardModifiers()
+        except Exception:
+            logger.warning("Failed to read keyboard modifiers for interactive chart view.", exc_info=True)
+            return mods
+
+    def _update_axis_lock_hint(self, mods) -> None:
+        effective_mods = self._modifiers_with_fallback(mods)
+        shift_down = bool(effective_mods & Qt.KeyboardModifier.ShiftModifier)
+        ctrl_down = bool(effective_mods & Qt.KeyboardModifier.ControlModifier)
+        x_locked = shift_down and not ctrl_down
+        y_locked = ctrl_down and not shift_down
+        if x_locked == self._axis_x_locked and y_locked == self._axis_y_locked:
+            return
+        self._axis_x_locked = x_locked
+        self._axis_y_locked = y_locked
+        try:
+            self.axis_lock_hint_changed.emit(self._axis_x_locked, self._axis_y_locked)
+        except Exception:
+            logger.warning("Failed to emit axis-lock hint state from interactive chart view.", exc_info=True)
+
+    def _clear_axis_lock_hint(self) -> None:
+        if not (self._axis_x_locked or self._axis_y_locked):
+            return
+        self._axis_x_locked = False
+        self._axis_y_locked = False
+        try:
+            self.axis_lock_hint_changed.emit(False, False)
+        except Exception:
+            logger.warning("Failed to clear axis-lock hint state from interactive chart view.", exc_info=True)
 
     def _pos_to_data_x_ms(self, pos: QPointF) -> float | None:
         # Any QXYSeries is enough because axes are shared.
@@ -181,8 +221,11 @@ class InteractiveChartView(QChartView):
     # Events
     # =========================
     def mousePressEvent(self, ev):
+        self.setFocus(Qt.FocusReason.MouseFocusReason)
         if ev.button() == Qt.MouseButton.RightButton:
             # Begin pan
+            self._hint_hide_timer.stop()
+            self._update_axis_lock_hint(ev.modifiers())
             min_ms, max_ms = self._get_x_axis_ms_range()
             y_min, y_max = None, None
             try:
@@ -256,11 +299,8 @@ class InteractiveChartView(QChartView):
                 plot_w = max(1.0, float(plot_rect.width()))
                 plot_h = max(1.0, float(plot_rect.height()))
                 mods = ev.modifiers()
-                try:
-                    # Mirror wheel behavior: fallback to global modifiers when needed.
-                    mods = mods | QApplication.keyboardModifiers()
-                except Exception:
-                    logger.warning("Failed to read keyboard modifiers while panning chart.", exc_info=True)
+                mods = self._modifiers_with_fallback(mods)
+                self._update_axis_lock_hint(mods)
                 shift_down = bool(mods & Qt.KeyboardModifier.ShiftModifier)
                 ctrl_down = bool(mods & Qt.KeyboardModifier.ControlModifier)
                 lock_y_only = shift_down and not ctrl_down
@@ -408,10 +448,8 @@ class InteractiveChartView(QChartView):
                     plot_rect: QRectF = self.chart().plotArea()
                     plot_w = max(1.0, float(plot_rect.width()))
                     mods = ev.modifiers()
-                    try:
-                        mods = mods | QApplication.keyboardModifiers()
-                    except Exception:
-                        logger.warning("Failed to finalize panned axis range on mouse release.", exc_info=True)
+                    mods = self._modifiers_with_fallback(mods)
+                    self._update_axis_lock_hint(mods)
                     shift_down = bool(mods & Qt.KeyboardModifier.ShiftModifier)
                     ctrl_down = bool(mods & Qt.KeyboardModifier.ControlModifier)
                     lock_y_only = shift_down and not ctrl_down
@@ -445,6 +483,7 @@ class InteractiveChartView(QChartView):
             self._pan_last_emit_min_ms = None
             self._pan_last_emit_max_ms = None
             self._pan_last_emit_pos_x = None
+            self._clear_axis_lock_hint()
             ev.accept()
             return
 
@@ -471,6 +510,7 @@ class InteractiveChartView(QChartView):
             # resume hover
             self._show_crosshair = True
             self.viewport().update()
+            self._clear_axis_lock_hint()
 
     def wheelEvent(self, ev):
         """
@@ -495,12 +535,9 @@ class InteractiveChartView(QChartView):
             base = 0.8
             factor = base if dy > 0 else 1.0 / base
             mods = ev.modifiers()
-            try:
-                # Some wheel event paths can miss keyboard modifiers on Windows;
-                # merge with the global keyboard state as a fallback.
-                mods = mods | QApplication.keyboardModifiers()
-            except Exception:
-                logger.warning("Failed to read keyboard modifiers during wheel zoom interaction.", exc_info=True)
+            mods = self._modifiers_with_fallback(mods)
+            self._hint_hide_timer.stop()
+            self._update_axis_lock_hint(mods)
             shift_down = bool(mods & Qt.KeyboardModifier.ShiftModifier)
             ctrl_down = bool(mods & Qt.KeyboardModifier.ControlModifier)
             lock_y_only = shift_down and not ctrl_down
@@ -577,20 +614,19 @@ class InteractiveChartView(QChartView):
                     logger.warning("Failed to apply vertical wheel-zoom range.", exc_info=True)
 
             if x_range_changed:
+                # Live updates during wheel zoom; downstream uses cancel-previous
+                # async fetch so stale ranges are discarded.
                 self._emit_axis_range()
+            self._hint_hide_timer.start()
             ev.accept()
         except Exception:
+            self._hint_hide_timer.start()
             ev.accept()
 
     def mouseDoubleClickEvent(self, ev):
         if ev.button() == Qt.MouseButton.LeftButton:
             mods = ev.modifiers()
-            try:
-                # Some event paths can miss keyboard modifiers on Windows;
-                # merge with the global keyboard state as a fallback.
-                mods = mods | QApplication.keyboardModifiers()
-            except Exception:
-                logger.warning("Failed to emit reset request for chart double-click interaction.", exc_info=True)
+            mods = self._modifiers_with_fallback(mods)
             shift_down = bool(mods & Qt.KeyboardModifier.ShiftModifier)
             ctrl_down = bool(mods & Qt.KeyboardModifier.ControlModifier)
             reset_x = ctrl_down and not shift_down
@@ -604,6 +640,9 @@ class InteractiveChartView(QChartView):
     def leaveEvent(self, ev: QEvent):
         # Hide crosshair when cursor leaves the view
         self._show_crosshair = False
+        if self._hint_hide_timer.isActive():
+            self._hint_hide_timer.stop()
+        self._clear_axis_lock_hint()
         QToolTip.hideText()
         self.viewport().update()
         super().leaveEvent(ev)

@@ -105,18 +105,22 @@ class TimeSeriesChart(QFrame):
 
         self.axis_x = QDateTimeAxis()
         self.axis_x.setFormat("yyyy-MM-dd HH:mm")
-        self.axis_x.setTitleText("Time")
+        self._x_axis_title_base = "Time"
+        self.axis_x.setTitleText(self._x_axis_title_base)
         self.chart.addAxis(self.axis_x, Qt.AlignmentFlag.AlignBottom)
 
         self.axis_y = QValueAxis()
         self.axis_y.setLabelFormat("%.3f")
-        self.axis_y.setTitleText("Value")
+        self._y_axis_title_base = "Value"
+        self.axis_y.setTitleText(self._y_axis_title_base)
         self.chart.addAxis(self.axis_y, Qt.AlignmentFlag.AlignLeft)
 
         self.view = InteractiveChartView(self.chart)
         self.view._owner = self  # best-effort
+        self.view.set_live_pan_emit_enabled(True)
         self.view.user_reset_requested.connect(self._bubble_reset)
         self.view.user_range_selected.connect(self._on_user_range_selected)
+        self.view.axis_lock_hint_changed.connect(self._on_axis_lock_hint_changed)
 
         lay = QVBoxLayout(self)
         lay.addWidget(self.view)
@@ -140,7 +144,11 @@ class TimeSeriesChart(QFrame):
         self._hover_group_ms: list[int] = []
         self._group_box_items: list[QGraphicsRectItem] = []
         self._group_box_text_items: list[QGraphicsSimpleTextItem] = []
+        self._axis_lock_hint_bg_item: QGraphicsRectItem | None = None
+        self._axis_lock_hint_text_item: QGraphicsSimpleTextItem | None = None
         self._deferred_refresh_pending: bool = False
+        self._axis_x_locked: bool = False
+        self._axis_y_locked: bool = False
         self.view.set_hover_tooltip_callback(self._group_timeline_hover_tooltip)
 
         try:
@@ -172,6 +180,7 @@ class TimeSeriesChart(QFrame):
         request_repaint: bool = True,
     ):
         self._clear_group_timeline_overlays()
+        self._clear_axis_lock_hint_overlay()
         self._group_box_specs = []
         self._group_hover_specs = []
         self._hover_group_points = []
@@ -305,7 +314,8 @@ class TimeSeriesChart(QFrame):
             self.axis_y.setLabelFormat("%.3f")
         except Exception:
             logger.warning("Failed to restore numeric Y-axis tick settings for time-series data.", exc_info=True)
-        self.axis_y.setTitleText("Value")
+        self._y_axis_title_base = "Value"
+        self.axis_y.setTitleText(self._y_axis_title_base)
         if all_values:
             ymin = float(min(all_values)); ymax = float(max(all_values))
         else:
@@ -510,7 +520,8 @@ class TimeSeriesChart(QFrame):
             self.axis_y.setLabelsVisible(True)
         except Exception:
             logger.warning("Failed to show Y-axis labels for group timeline rendering.", exc_info=True)
-        self.axis_y.setTitleText("Cluster")
+        self._y_axis_title_base = "Cluster"
+        self.axis_y.setTitleText(self._y_axis_title_base)
         self._data_y_range = (float(y_min), float(y_max))
 
         self._group_box_specs = []
@@ -673,6 +684,7 @@ class TimeSeriesChart(QFrame):
         self._series_segments.clear()
         self._series_colors.clear()
 
+    # @ai(gpt-5, codex, fix, 2026-03-03)
     def _build_segments_for_feature(
         self,
         name: str,
@@ -748,6 +760,131 @@ class TimeSeriesChart(QFrame):
         self._current_theme = theme_name
         self._apply_theme(theme_name)
 
+    # @ai(gpt-5, codex, ui-enhancement, 2026-03-03)
+    def _on_axis_lock_hint_changed(self, x_locked: bool, y_locked: bool) -> None:
+        self._axis_x_locked = bool(x_locked)
+        self._axis_y_locked = bool(y_locked)
+        self._apply_axis_lock_visuals()
+        self._refresh_axis_lock_hint_overlay()
+        try:
+            self.view.viewport().update()
+        except Exception:
+            logger.warning("Failed to refresh viewport after axis-lock visual update.", exc_info=True)
+
+    def _apply_axis_lock_visuals(self) -> None:
+        if self._chart_colors is None:
+            return
+
+        def _apply(axis, *, locked: bool, base_title: str) -> None:
+            text = QColor(self._chart_colors.text)
+            axis_line = QColor(self._chart_colors.axis_line)
+            grid = QColor(self._chart_colors.grid)
+            if locked:
+                text.setAlpha(max(85, int(text.alpha() * 0.60)))
+                axis_line.setAlpha(max(70, int(axis_line.alpha() * 0.60)))
+                grid.setAlpha(max(35, int(grid.alpha() * 0.45)))
+
+            title = f"{base_title} (Locked)" if locked else base_title
+            try:
+                axis.setTitleText(title)
+            except Exception:
+                logger.warning("Failed to set axis title for lock visual state.", exc_info=True)
+            try:
+                axis.setLabelsBrush(QBrush(text))
+            except Exception:
+                logger.warning("Failed to set axis labels brush for lock visual state.", exc_info=True)
+            try:
+                axis.setTitleBrush(QBrush(text))
+            except Exception:
+                logger.warning("Failed to set axis title brush for lock visual state.", exc_info=True)
+            try:
+                line_pen = QPen(axis_line, 1.0)
+                line_pen.setCosmetic(True)
+                axis.setLinePen(line_pen)
+            except Exception:
+                logger.warning("Failed to set axis line pen for lock visual state.", exc_info=True)
+            try:
+                axis.setGridLineColor(grid)
+                axis.setMinorGridLineColor(grid.darker(110))
+            except Exception:
+                logger.warning("Failed to set axis grid colors for lock visual state.", exc_info=True)
+
+        _apply(self.axis_x, locked=self._axis_x_locked, base_title=self._x_axis_title_base)
+        _apply(self.axis_y, locked=self._axis_y_locked, base_title=self._y_axis_title_base)
+
+    def _clear_axis_lock_hint_overlay(self) -> None:
+        scene = self.chart.scene()
+        if self._axis_lock_hint_bg_item is not None:
+            try:
+                if scene is not None:
+                    scene.removeItem(self._axis_lock_hint_bg_item)
+            except Exception:
+                logger.warning("Failed to remove axis-lock hint background item.", exc_info=True)
+            self._axis_lock_hint_bg_item = None
+        if self._axis_lock_hint_text_item is not None:
+            try:
+                if scene is not None:
+                    scene.removeItem(self._axis_lock_hint_text_item)
+            except Exception:
+                logger.warning("Failed to remove axis-lock hint text item.", exc_info=True)
+            self._axis_lock_hint_text_item = None
+
+    def _refresh_axis_lock_hint_overlay(self) -> None:
+        self._clear_axis_lock_hint_overlay()
+        if self._chart_colors is None:
+            return
+        if not (self._axis_x_locked or self._axis_y_locked):
+            return
+
+        if self._axis_x_locked and self._axis_y_locked:
+            label = "X and Y locked"
+        elif self._axis_x_locked:
+            label = "X axis locked"
+        else:
+            label = "Y axis locked"
+
+        scene = self.chart.scene()
+        if scene is None:
+            return
+        plot_area = self.chart.plotArea()
+        if plot_area.width() <= 0 or plot_area.height() <= 0:
+            return
+
+        text_item = QGraphicsSimpleTextItem(label)
+        font = QFont()
+        font.setPointSize(8)
+        text_item.setFont(font)
+        txt = QColor(self._chart_colors.text)
+        txt.setAlpha(235)
+        text_item.setBrush(QBrush(txt))
+
+        text_rect = text_item.boundingRect()
+        x = float(plot_area.left() + 12.0)
+        y = float(plot_area.top() + 8.0)
+        pad_x = 6.0
+        pad_y = 3.0
+        bg_rect = QRectF(
+            x - pad_x,
+            y - pad_y,
+            text_rect.width() + pad_x * 2.0,
+            text_rect.height() + pad_y * 2.0,
+        )
+
+        bg = QColor(self._chart_colors.plot_bg)
+        bg.setAlpha(185)
+        border = QColor(self._chart_colors.axis_line)
+        border.setAlpha(160)
+
+        bg_item = QGraphicsRectItem(bg_rect)
+        bg_item.setBrush(QBrush(bg))
+        bg_item.setPen(QPen(border, 1.0))
+        text_item.setPos(x, y)
+
+        scene.addItem(bg_item)
+        scene.addItem(text_item)
+        self._axis_lock_hint_bg_item = bg_item
+        self._axis_lock_hint_text_item = text_item
+
     def _apply_theme(self, theme_name: str | None = None):
         if theme_name is None:
             theme_name = self._current_theme
@@ -761,6 +898,8 @@ class TimeSeriesChart(QFrame):
         style_axis(self.axis_x, colors)
         style_axis(self.axis_y, colors)
         style_legend(self.chart.legend(), colors)
+        self._apply_axis_lock_visuals()
+        self._refresh_axis_lock_hint_overlay()
 
         container_color = window_color_from_theme(self, theme_name)
 
@@ -770,8 +909,8 @@ class TimeSeriesChart(QFrame):
             logger.warning("Failed to set title brush while applying time-series theme.", exc_info=True)
 
         frame_palette = self.palette()
-        frame_palette.setColor(QPalette.Window, container_color)
-        frame_palette.setColor(QPalette.Base, container_color)
+        frame_palette.setColor(QPalette.ColorRole.Window, container_color)
+        frame_palette.setColor(QPalette.ColorRole.Base, container_color)
         self.setPalette(frame_palette)
         self.setAutoFillBackground(True)
         try:
@@ -780,8 +919,8 @@ class TimeSeriesChart(QFrame):
             logger.warning("Failed to set styled-background attribute while applying time-series theme.", exc_info=True)
 
         view_palette = self.view.palette()
-        view_palette.setColor(QPalette.Window, container_color)
-        view_palette.setColor(QPalette.Base, container_color)
+        view_palette.setColor(QPalette.ColorRole.Window, container_color)
+        view_palette.setColor(QPalette.ColorRole.Base, container_color)
         self.view.setPalette(view_palette)
         self.view.setAutoFillBackground(True)
         try:
@@ -790,12 +929,12 @@ class TimeSeriesChart(QFrame):
             logger.warning("Failed to set chart-view background brush while applying time-series theme.", exc_info=True)
 
         viewport_palette = self.view.viewport().palette()
-        viewport_palette.setColor(QPalette.Window, container_color)
-        viewport_palette.setColor(QPalette.Base, container_color)
+        viewport_palette.setColor(QPalette.ColorRole.Window, container_color)
+        viewport_palette.setColor(QPalette.ColorRole.Base, container_color)
         self.view.viewport().setPalette(viewport_palette)
         self.view.viewport().setAutoFillBackground(True)
         try:
-            self.view.viewport().setBackgroundRole(QPalette.Window)
+            self.view.viewport().setBackgroundRole(QPalette.ColorRole.Window)
         except Exception:
             logger.warning("Failed to set viewport background role while applying time-series theme.", exc_info=True)
 
@@ -879,19 +1018,24 @@ class TimeSeriesChart(QFrame):
     def _refresh_group_timeline_overlays(self) -> None:
         self._clear_group_timeline_overlays()
         if not self._group_box_specs:
+            self._refresh_axis_lock_hint_overlay()
             return
         if not self.chart.series():
+            self._refresh_axis_lock_hint_overlay()
             return
         scene = self.chart.scene()
         if scene is None:
+            self._refresh_axis_lock_hint_overlay()
             return
         plot_area = self.chart.plotArea()
         if plot_area.width() <= 0 or plot_area.height() <= 0:
+            self._refresh_axis_lock_hint_overlay()
             return
         ref_series = self.chart.series()[0]
         visible_start = float(self.axis_x.min().toMSecsSinceEpoch())
         visible_end = float(self.axis_x.max().toMSecsSinceEpoch())
         if visible_end <= visible_start:
+            self._refresh_axis_lock_hint_overlay()
             return
         visible_specs = [
             spec for spec in self._group_box_specs if not (spec[1] < visible_start or spec[0] > visible_end)
@@ -981,6 +1125,7 @@ class TimeSeriesChart(QFrame):
             scene.addItem(text_item)
             self._group_box_text_items.append(text_item)
             text_budget -= 1
+        self._refresh_axis_lock_hint_overlay()
 
     def _request_deferred_refresh(self) -> None:
         if self._deferred_refresh_pending:
