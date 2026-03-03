@@ -6,9 +6,12 @@ import numpy as np
 import pandas as pd
 
 from PySide6.QtGui import QColor, QVector3D
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 from PySide6.QtDataVisualization import (
     Q3DScatter,
+    Q3DTheme,
     QScatter3DSeries,
     QScatterDataItem,
     QScatterDataProxy,
@@ -29,6 +32,9 @@ class Scatter3DChart(QWidget):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._scatter = Q3DScatter()
+        self._scatter.setShadowQuality(Q3DScatter.ShadowQuality.ShadowQualityNone)
+        self._scatter.setReflection(False)
+        self._scatter.setReflectivity(0.0)
         self._container = QWidget.createWindowContainer(self._scatter, self)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
@@ -37,6 +43,9 @@ class Scatter3DChart(QWidget):
 
         self._proxy = QScatterDataProxy()
         self._series = QScatter3DSeries(self._proxy)
+        self._series.setColorStyle(Q3DTheme.ColorStyle.ColorStyleUniform)
+        self._series.setMesh(QScatter3DSeries.Mesh.MeshSphere)
+        self._series.setMeshSmooth(True)
         self._series.setItemSize(0.08)
         self._scatter.addSeries(self._series)
 
@@ -106,18 +115,55 @@ class Scatter3DChart(QWidget):
     def _on_theme_changed(self, theme_name: Optional[str]) -> None:
         self._apply_theme(theme_name)
 
+    # @ai(gpt-5, codex, ui-theming, 2026-03-03)
     def _apply_theme(self, theme_name: Optional[str]) -> None:
         colors = make_colors_from_palette(self, theme_name)
-        base_color = colors.line_primary
+        base_color = QColor(colors.line_primary)
         window_bg = window_color_from_theme(self, theme_name)
-        if is_dark_color(window_bg):
-            self._scatter.activeTheme().setBackgroundEnabled(False)
-        else:
-            self._scatter.activeTheme().setBackgroundEnabled(True)
-        self._series.setBaseColor(QColor(base_color))
+        dark_theme = is_dark_color(window_bg)
+        theme = self._scatter.activeTheme()
+
+        theme.setType(Q3DTheme.Theme.ThemeUserDefined)
+        theme.setBackgroundEnabled(False)
+        theme.setGridEnabled(True)
+        theme.setColorStyle(Q3DTheme.ColorStyle.ColorStyleUniform)
+        theme.setLabelBackgroundEnabled(False)
+        theme.setLabelBorderEnabled(False)
+        theme.setWindowColor(QColor(window_bg))
+        theme.setBackgroundColor(QColor(colors.plot_bg))
+        theme.setGridLineColor(QColor(colors.grid))
+        theme.setLabelTextColor(QColor(colors.text))
+        theme.setBaseColors([QColor(base_color)])
+        theme.setLightColor(QColor(245, 245, 245))
+        theme.setAmbientLightStrength(0.45 if dark_theme else 0.40)
+        theme.setLightStrength(1.6 if dark_theme else 1.4)
+        theme.setHighlightLightStrength(1.1 if dark_theme else 1.0)
+
+        self._scatter.setReflection(False)
+        self._scatter.setReflectivity(0.0)
+        self._series.setColorStyle(Q3DTheme.ColorStyle.ColorStyleUniform)
+        self._series.setBaseColor(base_color)
+        self._series.setSingleHighlightColor(base_color.lighter(135 if dark_theme else 120))
+        self._series.setMultiHighlightColor(base_color.lighter(160 if dark_theme else 140))
         self._axis_x.setTitleVisible(True)
         self._axis_y.setTitleVisible(True)
         self._axis_z.setTitleVisible(True)
+
+        frame_palette = self.palette()
+        frame_palette.setColor(QPalette.ColorRole.Window, QColor(window_bg))
+        frame_palette.setColor(QPalette.ColorRole.Base, QColor(window_bg))
+        self.setPalette(frame_palette)
+        self.setAutoFillBackground(True)
+        try:
+            self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        except Exception:
+            pass
+
+        container_palette = self._container.palette()
+        container_palette.setColor(QPalette.ColorRole.Window, QColor(window_bg))
+        container_palette.setColor(QPalette.ColorRole.Base, QColor(window_bg))
+        self._container.setPalette(container_palette)
+        self._container.setAutoFillBackground(True)
 
 
 __all__ = ["Scatter3DChart"]
