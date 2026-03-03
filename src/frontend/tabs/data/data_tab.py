@@ -97,6 +97,7 @@ class DataTab(TabWidget):
         self._last_import_progress_message: Optional[str] = None
         self._last_progress_phase: Optional[str] = None
         self._show_auto_timestep_status: bool = False
+        self._initial_filter_timeframe_applied: bool = False
 
         self._wire_signals()
 
@@ -113,6 +114,7 @@ class DataTab(TabWidget):
         self._reload_epoch += 1
         self._selection_sync_pending = False
         self._selection_sync_fallback.stop()
+        self._initial_filter_timeframe_applied = False
         self._clear_charts(tr("No data loaded"))
 
     def _on_selection_state_changed(self) -> None:
@@ -675,8 +677,27 @@ class DataTab(TabWidget):
     ) -> None:
         self._capture_owned_base_cache_key()
 
-        if flt.start is not None and flt.end is not None:
-            self._view_model.set_view_window(flt.start, flt.end)
+        flt_for_bounds = flt.clone_with_range(None, None)
+        b0, b1 = self._view_model.time_bounds(flt_for_bounds)
+        effective_start = flt.start
+        effective_end = flt.end
+        if (
+            not self._initial_filter_timeframe_applied
+            and b0 is not None
+            and b1 is not None
+        ):
+            # On first successful load, initialize date filters to actual
+            # feature bounds (same behavior goal as reset).
+            self._set_dt_controls_from_range(b0, b1)
+            self._initial_filter_timeframe_applied = True
+            effective_start = b0
+            effective_end = b1
+        elif effective_start is None or effective_end is None:
+            effective_start = b0 if effective_start is None else effective_start
+            effective_end = b1 if effective_end is None else effective_end
+
+        if effective_start is not None and effective_end is not None:
+            self._view_model.set_view_window(effective_start, effective_end)
 
         try:
             working_df = (
@@ -699,10 +720,13 @@ class DataTab(TabWidget):
 
         series_df = self._view_model.series_for_chart()
         self.timeseries_chart.set_dataframe(series_df)
+        if effective_start is not None and effective_end is not None:
+            try:
+                self.timeseries_chart.set_x_range(pd.Timestamp(effective_start), pd.Timestamp(effective_end))
+            except Exception:
+                logger.warning("Failed to restore requested X-range after reload.", exc_info=True)
         self._set_monthly_chart_title(flt)
 
-        flt_for_bounds = flt.clone_with_range(None, None)
-        b0, b1 = self._view_model.time_bounds(flt_for_bounds)
         self.data_info.setText(
             self._build_data_info_text(flt, b0, b1, rows=len(series_df))
         )

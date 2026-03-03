@@ -587,7 +587,7 @@ class HybridPandasModel(DatabaseModel):
             if (
                 self._view_start is not None
                 and self._view_end is not None
-                and self._covers(self._hires_span, self._view_start, self._view_end)
+                and self._overlaps(self._hires_span, self._view_start, self._view_end)
                 and not self._hires_df.empty
             ):
                 return self._hires_cadence_secs
@@ -688,8 +688,10 @@ class HybridPandasModel(DatabaseModel):
         """
         Slice whichever cache covers the window (hires if available; else base).
         """
-        src = None
-        if self._covers(self._hires_span, self._view_start, self._view_end) and not self._hires_df.empty:
+        if (
+            not self._hires_df.empty
+            and self._overlaps(self._hires_span, self._view_start, self._view_end)
+        ):
             src = self._hires_df
         else:
             src = self._base_df
@@ -698,7 +700,13 @@ class HybridPandasModel(DatabaseModel):
             self._current_df = src.copy()
             return
 
-        view = src[(src["t"] >= self._view_start) & (src["t"] <= self._view_end)]
+        # Include one neighbor sample on each side to keep line continuity
+        # at viewport edges while panning/zooming.
+        s = int(src["t"].searchsorted(self._view_start, side="left"))
+        e = int(src["t"].searchsorted(self._view_end, side="right"))
+        i0 = max(0, s - 1)
+        i1 = min(len(src), e + 1)
+        view = src.iloc[i0:i1]
         # Ensure at least the two ends if empty (to show X range)
         if view.empty:
             feature_cols = [c for c in src.columns if c != "t"]
@@ -712,7 +720,11 @@ class HybridPandasModel(DatabaseModel):
 
     def _covers(self, span, start, end):
         s0, s1 = span
-        return (s0 is not None and s1 is not None and s0 < start and s1 >= end)
+        return (s0 is not None and s1 is not None and s0 <= start and s1 >= end)
+
+    def _overlaps(self, span, start, end):
+        s0, s1 = span
+        return (s0 is not None and s1 is not None and s1 >= start and s0 <= end)
 
     # ---- New/shared helpers ------------------------------------------------------
     def _resolve_effective_seconds(
@@ -854,13 +866,32 @@ class HybridPandasModel(DatabaseModel):
 
         need_fetch = False
 
+        timestep_mode = self._normalize_timestep_mode(self._params.get("timestep"))
+        min_rows_for_hires = max(50, self._current_cap // 8)
+        view_duration_s = max(1, int((self._view_end - self._view_start).total_seconds()))
+        auto_ideal_step = self._choose_nice_step_seconds(view_duration_s, self._current_cap, None)
+
         # coverage check
         if not self._covers(self._hires_span, self._view_start, self._view_end):
             need_fetch = True
         else:
             # resolution check on hires
             est_rows = self._estimate_rows(self._hires_df, self._view_start, self._view_end)
-            if est_rows < max(50, self._current_cap // 8):
+            if est_rows < min_rows_for_hires:
+                need_fetch = True
+            elif timestep_mode == "auto":
+                # Auto cadence should react to windows that are mostly empty bins.
+                # Counting only total bins can keep stale cadence when the visible
+                # region starts with long NaN runs.
+                est_non_null_rows = self._estimate_non_null_rows(self._hires_df, self._view_start, self._view_end)
+                if est_non_null_rows < min_rows_for_hires:
+                    need_fetch = True
+            if (
+                not need_fetch
+                and timestep_mode == "auto"
+                and self._hires_cadence_secs is not None
+                and int(self._hires_cadence_secs) > int(auto_ideal_step)
+            ):
                 need_fetch = True
 
         # Also check base resolution if no hires
@@ -869,7 +900,18 @@ class HybridPandasModel(DatabaseModel):
                 need_fetch = True
             else:
                 est_rows = self._estimate_rows(self._base_df, self._view_start, self._view_end)
-                if est_rows < max(50, self._current_cap // 8):
+                if est_rows < min_rows_for_hires:
+                    need_fetch = True
+                elif timestep_mode == "auto":
+                    est_non_null_rows = self._estimate_non_null_rows(self._base_df, self._view_start, self._view_end)
+                    if est_non_null_rows < min_rows_for_hires:
+                        need_fetch = True
+                if (
+                    not need_fetch
+                    and timestep_mode == "auto"
+                    and self._base_cadence_secs is not None
+                    and int(self._base_cadence_secs) > int(auto_ideal_step)
+                ):
                     need_fetch = True
 
         if not need_fetch:
@@ -885,7 +927,6 @@ class HybridPandasModel(DatabaseModel):
         window_start, window_end = self._expand_range_for_lag(w0, w1)
         window_filters = self._filters.clone_with_range(window_start, window_end) if self._filters else DataFilters(features=[], start=window_start, end=window_end)
         cnt = self._count_rows(window_filters)
-        timestep_mode = self._normalize_timestep_mode(self._params.get("timestep"))
         cap_count = cnt
         if timestep_mode == "none":
             feature_count = len(getattr(window_filters, "features", []) or [])
@@ -940,6 +981,15 @@ class HybridPandasModel(DatabaseModel):
             params=self._params,
             force=True,  # force cadence even if source was RAW
             agg=self._params.get("agg", "avg"),
+        )
+        # Keep the hi-res cache span aligned to the requested window cadence even
+        # when the first/last bins are empty. Otherwise coverage checks can fail
+        # and incorrectly fall back to coarse base cadence.
+        df = self._pad_frame_to_window_cadence(
+            df,
+            start=window_start,
+            end=window_end,
+            cadence_seconds=step,
         )
         df = self._filter_frame_by_months(df, getattr(self._filters, "months", None))
 
@@ -1257,6 +1307,76 @@ class HybridPandasModel(DatabaseModel):
         s = df["t"].searchsorted(start, side="left")
         e = df["t"].searchsorted(end, side="right")
         return int(max(0, e - s))
+
+    def _estimate_non_null_rows(self, df: pd.DataFrame, start: pd.Timestamp, end: pd.Timestamp) -> int:
+        """Estimate rows in [start, end] that contain at least one non-null value."""
+        if df is None or df.empty or "t" not in df.columns:
+            return 0
+        value_cols = [c for c in df.columns if c != "t"]
+        if not value_cols:
+            return 0
+        s = int(df["t"].searchsorted(start, side="left"))
+        e = int(df["t"].searchsorted(end, side="right"))
+        if e <= s:
+            return 0
+        window = df.iloc[s:e]
+        if window.empty:
+            return 0
+        non_null_mask = window[value_cols].notna().any(axis=1)
+        try:
+            return int(non_null_mask.sum())
+        except Exception:
+            return 0
+
+    def _pad_frame_to_window_cadence(
+        self,
+        df: pd.DataFrame,
+        *,
+        start: Optional[pd.Timestamp],
+        end: Optional[pd.Timestamp],
+        cadence_seconds: Optional[int],
+    ) -> pd.DataFrame:
+        """
+        Reindex a frame to fully cover [start, end] at the resolved cadence.
+
+        This preserves leading/trailing empty bins so cache span reflects the
+        requested window instead of only data-bearing bins.
+        """
+        if df is None or "t" not in df.columns:
+            return df
+        if cadence_seconds is None or int(cadence_seconds) <= 0:
+            return df
+        if start is None or end is None:
+            return df
+        try:
+            s = self._ts_to_naive_utc(pd.Timestamp(start))
+            e = self._ts_to_naive_utc(pd.Timestamp(end))
+            if s is None or e is None or e <= s:
+                return df
+            freq = self._freq_str_from_seconds(int(cadence_seconds))
+            lo = pd.Timestamp(s).floor(freq)
+            hi = pd.Timestamp(e).ceil(freq)
+            if hi <= lo:
+                hi = lo + pd.to_timedelta(int(cadence_seconds), unit="s")
+            idx = pd.date_range(lo, hi, freq=freq)
+
+            value_cols = [c for c in df.columns if c != "t"]
+            work = df.copy()
+            work["t"] = self._series_to_naive_utc(work["t"])
+            work = work.dropna(subset=["t"]).sort_values("t")
+            if work.empty:
+                if not value_cols:
+                    return pd.DataFrame({"t": idx})
+                padded = pd.DataFrame(index=idx, columns=value_cols, dtype=float)
+                return padded.reset_index().rename(columns={"index": "t"})
+
+            padded = work.set_index("t")
+            if value_cols:
+                padded = padded[value_cols]
+            padded = padded.reindex(idx)
+            return padded.reset_index().rename(columns={"index": "t"})
+        except Exception:
+            return df
 
     # --------- SQL helpers ---------
     def _count_rows(self, flt: DataFilters) -> int:
