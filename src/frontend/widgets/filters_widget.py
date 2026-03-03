@@ -434,23 +434,94 @@ class FiltersWidget(CollapsibleSection):
 
     # ------------------------------------------------------------------
     def set_systems(self, items: list[tuple[str, Any]], *, check_all: bool = True) -> None:
-        self.systems_combo.set_items(items, check_all=check_all)
+        was = self.systems_combo.blockSignals(True)
+        try:
+            self.systems_combo.set_items(items, check_all=check_all)
+        finally:
+            self.systems_combo.blockSignals(was)
 
     def set_datasets(self, items: list[tuple[str, Any]], *, check_all: bool = True) -> None:
-        self.datasets_combo.set_items(items, check_all=check_all)
+        was = self.datasets_combo.blockSignals(True)
+        try:
+            self.datasets_combo.set_items(items, check_all=check_all)
+        finally:
+            self.datasets_combo.blockSignals(was)
 
     def set_imports(self, items: list[tuple[str, Any]], *, check_all: bool = True) -> None:
-        self.imports_combo.set_items(items, check_all=check_all)
+        was = self.imports_combo.blockSignals(True)
+        try:
+            self.imports_combo.set_items(items, check_all=check_all)
+        finally:
+            self.imports_combo.blockSignals(was)
 
     def set_groups(self, df: pd.DataFrame) -> None:
-        if df is None or df.empty:
-            self.group_combo.clear_items()
-            return
-        items = [(f"{row['kind']}: {row['label']}", int(row['group_id'])) for _, row in df.iterrows()]
-        self.group_combo.set_items(items, check_all=False)
+        was = self.group_combo.blockSignals(True)
+        try:
+            if df is None or df.empty:
+                self.group_combo.clear_items()
+                return
+            items = [(f"{row['kind']}: {row['label']}", int(row['group_id'])) for _, row in df.iterrows()]
+            self.group_combo.set_items(items, check_all=False)
+        finally:
+            self.group_combo.blockSignals(was)
 
     def set_tags(self, items: list[tuple[str, Any]], *, check_all: bool = True) -> None:
-        self.tags_combo.set_items(items, check_all=check_all)
+        was = self.tags_combo.blockSignals(True)
+        try:
+            self.tags_combo.set_items(items, check_all=check_all)
+        finally:
+            self.tags_combo.blockSignals(was)
+
+    def _all_combo_values(self, combo: MultiCheckCombo) -> list[Any]:
+        values: list[Any] = []
+        model = combo.model()
+        if model is None:
+            return values
+        for row in range(model.rowCount()):
+            item = model.item(row)
+            if item is None:
+                continue
+            if item.data(MultiCheckCombo._ACTION_ROLE) == MultiCheckCombo._ACTION_TOGGLE_ALL:
+                continue
+            value = item.data(Qt.ItemDataRole.UserRole)
+            if value is None:
+                continue
+            values.append(value)
+        return values
+
+    def _select_values_or_all(
+        self,
+        combo: MultiCheckCombo,
+        values: Iterable[Any] | None,
+    ) -> None:
+        normalized = list(values or [])
+        if not normalized:
+            combo.set_selected_values(self._all_combo_values(combo))
+            return
+        combo.set_selected_values(normalized)
+
+    def _select_int_values_or_all(
+        self,
+        combo: MultiCheckCombo,
+        values: Iterable[Any] | None,
+    ) -> None:
+        normalized: list[int] = []
+        for value in values or []:
+            try:
+                normalized.append(int(value))
+            except Exception:
+                continue
+        if not normalized:
+            combo.set_selected_values(self._all_combo_values(combo))
+            return
+        combo.set_selected_values(normalized)
+
+    def _state_values(self, state: dict[str, Any], key: str, legacy_key: str | None = None) -> Any:
+        if key in state:
+            return state.get(key)
+        if legacy_key and legacy_key in state:
+            return state.get(legacy_key)
+        return None
 
     def refresh_filters(self) -> None:
         self._filters_view_model.refresh_filters()
@@ -517,12 +588,12 @@ class FiltersWidget(CollapsibleSection):
         _set_qdt(self.dt_from, state.get("start"))
         _set_qdt(self.dt_to, state.get("end"))
 
-        systems = state.get("systems") or []
-        self.systems_combo.set_selected_values(systems)
-        datasets = state.get("datasets") or state.get("Datasets") or []
-        self.datasets_combo.set_selected_values(datasets)
-        import_ids = state.get("import_ids") or []
-        self.imports_combo.set_selected_values(import_ids)
+        systems = self._state_values(state, "systems")
+        self._select_values_or_all(self.systems_combo, systems)
+        datasets = self._state_values(state, "datasets", legacy_key="Datasets")
+        self._select_values_or_all(self.datasets_combo, datasets)
+        import_ids = self._state_values(state, "import_ids")
+        self._select_int_values_or_all(self.imports_combo, import_ids)
         months = state.get("months") or []
         self.months_combo.set_selected_values(months)
         groups = state.get("group_ids") or []
