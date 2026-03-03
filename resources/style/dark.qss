@@ -91,6 +91,29 @@ QWidget#DataSubInfoRow {
     background: transparent;
 }
 
+QGroupBox#collapsibleSectionGroup,
+QFrame#collapsibleSectionBody {
+    background: transparent;
+}
+
+QToolButton#collapsibleSectionToggle,
+QToolButton#collapsibleSectionToggle:checked,
+QToolButton#collapsibleSectionToggle:disabled {
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    padding: 3px 6px;
+    text-align: left;
+}
+
+QToolButton#collapsibleSectionToggle:hover {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+QToolButton#collapsibleSectionToggle:pressed {
+    background: rgba(255, 255, 255, 0.14);
+}
+
 /* ---------- Menus & Toolbars ---------- */
 QMenuBar {
     background-color: #2d2d2d;

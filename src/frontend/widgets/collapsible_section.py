@@ -1,7 +1,7 @@
 
 from __future__ import annotations
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QWidget, QToolButton, QFrame, QVBoxLayout, QGroupBox
+from PySide6.QtWidgets import QWidget, QToolButton, QFrame, QVBoxLayout, QGroupBox, QSizePolicy
 from ..localization import tr
 
 
@@ -15,6 +15,7 @@ class CollapsibleSection(QWidget):
 
         # Outer frame container
         self._group = QGroupBox()       # everything goes INSIDE this groupbox
+        self._group.setObjectName("collapsibleSectionGroup")
         self._group.setTitle("")        # no native title; we’ll use the button text
         self._group.setFlat(False)
         self._group.setMinimumWidth(240) #match sidebar minimum width
@@ -22,19 +23,23 @@ class CollapsibleSection(QWidget):
 
         # Header button (inside the groupbox)
         self._btn = QToolButton(parent=self)
+        self._btn.setObjectName("collapsibleSectionToggle")
         self._btn.setText(title)
         self._btn.setCheckable(True)
         self._btn.setChecked(not collapsed)
         self._btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)  # type: ignore
+        self._btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._btn.setMinimumHeight(24)
-        self._btn.setMinimumWidth(160)
+        self._btn.setMinimumWidth(0)
         self._btn.setAttribute(Qt.WidgetAttribute.WA_AlwaysShowToolTips, True)  # type: ignore
         self._btn.setArrowType(Qt.ArrowType.DownArrow if not collapsed else Qt.ArrowType.RightArrow)  # type: ignore
         self._btn.toggled.connect(self._on_toggled)
         self._btn.setAccessibleName(tr("Toggle {title}").format(title=title))
+        self._btn.setCursor(Qt.CursorShape.PointingHandCursor)
 
         # Collapsible body (inside the groupbox)
         self._body = QFrame()
+        self._body.setObjectName("collapsibleSectionBody")
         self._body.setFrameShape(QFrame.Shape.NoFrame)  # type: ignore
         self._body.setVisible(not collapsed)
 

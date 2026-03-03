@@ -289,6 +289,7 @@ class RegressionSidebar(SidebarWidget):
             return widget
 
         container = QWidget(self)
+        container.setObjectName("DataSubInfoRow")
         layout = QHBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
@@ -1212,17 +1213,25 @@ class RegressionSidebar(SidebarWidget):
 
     def _sync_model_param_visibility(self) -> None:
         selected = set(self.selected_model_keys())
+        any_visible = False
         for key, group in self._model_param_groups.items():
             if group is None:
                 continue
-            group.setVisible(key in selected)
+            visible = key in selected
+            group.setVisible(visible)
+            any_visible = any_visible or visible
+        self.model_params_group.setVisible(any_visible)
 
     def _sync_selector_param_visibility(self) -> None:
         selected = set(self.selected_selector_keys())
+        any_visible = False
         for key, group in self._selector_param_groups.items():
             if group is None:
                 continue
-            group.setVisible(key in selected)
+            visible = key in selected
+            group.setVisible(visible)
+            any_visible = any_visible or visible
+        self.selector_params_group.setVisible(any_visible)
 
     def _build_reducer_param_forms(self) -> None:
         self._clear_layout(self.reducer_params_layout)

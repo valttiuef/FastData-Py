@@ -79,7 +79,7 @@ class ChartsTab(TabWidget):
         right_panel = Panel("", parent=self)
         right_layout = right_panel.content_layout()
 
-        header = QLabel(tr("Choose features from the left to find top correlations or choose charts types and features for each panel."))
+        header = QLabel(tr("Select features and find correlations or plot charts."))
         header.setObjectName("panelStatusLabel")
         header.setWordWrap(True)
         right_layout.addWidget(header)

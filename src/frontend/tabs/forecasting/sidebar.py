@@ -374,6 +374,7 @@ class ForecastingSidebar(SidebarWidget):
     def _build_model_param_forms(self) -> None:
         self._clear_layout(self.model_params_layout)
         self._model_param_getters.clear()
+        has_visible_forms = False
         for key, label, defaults in self._model_items:
             if key not in self.model_combo.selected_values():
                 continue
@@ -395,7 +396,10 @@ class ForecastingSidebar(SidebarWidget):
                 )
             self.model_params_layout.addWidget(box)
             self._model_param_getters[key] = getters
+            has_visible_forms = True
         self.model_params_layout.addStretch(1)
+        self.model_params_group.setVisible(has_visible_forms)
+        self.hyperparams_section.setVisible(has_visible_forms)
 
     def _create_param_widget(self, spec: dict[str, object], default: object, parent: QWidget) -> tuple[QWidget, Callable[[], object]]:
         ptype = str(spec.get("type", "text"))
@@ -494,6 +498,7 @@ class ForecastingSidebar(SidebarWidget):
     def _wrap_with_info(self, widget: QWidget, help_key: Optional[str]) -> QWidget:
         if help_key and self._help_viewmodel is not None:
             container = QWidget(widget.parent() or self)
+            container.setObjectName("DataSubInfoRow")
             layout = QHBoxLayout(container)
             layout.setContentsMargins(0, 0, 0, 0)
             layout.setSpacing(4)
