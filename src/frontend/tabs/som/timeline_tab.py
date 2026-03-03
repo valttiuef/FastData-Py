@@ -103,10 +103,12 @@ class TimelineTabWidget(QWidget):
 
         def _title_row(text: str, help_key: str) -> QWidget:
             container = QWidget(self)
+            container.setObjectName("DataSubInfoRow")
             layout = QHBoxLayout(container)
             layout.setContentsMargins(4, 0, 4, 0)
             layout.setSpacing(6)
             label = QLabel(text, container)
+            label.setObjectName("DataSubInfo")
             layout.addWidget(label)
             if help_viewmodel is not None:
                 layout.addWidget(InfoButton(help_key, help_viewmodel, parent=container))
@@ -118,7 +120,9 @@ class TimelineTabWidget(QWidget):
         time_layout.addSpacing(4)
 
         controls_row = QHBoxLayout()
-        controls_row.addWidget(QLabel(tr("Display:")))
+        display_label = QLabel(tr("Display:"))
+        display_label.setObjectName("DataSubInfo")
+        controls_row.addWidget(display_label)
         self.timeline_display_combo = MultiCheckCombo(
             parent=self,
             placeholder=tr("Select timeline layers"),

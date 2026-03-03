@@ -54,8 +54,9 @@ class StatisticsPreview(Panel):
         preview_layout = self.content_layout()
 
         header_layout = QHBoxLayout()
-        self.status_label = QLabel(tr("Select features and gather statistics."), self)
-        header_layout.addWidget(self.status_label, 1)
+        self.title = QLabel(tr("Select features and gather statistics."), self)
+        self.title.setObjectName("DataInfo")
+        header_layout.addWidget(self.title, 1)
 
         preview_layout.addLayout(header_layout)
 
@@ -113,7 +114,7 @@ class StatisticsPreview(Panel):
 
     # ------------------------------------------------------------------
     def set_status(self, text: str) -> None:
-        self.status_label.setText(text)
+        self.title.setText(text)
 
     # ------------------------------------------------------------------
     def resizeEvent(self, event: QResizeEvent) -> None:  # type: ignore[override]

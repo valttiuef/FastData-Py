@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 import logging
 logger = logging.getLogger(__name__)
 from ...localization import tr
+from ...utils import set_status_text
 
 from backend.services.modeling_shared import display_name
 from backend.services.regression_service import RegressionSummary, RegressionRunResult
@@ -69,9 +70,10 @@ class RegressionResultsPanel(Panel):
         self._initial_table_layout_applied = False
         layout = self.content_layout()
 
-        self.status_label = QLabel(tr("Select features and run a regression experiment."), self)
-        self.status_label.setWordWrap(True)
-        layout.addWidget(self.status_label)
+        self.title = QLabel(tr("Select features and run a regression experiment."), self)
+        self.title.setObjectName("DataInfo")
+        self.title.setWordWrap(True)
+        layout.addWidget(self.title)
 
         self.main_splitter = QSplitter(Qt.Orientation.Vertical, self)
         layout.addWidget(self.main_splitter, 1)
@@ -198,7 +200,7 @@ class RegressionResultsPanel(Panel):
         self.scatter_chart.clear()
         self._set_scatter_title(None)
         self.timeline_chart.clear()
-        self.status_label.setText(tr("Select features and run a regression experiment."))
+        self.title.setText(tr("Select features and run a regression experiment."))
         self._set_export_available(False)
         self._batch_loading = False
         self._timeline_cache.clear()
@@ -224,24 +226,22 @@ class RegressionResultsPanel(Panel):
         self._refresh_runs_table()
         self.runs_table.resizeColumnsToContents()
         if self._runs:
-            self.status_label.setText(tr("Regression runs updated. Select a run to inspect details."))
+            self.title.setText(tr("Regression runs updated. Select a run to inspect details."))
             self._set_export_available(True)
         else:
-            self.status_label.setText(tr("Select features and run a regression experiment."))
+            self.title.setText(tr("Select features and run a regression experiment."))
             self._set_export_available(False)
 
     def prepare_for_run(self, expected_runs: Optional[int] = None) -> None:
         if expected_runs and expected_runs > 0:
             self._expected_runs = expected_runs
-            self.status_label.setText(
-                tr("Preparing to train {count} regression pipelines…").format(count=expected_runs)
-            )
+            set_status_text(tr("Preparing regression pipelines..."))
         else:
-            self.status_label.setText(tr("Preparing regression pipelines…"))
+            set_status_text(tr("Preparing regression pipelines..."))
 
     def show_failure(self, message: str) -> None:
         text = message.strip() if message else tr("Regression failed.")
-        self.status_label.setText(text)
+        set_status_text(text)
 
     def set_summary(self, summary: Optional[RegressionSummary]) -> None:
         if summary is None or not summary.runs:
@@ -267,7 +267,8 @@ class RegressionResultsPanel(Panel):
         if summary.runs:
             self._apply_run(self._runs.get(self._current_selection_key or summary.runs[0].key))
 
-        self.status_label.setText(tr("Regression runs completed. Select a run to inspect details."))
+        self.title.setText(tr("Regression runs completed. Select a run to inspect details."))
+        set_status_text(tr("Regression finished."))
         self._set_export_available(bool(self._runs))
 
     def all_runs(self) -> list[RegressionRunResult]:
@@ -519,14 +520,14 @@ class RegressionResultsPanel(Panel):
         if not self._batch_loading:
             trained = len(self._runs)
             if self._expected_runs:
-                self.status_label.setText(
+                set_status_text(
                     tr("Trained {trained} of {total} regression pipelines.").format(
                         trained=trained, total=self._expected_runs
                     )
                 )
             else:
                 suffix = tr("s") if trained != 1 else ""
-                self.status_label.setText(
+                set_status_text(
                     tr("Trained {trained} regression pipeline{suffix}.").format(
                         trained=trained, suffix=suffix
                     )
@@ -612,10 +613,10 @@ class RegressionResultsPanel(Panel):
             runs=[self._runs[k] for k in self._run_order if k in self._runs]
         )
         if self._runs:
-            self.status_label.setText(tr("Regression runs updated. Select a run to inspect details."))
+            self.title.setText(tr("Regression runs updated. Select a run to inspect details."))
             self._set_export_available(True)
         else:
-            self.status_label.setText(tr("Select features and run a regression experiment."))
+            self.title.setText(tr("Select features and run a regression experiment."))
             self.predictions_table.set_dataframe(pd.DataFrame(columns=self._predictions_columns), include_index=False)
             self.scatter_chart.clear()
             self.timeline_chart.clear()
@@ -1116,4 +1117,5 @@ class RegressionResultsPanel(Panel):
 
 
 __all__ = ["RegressionResultsPanel"]
+
 

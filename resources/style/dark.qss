@@ -6,20 +6,35 @@ QWidget {
     font-size: 8pt;
 }
 
+QLabel, QCheckBox, QRadioButton {
+    background: transparent;
+}
+
 /* GroupBox */
 QGroupBox {
     border: 1px solid #3a3a3a;
     border-radius: 6px;
-    margin-top: 10px; /* space for title */
+    margin-top: 12px; /* space for title */
     padding: 4px 6px;
 }
 
 QGroupBox::title {
     subcontrol-origin: margin;
+    subcontrol-position: top left;
+    top: -2px;
     left: 8px;
     padding: 0 4px;
     color: #dddddd;
     background-color: transparent;
+}
+
+QWidget#sidebarWidget,
+QWidget#sidebarPanel,
+QWidget#sidebarActions,
+QWidget#sidebarViewport,
+QScrollArea#sidebarScrollArea,
+QWidget#DataSubInfoRow {
+    background: transparent;
 }
 
 /* ---------- Menus & Toolbars ---------- */
@@ -290,6 +305,98 @@ QWidget#chartCard {
 QWidget#chartCard[selectedTarget="true"] {
     background-color: #2d2d2d;
     border-color: #5a5a5a;
+}
+
+/* =========================
+   Chat Window
+   ========================= */
+QWidget#chatWindow QListWidget {
+    background: #2d2d2d;
+    border-radius: 6px;
+}
+
+QWidget#chatWindow QFrame#chatBubble {
+    border-radius: 14px;
+}
+
+QWidget#chatWindow QWidget#chatBubbleHeader,
+QWidget#chatWindow QLabel#chatBubbleTextLabel {
+    background: transparent;
+}
+
+QWidget#chatWindow QFrame#chatBubble[role="user"] {
+    background: #2563eb;
+    color: #ffffff;
+}
+
+QWidget#chatWindow QFrame#chatBubble[role="assistant"] {
+    background: rgba(127, 127, 127, 0.20);
+    color: #dddddd;
+}
+
+QWidget#chatWindow QFrame#chatBubble[role="error"] {
+    background: rgba(240, 98, 146, 0.20);
+    color: #f06292;
+}
+
+QWidget#chatWindow QFrame#chatBubble[role="user"] QLabel#chatBubbleTextLabel {
+    color: #ffffff;
+}
+
+QWidget#chatWindow QFrame#chatBubble[role="assistant"] QLabel#chatBubbleTextLabel {
+    color: #dddddd;
+}
+
+QWidget#chatWindow QFrame#chatBubble[role="error"] QLabel#chatBubbleTextLabel {
+    color: #f06292;
+}
+
+QWidget#chatWindow QTextBrowser#chatBubbleRichView {
+    background: transparent;
+    border: none;
+}
+
+QWidget#chatWindow QToolButton#chatBubbleCopyButton {
+    padding: 0px;
+    border: none;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.12);
+    color: rgba(255, 255, 255, 0.92);
+}
+
+QWidget#chatWindow QToolButton#chatBubbleCopyButton[role="assistant"] {
+    background: rgba(0, 0, 0, 0.18);
+    color: #dddddd;
+}
+
+QWidget#chatWindow QToolButton#chatBubbleCopyButton[role="error"] {
+    background: rgba(240, 98, 146, 0.25);
+    color: #f06292;
+}
+
+QWidget#chatWindow QToolButton#chatBubbleCopyButton:hover {
+    background: rgba(255, 255, 255, 0.20);
+}
+
+QWidget#chatWindow QToolButton#chatBubbleCopyButton[role="assistant"]:hover {
+    background: rgba(0, 0, 0, 0.26);
+}
+
+QWidget#chatWindow QToolButton#chatBubbleCopyButton[role="error"]:hover {
+    background: rgba(240, 98, 146, 0.32);
+}
+
+QLabel#panelStatusLabel,
+QLabel#DataInfo {
+    background: transparent;
+    font-size: 10pt;
+    font-weight: 600;
+}
+
+QLabel#DataSubInfo {
+    background: transparent;
+    font-size: 9pt;
+    font-weight: 600;
 }
 
 

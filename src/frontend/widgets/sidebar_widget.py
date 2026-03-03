@@ -31,14 +31,18 @@ class SidebarWidget(QWidget):
         minimum_width: int = SIDEBAR_MINIMUM_WIDTH,
     ) -> None:
         super().__init__(parent)
+        self.setObjectName("sidebarWidget")
 
         self._scroll_area = QScrollArea(self)
+        self._scroll_area.setObjectName("sidebarScrollArea")
         self._scroll_area.setWidgetResizable(True)
         self._scroll_area.setFrameShape(QFrame.Shape.NoFrame)
         self._scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)  # type: ignore
         self._scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)  # type: ignore
+        self._scroll_area.viewport().setObjectName("sidebarViewport")
 
         self._actions_container = QWidget(self)
+        self._actions_container.setObjectName("sidebarActions")
         self._actions_layout = QVBoxLayout(self._actions_container)
         self._actions_layout.setContentsMargins(*SIDEBAR_ACTIONS_MARGINS)
         self._actions_layout.setSpacing(SIDEBAR_ACTIONS_SPACING)
@@ -46,6 +50,7 @@ class SidebarWidget(QWidget):
 
         # no title
         self._panel = Panel(title="", parent=self)
+        self._panel.setObjectName("sidebarPanel")
         self._panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.MinimumExpanding)
         self._scroll_area.setWidget(self._panel)
 

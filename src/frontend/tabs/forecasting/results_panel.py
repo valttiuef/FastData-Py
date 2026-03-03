@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 import logging
 logger = logging.getLogger(__name__)
 from ...localization import tr
+from ...utils import set_status_text
 
 from backend.services.forecasting_service import ForecastSummary, ForecastRunResult
 from frontend.charts import ProgressChart, TimeSeriesChart, ScatterChart
@@ -45,9 +46,10 @@ class ForecastingResultsPanel(Panel):
         super().__init__("", parent=parent)
         layout = self.content_layout()
 
-        self.status_label = QLabel(tr("Select features and run a forecasting experiment."), self)
-        self.status_label.setWordWrap(True)
-        layout.addWidget(self.status_label)
+        self.title = QLabel(tr("Select features and run a forecasting experiment."), self)
+        self.title.setObjectName("DataInfo")
+        self.title.setWordWrap(True)
+        layout.addWidget(self.title)
 
         self.main_splitter = QSplitter(Qt.Orientation.Vertical, self)
         layout.addWidget(self.main_splitter, 1)
@@ -136,16 +138,14 @@ class ForecastingResultsPanel(Panel):
         self.progress_chart.clear()
         self.forecast_chart.clear()
         self.residual_chart.clear()
-        self.status_label.setText(tr("Select features and run a forecasting experiment."))
+        self.title.setText(tr("Select features and run a forecasting experiment."))
 
     def prepare_for_run(self, expected_runs: Optional[int] = None) -> None:
         if expected_runs and expected_runs > 0:
             self._expected_runs = expected_runs
-            self.status_label.setText(
-                tr("Preparing to train {count} forecasting pipelines…").format(count=expected_runs)
-            )
+            set_status_text(tr("Preparing forecasting pipelines..."))
         else:
-            self.status_label.setText(tr("Preparing forecasting pipelines…"))
+            set_status_text(tr("Preparing forecasting pipelines..."))
 
     def set_view_model(self, view_model) -> None:
         if self._view_model is view_model:
@@ -171,7 +171,7 @@ class ForecastingResultsPanel(Panel):
 
     def show_failure(self, message: str) -> None:
         text = message.strip() if message else tr("Forecasting failed.")
-        self.status_label.setText(text)
+        set_status_text(text)
 
     def set_summary(self, summary: Optional[ForecastSummary]) -> None:
         if summary is None or not summary.runs:
@@ -194,7 +194,8 @@ class ForecastingResultsPanel(Panel):
             latest_progress = summary.runs[-1].progress_frame
             self.progress_chart.set_dataframe(latest_progress if latest_progress is not None else pd.DataFrame())
 
-        self.status_label.setText(tr("Forecasting runs completed. Select a run to inspect details."))
+        self.title.setText(tr("Forecasting runs completed. Select a run to inspect details."))
+        set_status_text(tr("Forecasting finished."))
 
     # ------------------------------------------------------------------
     def prepare_progress_frame(self, run: ForecastRunResult) -> pd.DataFrame:
@@ -321,9 +322,9 @@ class ForecastingResultsPanel(Panel):
             runs=[self._runs[k] for k in self._run_order if k in self._runs]
         )
         if self._runs:
-            self.status_label.setText(tr("Forecasting runs updated. Select a run to inspect details."))
+            self.title.setText(tr("Forecasting runs updated. Select a run to inspect details."))
         else:
-            self.status_label.setText(tr("Select features and run a forecasting experiment."))
+            self.title.setText(tr("Select features and run a forecasting experiment."))
             self.progress_chart.clear()
             self.forecast_chart.clear()
             self.residual_chart.clear()

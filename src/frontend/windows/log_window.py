@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QPalette, QTextCharFormat, QTextCursor, QTextDocument
+from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor, QTextDocument
 from PySide6.QtWidgets import (
 
 
@@ -160,12 +160,14 @@ class LogWindow(QWidget):
 
     # ------------------------------------------------------------------
     def _append_entry(self, event: LogEvent) -> None:
+        self._insert_entry_with_format(event)
+        self._mark_search_dirty()
+
+    def _insert_entry_with_format(self, event: LogEvent) -> None:
         cursor = self._view.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
 
         fmt = QTextCharFormat()
-        default_color = self._view.palette().color(QPalette.ColorRole.Text)
-        fmt.setForeground(default_color)
         color = self._color_for_level(event.level)
         if color is not None:
             fmt.setForeground(QColor(color))
@@ -173,7 +175,6 @@ class LogWindow(QWidget):
         cursor.insertText(f"{event.formatted}\n", fmt)
         self._view.setTextCursor(cursor)
         self._view.ensureCursorVisible()
-        self._mark_search_dirty()
 
     def _clear_view(self) -> None:
         self._view.clear()
@@ -181,12 +182,11 @@ class LogWindow(QWidget):
 
     def _refresh_view(self) -> None:
         entries = self._model.filtered_entries()
-        text = "\n".join(entry.formatted for entry in entries)
         self._view.setUpdatesEnabled(False)
         try:
             self._clear_view()
-            if text:
-                self._view.setPlainText(text)
+            for entry in entries:
+                self._insert_entry_with_format(entry)
             self._update_logger_selector()
             cursor = self._view.textCursor()
             cursor.movePosition(QTextCursor.MoveOperation.End)

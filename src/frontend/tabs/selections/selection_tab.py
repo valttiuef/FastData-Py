@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import List, Optional
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QAbstractItemView, QInputDialog, QLineEdit, QMessageBox, QWidget
+from PySide6.QtWidgets import QAbstractItemView, QInputDialog, QLabel, QLineEdit, QMessageBox, QWidget
 from ...localization import tr
 
 from ...models.database_model import DatabaseModel
@@ -61,6 +61,10 @@ class SelectionsTab(TabWidget):
     def _create_content_widget(self) -> QWidget:
         panel = Panel(title=tr("Features"))
         layout = panel.content_layout()
+        self.title = QLabel(tr("Select features and manage selection settings."), panel)
+        self.title.setObjectName("DataInfo")
+        self.title.setWordWrap(True)
+        layout.addWidget(self.title)
         self._search_edit = QLineEdit(panel)
         self._search_edit.setClearButtonEnabled(True)
         self._search_edit.setPlaceholderText(tr("Search features…"))

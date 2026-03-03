@@ -58,6 +58,10 @@ class SomTab(TabWidget):
     _FEATURE_TABLE_COLUMNS = FEATURE_TABLE_COLUMNS
     _FEATURE_TABLE_COLUMN_LABELS = FEATURE_TABLE_COLUMN_LABELS
 
+    @staticmethod
+    def _default_title_text() -> str:
+        return tr("Select features in the sidebar and train SOM to build a map.")
+
     def __init__(
         self,
         database_model: HybridPandasModel,
@@ -129,7 +133,8 @@ class SomTab(TabWidget):
         results_panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         results_layout = results_panel.content_layout()
 
-        self.metrics_label = QLabel(tr("No model trained yet."))
+        self.metrics_label = QLabel(self._default_title_text())
+        self.metrics_label.setObjectName("panelStatusLabel")
         self.metrics_label.setWordWrap(True)
         results_layout.addWidget(self.metrics_label)
 
@@ -365,7 +370,7 @@ class SomTab(TabWidget):
         self._neuron_clusters = None
         self._feature_clusters = None
         self._timeline_display_df = self._empty_timeline_table_dataframe()
-        self.metrics_label.setText(tr("No model trained yet."))
+        self.metrics_label.setText(self._default_title_text())
         if self.sidebar is not None:
             try:
                 self.sidebar.data_selector.clear_filters_and_features(refresh_filter_options=True)

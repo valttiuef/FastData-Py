@@ -8,7 +8,7 @@ from typing import Optional
 
 import pandas as pd
 
-from PySide6.QtWidgets import QWidget, QLabel, QSplitter, QPushButton, QHBoxLayout
+from PySide6.QtWidgets import QWidget, QLabel, QSplitter, QPushButton, QHBoxLayout, QSizePolicy
 from PySide6.QtCore import Qt, QTimer, QDateTime
 from ...localization import tr
 
@@ -28,27 +28,6 @@ from .viewmodel import DataViewModel
 
 from backend.models import ImportOptions
 from ..tab_widget import TabWidget
-
-
-
-def _parse_qdatetime(qdt: QDateTime) -> pd.Timestamp | None:
-    if not qdt or not qdt.isValid():
-        return None
-    # IMPORTANT: build a naive (timezone-free) wall-clock timestamp directly
-    d = qdt.date()
-    t = qdt.time()
-    try:
-        return pd.Timestamp(
-            year=d.year(),
-            month=d.month(),
-            day=d.day(),
-            hour=t.hour(),
-            minute=t.minute(),
-            second=t.second(),
-            microsecond=t.msec() * 1000,
-        )
-    except Exception:
-        return None
 
 
 class DataTab(TabWidget):
@@ -81,6 +60,7 @@ class DataTab(TabWidget):
         self._debounce.setSingleShot(True)
         self._debounce.setInterval(120)
         self._debounce.timeout.connect(self._reload_now)
+
         self._reload_epoch = 0
         self._last_requirements_key = None
         self._last_reload_epoch = -1
@@ -90,10 +70,12 @@ class DataTab(TabWidget):
         self._reload_request_id = 0
         self._active_reload_request_id = 0
         self._inflight_requirements_key: tuple | None = None
+
         self._selection_sync_fallback = QTimer(self)
         self._selection_sync_fallback.setSingleShot(True)
         self._selection_sync_fallback.setInterval(450)
         self._selection_sync_fallback.timeout.connect(self._on_selection_sync_timeout)
+
         self._last_import_progress_message: Optional[str] = None
         self._last_progress_phase: Optional[str] = None
         self._show_auto_timestep_status: bool = False
@@ -144,27 +126,20 @@ class DataTab(TabWidget):
 
         self.data_info = QLabel(tr("No data loaded"))
         self.data_info.setObjectName("DataInfo")
-
-        font = self.data_info.font()
-        font.setPointSize(12)        # increase size (points)
-        font.setBold(True)           # make bold
-        self.data_info.setFont(font)
+        self.data_info.setWordWrap(True)
+        self.data_info.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.data_info.setMinimumWidth(0)
 
         info_row = QHBoxLayout()
-        # Nudge the info row to visually align with chart plot content.
-        info_row.setContentsMargins(20, 0, 0, 0)
-        info_row.setSpacing(8)
-        info_row.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        info_row.addWidget(self.data_info)
+        info_row.addWidget(self.data_info, 1)
 
         self.features_info_button = QPushButton("ℹ", right)
         self.features_info_button.setToolTip(tr("Show selected feature details"))
-        self.features_info_button.setFixedSize(22, 22)
+        self.features_info_button.setFixedSize(20, 20)
         self.features_info_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.features_info_button.clicked.connect(self._show_features_info_dialog)
         self.features_info_button.setEnabled(False)
         info_row.addWidget(self.features_info_button)
-        info_row.addStretch(1)
 
         right_layout.addLayout(info_row)
 
@@ -576,6 +551,31 @@ class DataTab(TabWidget):
         except Exception:
             self._owned_base_cache_key = None
 
+    def _timestamps_match(self, left, right) -> bool:
+        try:
+            if left is None and right is None:
+                return True
+            if left is None or right is None:
+                return False
+            return pd.Timestamp(left) == pd.Timestamp(right)
+        except Exception:
+            return False
+
+    def _apply_initial_timeframe_before_first_fetch(self, flt: DataFilters) -> DataFilters:
+        """Resolve initial filter range from feature bounds before first base-data fetch."""
+        if self._initial_filter_timeframe_applied:
+            return flt
+        flt_for_bounds = flt.clone_with_range(None, None)
+        b0, b1 = self._view_model.time_bounds(flt_for_bounds)
+        if b0 is None or b1 is None:
+            return flt
+        self._initial_filter_timeframe_applied = True
+        if self._timestamps_match(flt.start, b0) and self._timestamps_match(flt.end, b1):
+            return flt
+        self._set_dt_controls_from_range(b0, b1)
+        refreshed = self._build_filters()
+        return refreshed if refreshed is not None else flt.clone_with_range(b0, b1)
+
     def _ensure_data_tab_cache_active(self) -> None:
         flt = self._build_chart_filters()
         if not flt:
@@ -630,6 +630,9 @@ class DataTab(TabWidget):
             self._owned_base_cache_key = None
             return
 
+        flt = self._apply_initial_timeframe_before_first_fetch(flt)
+        requirements_key = self._requirements_key()
+
         request_id = self._next_reload_request_id()
         self._active_reload_request_id = request_id
         self._inflight_requirements_key = requirements_key
@@ -681,18 +684,7 @@ class DataTab(TabWidget):
         b0, b1 = self._view_model.time_bounds(flt_for_bounds)
         effective_start = flt.start
         effective_end = flt.end
-        if (
-            not self._initial_filter_timeframe_applied
-            and b0 is not None
-            and b1 is not None
-        ):
-            # On first successful load, initialize date filters to actual
-            # feature bounds (same behavior goal as reset).
-            self._set_dt_controls_from_range(b0, b1)
-            self._initial_filter_timeframe_applied = True
-            effective_start = b0
-            effective_end = b1
-        elif effective_start is None or effective_end is None:
+        if effective_start is None or effective_end is None:
             effective_start = b0 if effective_start is None else effective_start
             effective_end = b1 if effective_end is None else effective_end
 
@@ -725,7 +717,8 @@ class DataTab(TabWidget):
                 self.timeseries_chart.set_x_range(pd.Timestamp(effective_start), pd.Timestamp(effective_end))
             except Exception:
                 logger.warning("Failed to restore requested X-range after reload.", exc_info=True)
-        self._set_monthly_chart_title(flt)
+        title_filters = flt.clone_with_range(effective_start, effective_end)
+        self._set_monthly_chart_title(title_filters)
 
         self.data_info.setText(
             self._build_data_info_text(flt, b0, b1, rows=len(series_df))
