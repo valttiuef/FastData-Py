@@ -30,7 +30,6 @@ from ..widgets.help_widgets import InfoButton
 from ..viewmodels.help_viewmodel import HelpViewModel, get_help_viewmodel
 from ..threading.runner import run_in_thread
 from ..threading.utils import run_in_main_thread
-from ..tabs.data.import_preview_logic import should_enable_duckdb_csv_import
 
 import datetime
 import numpy as np
@@ -48,7 +47,6 @@ _EPOCH_S_LO = 10**9      # ~2001
 _EPOCH_S_HI = 2_000_000_000  # ~2033
 _EPOCH_MS_LO = 10**12
 _EPOCH_MS_HI = 2_000_000_000_000
-_DUCKDB_CSV_AUTO_BYTES = 100 * 1024 * 1024
 
 # quick regexes for common date orders
 _PATTERNS = [
@@ -709,9 +707,7 @@ class ImportOptionsDialog(QDialog):
         )
 
         self.duckdb_csv_cb = QCheckBox(tr("Use DuckDB CSV import"))
-        auto_duckdb = False
-        if _is_csv_like(self.files[0]):
-            auto_duckdb = should_enable_duckdb_csv_import(self.files[0], _DUCKDB_CSV_AUTO_BYTES)
+        auto_duckdb = _is_csv_like(self.files[0])
         opt_value = getattr(self.opts, "use_duckdb_csv_import", None)
         if opt_value is None:
             self.duckdb_csv_cb.setChecked(auto_duckdb)
@@ -989,6 +985,7 @@ class ImportOptionsDialog(QDialog):
         assume_dayfirst = payload.get("assume_dayfirst")
         dot_time_as_colon = payload.get("dot_time_as_colon")
         delimiter_guess = payload.get("csv_delimiter_guess")
+        force_meta_guess = payload.get("force_meta_columns_guess") or []
 
         try:
             if header_rows is not None:
@@ -1015,6 +1012,23 @@ class ImportOptionsDialog(QDialog):
                 self.dayfirst_cb.setChecked(bool(assume_dayfirst))
             if dot_time_as_colon:
                 self.dot_time_cb.setChecked(True)
+            if force_meta_guess:
+                existing = [
+                    x.strip() for x in (self.force_meta_cols_edit.text() or "").split(",") if x.strip()
+                ]
+                seen = {x.casefold() for x in existing}
+                merged = list(existing)
+                for item in force_meta_guess:
+                    text = str(item or "").strip()
+                    if not text:
+                        continue
+                    key = text.casefold()
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    merged.append(text)
+                if merged:
+                    self.force_meta_cols_edit.setText(", ".join(merged))
         except Exception:
             logger.warning("Exception in _apply_preview_payload", exc_info=True)
 

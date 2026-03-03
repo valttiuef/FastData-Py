@@ -59,6 +59,7 @@ class DatasetsRepository:
             ph = ",".join(["?"] * len(import_ids))
             con.execute(f"DELETE FROM measurements WHERE import_id IN ({ph});", import_ids)
             con.execute(f"DELETE FROM csv_feature_columns WHERE import_id IN ({ph});", import_ids)
+            con.execute(f"DELETE FROM csv_group_columns WHERE import_id IN ({ph});", import_ids)
             con.execute(f"DELETE FROM feature_import_map WHERE import_id IN ({ph});", import_ids)
             con.execute(f"DELETE FROM model_imports WHERE import_id IN ({ph});", import_ids)
             con.execute(f"DELETE FROM imports WHERE id IN ({ph});", import_ids)

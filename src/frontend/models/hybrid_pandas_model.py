@@ -795,6 +795,7 @@ class HybridPandasModel(DatabaseModel):
             systems=getattr(filters, "systems", None),
             datasets=getattr(filters, "datasets", None),
             import_ids=getattr(filters, "import_ids", None),
+            group_ids=getattr(filters, "group_ids", None),
             start=start,
             end=end,
         )
@@ -1212,7 +1213,8 @@ class HybridPandasModel(DatabaseModel):
         # If ALL groups selected, skip this; when UI means "all", prefer flt.group_ids=None.
         if getattr(merged_filters, "group_ids", None):
             gp = self.db.group_points(merged_filters.group_ids, start=merged_filters.start, end=merged_filters.end)
-            base_df = self._filter_frame_by_group_ranges(base_df, gp, cadence)
+            if gp is not None and not gp.empty:
+                base_df = self._filter_frame_by_group_ranges(base_df, gp, cadence)
 
         self._base_df = base_df.sort_values("t")
         self._base_span = self._data_span(self._base_df)
@@ -1393,6 +1395,7 @@ class HybridPandasModel(DatabaseModel):
             systems=getattr(flt, "systems", None),
             datasets=getattr(flt, "datasets", None),
             import_ids=getattr(flt, "import_ids", None),
+            group_ids=getattr(flt, "group_ids", None),
         )
         if feature_ids:
             # Keep count query aligned with data fetch queries: when feature IDs are provided,
@@ -1437,6 +1440,7 @@ class HybridPandasModel(DatabaseModel):
             systems=getattr(flt, "systems", None),
             datasets=getattr(flt, "datasets", None),
             import_ids=getattr(flt, "import_ids", None),
+            group_ids=getattr(flt, "group_ids", None),
         )
         if feature_ids:
             base_kwargs["feature_ids"] = feature_ids

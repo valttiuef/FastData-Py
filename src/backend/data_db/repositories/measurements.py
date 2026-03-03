@@ -31,6 +31,7 @@ class MeasurementsRepository:
         type: Optional[str] = None,
         feature_ids: Optional[Sequence[int]] = None,
         import_ids: Optional[Sequence[int]] = None,
+        group_ids: Optional[Sequence[int]] = None,
         start: Optional[pd.Timestamp] = None,
         end: Optional[pd.Timestamp] = None,
     ) -> Tuple[str, List[object]]:
@@ -73,6 +74,19 @@ class MeasurementsRepository:
             ph = ",".join(["?"] * len(import_ids))
             where.append(f"m.import_id IN ({ph})")
             params.extend([int(iid) for iid in import_ids])
+        if group_ids:
+            gids = [int(gid) for gid in group_ids]
+            ph = ",".join(["?"] * len(gids))
+            where.append(
+                "EXISTS ("
+                "SELECT 1 FROM group_points gp "
+                f"WHERE gp.group_id IN ({ph}) "
+                "AND gp.dataset_id = m.dataset_id "
+                "AND gp.start_ts <= m.ts "
+                "AND gp.end_ts >= m.ts"
+                ")"
+            )
+            params.extend(gids)
         if start is not None:
             where.append("m.ts >= ?")
             params.append(pd.Timestamp(start))
@@ -111,6 +125,7 @@ class MeasurementsRepository:
         type=None,
         feature_ids: Optional[Sequence[int]] = None,
         import_ids: Optional[Sequence[int]] = None,
+        group_ids: Optional[Sequence[int]] = None,
         start=None,
         end=None,
         limit: Optional[int] = None,
@@ -124,6 +139,7 @@ class MeasurementsRepository:
             type=type,
             feature_ids=feature_ids,
             import_ids=import_ids,
+            group_ids=group_ids,
             start=start,
             end=end,
             systems=systems,
@@ -204,6 +220,7 @@ class MeasurementsRepository:
         type=None,
         feature_ids: Optional[Sequence[int]] = None,
         import_ids: Optional[Sequence[int]] = None,
+        group_ids: Optional[Sequence[int]] = None,
         start=None,
         end=None,
         target_points: int = 10000,
@@ -219,6 +236,7 @@ class MeasurementsRepository:
             type=type,
             feature_ids=feature_ids,
             import_ids=import_ids,
+            group_ids=group_ids,
             start=start,
             end=end,
             systems=systems,

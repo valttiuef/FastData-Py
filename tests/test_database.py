@@ -16,6 +16,7 @@ from backend.data_db.database import Database
 from backend.models import ImportOptions
 from frontend.models.settings_model import SettingsModel
 from frontend.models.hybrid_pandas_model import HybridPandasModel, DataFilters, FeatureSelection
+from frontend.tabs.data.import_preview_logic import build_import_preview_payload
 
 
 @pytest.fixture
@@ -268,3 +269,441 @@ def test_hybrid_model_loads_rows_from_duckdb_csv_import(temp_db: Database, tmp_p
         assert frame[value_columns].apply(pd.to_numeric, errors="coerce").notna().any().any()
     finally:
         model._close_database()
+
+
+def test_query_raw_text_mode_preserves_csv_string_values(temp_db: Database, tmp_path: Path):
+    csv_path = tmp_path / "csv_text_mode.csv"
+    _write_csv(
+        csv_path,
+        [
+            ("2026-02-01 00:00:00", 1.0),
+            ("2026-02-01 00:01:00", 2.0),
+            ("2026-02-01 00:02:00", 3.0),
+        ],
+    )
+
+    opts = ImportOptions(
+        system_name="SysCsvText",
+        dataset_name="DataCsvText",
+        csv_header_rows=1,
+        auto_detect_datetime=False,
+        date_column="Time",
+        use_duckdb_csv_import=True,
+    )
+    import_ids = temp_db.import_file(csv_path, opts)
+    assert len(import_ids) == 1
+
+    features = temp_db.list_features(systems=["SysCsvText"], datasets=["DataCsvText"])
+    assert not features.empty
+    feature_id = int(features.iloc[0]["feature_id"])
+
+    with temp_db.connection() as con:
+        mapping = con.execute(
+            """
+            SELECT i.csv_table_name, cfc.column_name
+            FROM csv_feature_columns cfc
+            JOIN imports i ON i.id = cfc.import_id
+            WHERE cfc.feature_id = ?
+            LIMIT 1;
+            """,
+            [feature_id],
+        ).fetchone()
+        assert mapping is not None
+        table_name, column_name = str(mapping[0]), str(mapping[1])
+        con.execute(f'UPDATE "{table_name}" SET "{column_name}" = \'Open\';')
+
+    numeric_df = temp_db.query_raw(feature_ids=[feature_id])
+    assert not numeric_df.empty
+    assert pd.to_numeric(numeric_df["v"], errors="coerce").notna().sum() == 0
+
+    text_df = temp_db.query_raw(feature_ids=[feature_id], csv_value_mode="text")
+    assert not text_df.empty
+    assert set(text_df["v"].dropna().astype(str).tolist()) == {"Open"}
+
+
+def test_mark_csv_feature_group_kind_creates_group_links(temp_db: Database, tmp_path: Path):
+    csv_path = tmp_path / "csv_group_links.csv"
+    _write_csv(
+        csv_path,
+        [
+            ("2026-02-01 00:00:00", 10.0),
+            ("2026-02-01 00:01:00", 20.0),
+        ],
+    )
+
+    opts = ImportOptions(
+        system_name="SysCsvGroupLink",
+        dataset_name="DataCsvGroupLink",
+        csv_header_rows=1,
+        auto_detect_datetime=False,
+        date_column="Time",
+        use_duckdb_csv_import=True,
+    )
+    import_ids = temp_db.import_file(csv_path, opts)
+    assert len(import_ids) == 1
+
+    features = temp_db.list_features(systems=["SysCsvGroupLink"], datasets=["DataCsvGroupLink"])
+    assert not features.empty
+    feature_id = int(features.iloc[0]["feature_id"])
+
+    with temp_db.connection() as con:
+        mapping = con.execute(
+            """
+            SELECT i.csv_table_name, cfc.column_name
+            FROM csv_feature_columns cfc
+            JOIN imports i ON i.id = cfc.import_id
+            WHERE cfc.feature_id = ?
+            LIMIT 1;
+            """,
+            [feature_id],
+        ).fetchone()
+        assert mapping is not None
+        table_name, column_name = str(mapping[0]), str(mapping[1])
+        con.execute(f'UPDATE "{table_name}" SET "{column_name}" = \'A\';')
+
+    link_count = temp_db.mark_csv_feature_group_kind(feature_id=feature_id, group_kind="Status groups")
+    assert link_count >= 1
+
+    linked_values = temp_db.query_csv_group_points_by_feature(
+        feature_id=feature_id,
+        group_kind="Status groups",
+    )
+    assert not linked_values.empty
+    assert set(linked_values["v"].dropna().astype(str).tolist()) == {"A"}
+
+
+def test_query_raw_group_ids_filters_measurement_rows(temp_db: Database, tmp_path: Path):
+    csv_path = tmp_path / "group_measurement_filter.csv"
+    _write_csv(
+        csv_path,
+        [
+            ("2026-02-01 00:00:00", 1.0),
+            ("2026-02-01 00:01:00", 2.0),
+            ("2026-02-01 00:02:00", 3.0),
+        ],
+    )
+    opts = ImportOptions(
+        system_name="SysGroupMeas",
+        dataset_name="DataGroupMeas",
+        csv_header_rows=1,
+        auto_detect_datetime=False,
+        date_column="Time",
+    )
+    temp_db.import_file(csv_path, opts)
+    all_df = temp_db.query_raw(system="SysGroupMeas", dataset="DataGroupMeas")
+    assert len(all_df) == 3
+    target_ts = pd.Timestamp(all_df.sort_values("t").iloc[1]["t"])
+    with temp_db.write_transaction() as con:
+        con.execute(
+            "INSERT INTO group_labels (id, label, kind) VALUES (nextval('group_labels_id_seq'), ?, ?)",
+            ["Window", "ManualKind"],
+        )
+        group_id = int(
+            con.execute(
+                "SELECT id FROM group_labels WHERE label = ? AND kind = ? LIMIT 1",
+                ["Window", "ManualKind"],
+            ).fetchone()[0]
+        )
+        dataset_id = int(
+            con.execute(
+                """
+                SELECT ds.id
+                FROM datasets ds
+                JOIN systems sy ON sy.id = ds.system_id
+                WHERE sy.name = ? AND ds.name = ?
+                LIMIT 1
+                """,
+                ["SysGroupMeas", "DataGroupMeas"],
+            ).fetchone()[0]
+        )
+        con.execute(
+            """
+            INSERT INTO group_points (start_ts, end_ts, dataset_id, group_id)
+            VALUES (?, ?, ?, ?)
+            """,
+            [target_ts, target_ts, dataset_id, group_id],
+        )
+    filtered = temp_db.query_raw(system="SysGroupMeas", dataset="DataGroupMeas", group_ids=[group_id])
+    assert len(filtered) == 1
+    assert pd.Timestamp(filtered.iloc[0]["t"]) == target_ts
+
+
+def test_query_raw_group_ids_filters_linked_csv_values(temp_db: Database, tmp_path: Path):
+    csv_path = tmp_path / "group_linked_filter.csv"
+    _write_csv(
+        csv_path,
+        [
+            ("2026-02-01 00:00:00", 1.0),
+            ("2026-02-01 00:01:00", 2.0),
+            ("2026-02-01 00:02:00", 3.0),
+        ],
+    )
+    opts = ImportOptions(
+        system_name="SysGroupLinked",
+        dataset_name="DataGroupLinked",
+        csv_header_rows=1,
+        auto_detect_datetime=False,
+        date_column="Time",
+        use_duckdb_csv_import=True,
+    )
+    temp_db.import_file(csv_path, opts)
+    features = temp_db.list_features(systems=["SysGroupLinked"], datasets=["DataGroupLinked"])
+    assert not features.empty
+    feature_id = int(features.iloc[0]["feature_id"])
+    with temp_db.write_transaction() as con:
+        mapping = con.execute(
+            """
+            SELECT i.csv_table_name, i.csv_ts_column, cfc.column_name
+            FROM csv_feature_columns cfc
+            JOIN imports i ON i.id = cfc.import_id
+            WHERE cfc.feature_id = ?
+            LIMIT 1
+            """,
+            [feature_id],
+        ).fetchone()
+        assert mapping is not None
+        table_name, ts_column, column_name = str(mapping[0]), str(mapping[1]), str(mapping[2])
+        con.execute(
+            f"""
+            UPDATE "{table_name}"
+            SET "{column_name}" = CASE
+                WHEN CAST("{ts_column}" AS VARCHAR) LIKE '2026-02-01 00:01:%' THEN 'B'
+                ELSE 'A'
+            END
+            """
+        )
+        con.execute(
+            "INSERT INTO group_labels (id, label, kind) VALUES (nextval('group_labels_id_seq'), ?, ?)",
+            ["A", "LinkedKind"],
+        )
+        group_id = int(
+            con.execute(
+                "SELECT id FROM group_labels WHERE label = ? AND kind = ? LIMIT 1",
+                ["A", "LinkedKind"],
+            ).fetchone()[0]
+        )
+    temp_db.mark_csv_feature_group_kind(feature_id=feature_id, group_kind="LinkedKind")
+    linked_df = temp_db.query_raw(
+        systems=["SysGroupLinked"],
+        datasets=["DataGroupLinked"],
+        feature_ids=[feature_id],
+        group_ids=[group_id],
+        csv_value_mode="text",
+    )
+    assert len(linked_df) == 2
+    assert set(linked_df["v"].astype(str).tolist()) == {"A"}
+
+
+def test_query_raw_group_ids_linked_labels_filter_other_feature_columns(temp_db: Database, tmp_path: Path):
+    csv_path = tmp_path / "group_linked_other_feature.csv"
+    csv_path.write_text(
+        "\n".join(
+            [
+                "Time,GroupCol,ValueCol",
+                "2026-02-01 00:00:00,A,10.0",
+                "2026-02-01 00:01:00,B,20.0",
+                "2026-02-01 00:02:00,A,30.0",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    opts = ImportOptions(
+        system_name="SysGroupOther",
+        dataset_name="DataGroupOther",
+        csv_header_rows=1,
+        auto_detect_datetime=False,
+        date_column="Time",
+        csv_delimiter=",",
+        use_duckdb_csv_import=True,
+    )
+    temp_db.import_file(csv_path, opts)
+    features = temp_db.list_features(systems=["SysGroupOther"], datasets=["DataGroupOther"])
+    assert not features.empty
+    group_feature = features[features["name"].astype(str) == "GroupCol"]
+    value_feature = features[features["name"].astype(str) == "ValueCol"]
+    assert not group_feature.empty
+    assert not value_feature.empty
+    group_feature_id = int(group_feature.iloc[0]["feature_id"])
+    value_feature_id = int(value_feature.iloc[0]["feature_id"])
+
+    with temp_db.write_transaction() as con:
+        con.execute(
+            "INSERT INTO group_labels (id, label, kind) VALUES (nextval('group_labels_id_seq'), ?, ?)",
+            ["A", "GroupCol"],
+        )
+        group_id = int(
+            con.execute(
+                "SELECT id FROM group_labels WHERE label = ? AND kind = ? LIMIT 1",
+                ["A", "GroupCol"],
+            ).fetchone()[0]
+        )
+    temp_db.mark_csv_feature_group_kind(feature_id=group_feature_id, group_kind="GroupCol")
+
+    filtered = temp_db.query_raw(
+        systems=["SysGroupOther"],
+        datasets=["DataGroupOther"],
+        feature_ids=[value_feature_id],
+        group_ids=[group_id],
+    )
+    assert len(filtered) == 2
+    values = pd.to_numeric(filtered["v"], errors="coerce").dropna().tolist()
+    assert values == [10.0, 30.0]
+
+
+def test_import_preview_guesses_force_meta_columns_only_when_guess_enabled(tmp_path: Path):
+    csv_path = tmp_path / "preview_force_meta_guess.csv"
+    header = [f"Col{i}" for i in range(1, 14)]
+    header[0] = "Time"
+    header[6] = "State7"
+    header[11] = "State12"
+    header[12] = "State13"
+    lines = [",".join(header)]
+    lines.append(",".join(["2026-02-01 00:00:00", "1", "2", "3", "4", "5", "Open", "7", "8", "9", "10", "Closed", "Open"]))
+    lines.append(",".join(["2026-02-01 00:01:00", "1", "2", "3", "4", "5", "Closed", "7", "8", "9", "10", "Open", "Closed"]))
+    lines.append(",".join(["2026-02-01 00:02:00", "1", "2", "3", "4", "5", "Open", "7", "8", "9", "10", "Closed", "Open"]))
+    csv_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    guessed = build_import_preview_payload(
+        file_path=str(csv_path),
+        csv_delimiter=",",
+        csv_decimal=None,
+        csv_encoding="utf-8",
+        base_header_index=0,
+        guess=True,
+        nrows=8,
+        ncolumns=16,
+    )
+    guessed_cols = list(guessed.get("force_meta_columns_guess") or [])
+    assert "State7" in guessed_cols
+    assert "State12" in guessed_cols
+    assert "State13" in guessed_cols
+
+    refreshed = build_import_preview_payload(
+        file_path=str(csv_path),
+        csv_delimiter=",",
+        csv_decimal=None,
+        csv_encoding="utf-8",
+        base_header_index=0,
+        guess=False,
+        nrows=8,
+        ncolumns=16,
+    )
+    assert refreshed.get("force_meta_columns_guess") is None
+
+
+def test_duckdb_import_force_meta_columns_creates_group_labels_and_links(temp_db: Database, tmp_path: Path):
+    csv_path = tmp_path / "duckdb_force_meta_groups.csv"
+    csv_path.write_text(
+        "\n".join(
+            [
+                "Time,Status,Value",
+                "2026-02-01 00:00:00,Open,1.0",
+                "2026-02-01 00:01:00,Closed,2.0",
+                "2026-02-01 00:02:00,Open,3.0",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    opts = ImportOptions(
+        system_name="SysForceMeta",
+        dataset_name="DataForceMeta",
+        csv_header_rows=1,
+        auto_detect_datetime=False,
+        date_column="Time",
+        csv_delimiter=",",
+        use_duckdb_csv_import=True,
+        force_meta_columns=["Status"],
+    )
+    import_ids = temp_db.import_file(csv_path, opts)
+    assert len(import_ids) == 1
+
+    labels = temp_db.list_group_labels(kind="Status")
+    assert not labels.empty
+    assert {"Open", "Closed"}.issubset(set(labels["label"].astype(str).tolist()))
+
+    with temp_db.connection() as con:
+        link_rows = con.execute(
+            """
+            SELECT cgc.group_kind, cgc.column_name
+            FROM csv_group_columns cgc
+            WHERE cgc.import_id = ?
+            """,
+            [int(import_ids[0])],
+        ).fetchall()
+    assert link_rows
+    assert any(str(row[0]) == "Status" for row in link_rows)
+
+
+def test_duckdb_import_keeps_non_numeric_columns_as_features(temp_db: Database, tmp_path: Path):
+    csv_path = tmp_path / "duckdb_keep_text_features.csv"
+    csv_path.write_text(
+        "\n".join(
+            [
+                "Time,State,Value",
+                "2026-02-01 00:00:00,Open,1.0",
+                "2026-02-01 00:01:00,Closed,2.0",
+                "2026-02-01 00:02:00,Open,3.0",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    opts = ImportOptions(
+        system_name="SysKeepText",
+        dataset_name="DataKeepText",
+        csv_header_rows=1,
+        auto_detect_datetime=False,
+        date_column="Time",
+        csv_delimiter=",",
+        use_duckdb_csv_import=True,
+    )
+    import_ids = temp_db.import_file(csv_path, opts)
+    assert len(import_ids) == 1
+
+    features = temp_db.list_features(systems=["SysKeepText"], datasets=["DataKeepText"])
+    names = set(features["name"].astype(str).tolist())
+    assert "Value" in names
+    assert "State" in names
+
+
+def test_duckdb_import_reports_dropped_empty_columns_via_progress(tmp_path: Path):
+    db_path = tmp_path / "drop_warning.duckdb"
+    db = Database(db_path)
+    try:
+        csv_path = tmp_path / "duckdb_drop_warning.csv"
+        csv_path.write_text(
+            "\n".join(
+                [
+                    "Time,EmptyCol,Value",
+                    "2026-02-01 00:00:00,,1.0",
+                    "2026-02-01 00:01:00,,2.0",
+                    "2026-02-01 00:02:00,,3.0",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        events: list[tuple[str, int, int, str]] = []
+
+        def _cb(phase: str, cur: int, tot: int, msg: str) -> None:
+            events.append((str(phase), int(cur), int(tot), str(msg)))
+
+        opts = ImportOptions(
+            system_name="SysDropWarn",
+            dataset_name="DataDropWarn",
+            csv_header_rows=1,
+            auto_detect_datetime=False,
+            date_column="Time",
+            csv_delimiter=",",
+            use_duckdb_csv_import=True,
+            progress_cb=_cb,
+        )
+        ids = db.import_file(csv_path, opts)
+        assert len(ids) == 1
+        assert any(phase == "import_warning" and "EmptyCol" in msg for phase, _c, _t, msg in events)
+    finally:
+        db.close()

@@ -631,7 +631,7 @@ class SelectionsViewModel(QObject):
         def _load():
             try:
                 db = self._database_model.database()
-                frame = db.query_raw(feature_ids=[fid])
+                frame = self._group_source_dataframe(db, feature_id=fid)
                 if frame is None or frame.empty or "v" not in frame.columns:
                     raise ValueError("No measurement values found for the selected feature.")
                 unique_values = self._unique_group_value_labels(frame["v"])
@@ -653,6 +653,7 @@ class SelectionsViewModel(QObject):
                 return {
                     "feature_id": fid,
                     "feature_name": resolved_name or f"feature_{fid}",
+                    "is_csv_import_feature": bool(db.feature_has_csv_mapping(feature_id=fid)),
                     "unique_count": int(len(unique_values)),
                     "unique_values": unique_values,
                     "can_rename_values": bool(len(unique_values) < 20),
@@ -674,8 +675,8 @@ class SelectionsViewModel(QObject):
         *,
         feature_id: int,
         group_kind: str,
-        keep_original_feature: bool,
         save_as_timeframes: bool = True,
+        link_only_as_group_label: bool = False,
         value_name_map: Optional[Dict[str, str]] = None,
     ) -> None:
         fid = int(feature_id)
@@ -693,7 +694,39 @@ class SelectionsViewModel(QObject):
         def _convert():
             try:
                 db = self._database_model.database()
-                frame = db.query_raw(feature_ids=[fid])
+                if bool(link_only_as_group_label):
+                    frame = self._group_source_dataframe(db, feature_id=fid, group_kind=kind)
+                    if frame is None or frame.empty or "v" not in frame.columns:
+                        raise ValueError("No values found for the selected feature.")
+                    frame = frame.copy()
+                    frame["value_label"] = frame["v"].map(self._group_value_label)
+                    frame = frame[frame["value_label"].astype(str).str.strip() != ""].copy()
+                    if frame.empty:
+                        raise ValueError("No valid values found for group labels.")
+                    frame["label"] = frame["value_label"].map(lambda text: rename_map.get(str(text), str(text)))
+                    frame["label"] = frame["label"].astype(str).str.strip()
+                    frame = frame[frame["label"] != ""].copy()
+                    if frame.empty:
+                        raise ValueError("All converted labels were empty.")
+                    labels = sorted(frame["label"].drop_duplicates().tolist())
+                    label_summary = self._database_model.upsert_group_labels(
+                        kind=kind,
+                        labels=labels,
+                        replace_kind=True,
+                    )
+                    csv_group_links = int(db.mark_csv_feature_group_kind(feature_id=fid, group_kind=kind) or 0)
+                    if csv_group_links <= 0:
+                        raise ValueError("Selected feature has no CSV import column mapping to link.")
+                    return {
+                        "feature_id": fid,
+                        "group_kind": kind,
+                        "group_labels": int(label_summary.get("group_labels", 0)),
+                        "group_points": 0,
+                        "csv_group_links": csv_group_links,
+                        "link_only_as_group_label": True,
+                    }, None
+
+                frame = self._group_source_dataframe(db, feature_id=fid, group_kind=kind)
                 if frame is None or frame.empty:
                     raise ValueError("No measurements found for the selected feature.")
                 if "t" not in frame.columns or "v" not in frame.columns:
@@ -816,19 +849,14 @@ class SelectionsViewModel(QObject):
                     points_df=points_df,
                     replace_kind=True,
                 )
-                if not keep_original_feature:
-                    db.delete_features([fid])
-                    self._database_model.notify_features_changed(
-                        new_features=None,
-                        updated_features=None,
-                        deleted_feature_ids=[fid],
-                    )
+                csv_group_links = int(db.mark_csv_feature_group_kind(feature_id=fid, group_kind=kind) or 0)
                 return {
                     "feature_id": fid,
-                    "feature_removed": bool(not keep_original_feature),
                     "group_kind": kind,
                     "group_labels": int(summary.get("group_labels", 0)),
                     "group_points": int(summary.get("group_points", 0)),
+                    "csv_group_links": csv_group_links,
+                    "link_only_as_group_label": False,
                 }, None
             except Exception as exc:
                 return None, f"Failed to convert feature values to groups: {exc}"
@@ -841,6 +869,21 @@ class SelectionsViewModel(QObject):
             self.feature_group_conversion_done.emit(payload)
 
         self._run_in_thread(_convert, on_result=lambda result: run_in_main_thread(_apply, result))
+
+    @staticmethod
+    def _group_source_dataframe(db: Any, *, feature_id: int, group_kind: Optional[str] = None) -> pd.DataFrame:
+        # Prefer text-preserving CSV reads for group conversion, while still
+        # including canonical measurement values when available.
+        raw_frame = db.query_raw(feature_ids=[int(feature_id)], csv_value_mode="text")
+        mapped_csv_frame = db.query_csv_group_points_by_feature(
+            feature_id=int(feature_id),
+            group_kind=str(group_kind).strip() if group_kind else None,
+        )
+        if raw_frame is None or raw_frame.empty:
+            return mapped_csv_frame if mapped_csv_frame is not None else pd.DataFrame()
+        if mapped_csv_frame is None or mapped_csv_frame.empty:
+            return raw_frame
+        return pd.concat([raw_frame, mapped_csv_frame], ignore_index=True, sort=False)
 
     @staticmethod
     def _group_value_label(value: object) -> str:

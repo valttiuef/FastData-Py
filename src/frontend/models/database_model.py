@@ -1166,6 +1166,58 @@ class DatabaseModel(QObject):
             "group_points": int(len(merged)),
         }
 
+    def upsert_group_labels(
+        self,
+        *,
+        kind: str,
+        labels: Sequence[str],
+        replace_kind: bool = False,
+    ) -> dict[str, int]:
+        # @ai(gpt-5, codex-cli, implementation, 2026-03-04)
+        kind_text = str(kind or "").strip()
+        if not kind_text:
+            raise ValueError("Group kind is required")
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for item in labels or []:
+            text = str(item or "").strip()
+            if not text:
+                continue
+            key = text.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            cleaned.append(text)
+        if not cleaned:
+            raise ValueError("No group labels to save")
+
+        labels_df = pd.DataFrame({"label": cleaned, "kind": kind_text})
+        db = self._ensure_database()
+        with db.write_transaction() as con:
+            if replace_kind:
+                existing = db.group_labels_repo.list_group_labels(con, kind_text)
+                existing_ids = [
+                    int(gid)
+                    for gid in existing.get("group_id", pd.Series(dtype=int)).tolist()
+                    if gid is not None
+                ]
+                if existing_ids:
+                    db.group_points_repo.delete_by_ids(con, existing_ids)
+                    placeholders = ",".join(["?"] * len(existing_ids))
+                    con.execute(
+                        f"DELETE FROM group_labels WHERE id IN ({placeholders});",
+                        existing_ids,
+                    )
+            con.register("new_group_labels_only_from_model", labels_df[["label", "kind"]])
+            db.group_labels_repo.insert_new_labels(con, "new_group_labels_only_from_model")
+
+        self._emit_in_main_thread(self.features_list_changed)
+        self._emit_in_main_thread(self.groups_changed)
+        return {
+            "group_labels": int(len(cleaned)),
+            "group_points": 0,
+        }
+
     def save_feature_with_measurements(
         self,
         *,

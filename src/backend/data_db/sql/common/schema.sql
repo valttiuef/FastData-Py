@@ -166,6 +166,18 @@ CREATE INDEX IF NOT EXISTS csv_feature_columns_feature_idx
   ON csv_feature_columns(feature_id);
 
 -- =========================
+-- CSV COLUMN -> GROUP mapping per import/feature
+-- Used for group conversion flows that need original CSV text values.
+-- =========================
+CREATE TABLE IF NOT EXISTS csv_group_columns(
+  import_id INTEGER NOT NULL,
+  feature_id INTEGER NOT NULL,
+  column_name TEXT NOT NULL,
+  group_kind TEXT,
+  PRIMARY KEY(import_id, feature_id, column_name)
+);
+
+-- =========================
 -- FEATURE SCOPE MAPS (precomputed presence for fast filtering)
 -- =========================
 CREATE TABLE IF NOT EXISTS feature_dataset_map(

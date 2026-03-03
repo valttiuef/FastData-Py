@@ -27,11 +27,13 @@ class FeatureGroupConversionDialog(QDialog):
         feature_name: str,
         unique_values: List[str],
         unique_count: int,
+        is_csv_import_feature: bool = False,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
         self._unique_values = list(unique_values or [])
         self._unique_count = int(unique_count)
+        self._is_csv_import_feature = bool(is_csv_import_feature)
         self.setModal(True)
         self.setWindowTitle(tr("Convert feature values to groups"))
         self.setMinimumWidth(560)
@@ -54,13 +56,15 @@ class FeatureGroupConversionDialog(QDialog):
         info_form.addRow(tr("Group feature name:"), self.group_name_edit)
         root.addLayout(info_form)
 
-        self.remove_original_checkbox = QCheckBox(tr("Remove original measurement feature"), self)
-        self.remove_original_checkbox.setChecked(True)
-        root.addWidget(self.remove_original_checkbox)
-
         self.save_as_timeframes_checkbox = QCheckBox(tr("Save as timeframes"), self)
-        self.save_as_timeframes_checkbox.setChecked(True)
+        self.save_as_timeframes_checkbox.setChecked(not self._is_csv_import_feature)
         root.addWidget(self.save_as_timeframes_checkbox)
+
+        self.link_only_checkbox = QCheckBox(tr("Link this as a group label"), self)
+        self.link_only_checkbox.setChecked(self._is_csv_import_feature)
+        self.link_only_checkbox.toggled.connect(self._on_link_only_toggled)
+        root.addWidget(self.link_only_checkbox)
+        self._on_link_only_toggled(self.link_only_checkbox.isChecked())
 
         if self._unique_count < 20:
             rename_label = QLabel(
@@ -113,7 +117,15 @@ class FeatureGroupConversionDialog(QDialog):
         button_row.addWidget(buttons)
         root.addLayout(button_row)
 
+    def _on_link_only_toggled(self, checked: bool) -> None:
+        if bool(checked):
+            self.save_as_timeframes_checkbox.setChecked(False)
+            self.save_as_timeframes_checkbox.setEnabled(False)
+            return
+        self.save_as_timeframes_checkbox.setEnabled(True)
+
     def values(self) -> dict:
+        # @ai(gpt-5, codex-cli, refactor, 2026-03-03)
         name_map: Dict[str, str] = {}
         if self.rename_table is not None:
             for row in range(self.rename_table.rowCount()):
@@ -125,8 +137,8 @@ class FeatureGroupConversionDialog(QDialog):
                     name_map[original] = renamed
         return {
             "group_name": str(self.group_name_edit.text() or "").strip(),
-            "remove_original_feature": bool(self.remove_original_checkbox.isChecked()),
             "save_as_timeframes": bool(self.save_as_timeframes_checkbox.isChecked()),
+            "link_only_as_group_label": bool(self.link_only_checkbox.isChecked()),
             "value_name_map": name_map,
         }
 

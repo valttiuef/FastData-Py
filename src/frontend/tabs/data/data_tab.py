@@ -78,6 +78,7 @@ class DataTab(TabWidget):
 
         self._last_import_progress_message: Optional[str] = None
         self._last_progress_phase: Optional[str] = None
+        self._last_import_warning_message: Optional[str] = None
         self._show_auto_timestep_status: bool = False
         self._initial_filter_timeframe_applied: bool = False
 
@@ -223,12 +224,17 @@ class DataTab(TabWidget):
                 else:
                     toast_text = tr("Loading file: {name}").format(name=file_name)
                 futils.toast_info(toast_text, title=tr("Import"), tab_key="data")
+        if str(phase) == "import_warning" and message:
+            if message != self._last_import_warning_message:
+                self._last_import_warning_message = message
+                futils.toast_warn(message, title=tr("Import warning"), tab_key="data")
         if phase_text and phase_text != self._last_progress_phase:
             self._last_progress_phase = phase_text
             phase_map = {
                 "file": tr("Importing files..."),
                 "preprocess": tr("Preprocessing data..."),
                 "preprocess_auto_timestep": tr("Resolving timestep..."),
+                "import_warning": tr("Import finished with warnings."),
             }
             futils.set_status_text(phase_map.get(phase_text, tr("Updating data...")))
 
@@ -809,6 +815,7 @@ class DataTab(TabWidget):
 
         self._last_import_progress_message = None
         self._last_progress_phase = None
+        self._last_import_warning_message = None
 
         # Define worker function to run in background thread
         def _worker(files_list, options, progress_callback=None, stop_event=None):

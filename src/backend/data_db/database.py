@@ -38,6 +38,7 @@ from .repositories import (
     FeatureTagsRepository,
     ModelStoreRepository,
     CsvFeatureColumnsRepository,
+    CsvGroupColumnsRepository,
 )
 from .repositories.feature_tags import normalize_tag
 
@@ -133,6 +134,7 @@ class Database:
         self.group_points_repo = GroupPointsRepository()
         self.feature_tags_repo = FeatureTagsRepository()
         self.csv_feature_columns_repo = CsvFeatureColumnsRepository()
+        self.csv_group_columns_repo = CsvGroupColumnsRepository()
         self.model_store_repo = ModelStoreRepository()
 
         try:
@@ -297,6 +299,7 @@ class Database:
         csv_table_name = str(row[1]) if row and row[1] else None
         self.measurements_repo.delete_by_import_ids(con, [int(import_id)])
         self.csv_feature_columns_repo.delete_by_import_ids(con, [int(import_id)])
+        self.csv_group_columns_repo.delete_by_import_ids(con, [int(import_id)])
         self.feature_scopes_repo.delete_by_import_ids(con, [int(import_id)])
         self.imports_repo.delete_by_ids(con, [int(import_id)])
         if dataset_id is not None:
@@ -376,8 +379,26 @@ class Database:
                 "Skipping %d feature(s) that have zero non-NaN readings (entirely NaN).",
                 int(skip_mask.sum())
             )
+            dropped_feature_labels: list[str] = []
             for bn, st, feature_type in list(skip_feats_idx)[:10]:
                 self.log.debug("  Skipped all-NaN feature: base_name=%r source=%r type=%r", bn, st, feature_type)
+            for bn, st, feature_type in list(skip_feats_idx):
+                parts = [str(bn or "").strip(), str(st or "").strip(), str(feature_type or "").strip()]
+                text = "_".join([p for p in parts if p])
+                if not text:
+                    text = str(bn or "Unnamed")
+                dropped_feature_labels.append(text)
+            if dropped_feature_labels:
+                dropped_text = ", ".join(dropped_feature_labels[:20])
+                if len(dropped_feature_labels) > 20:
+                    dropped_text += f", ... (+{len(dropped_feature_labels)-20})"
+                self._progress(
+                    "import_warning",
+                    0,
+                    0,
+                    f"Dropped all-NaN features: {dropped_text}",
+                    options.progress_cb,
+                )
 
         # create a per-row “keep” mask using a vectorized transform (no merge/sentinel col)
         nonnull_per_row = t.groupby(_grp, dropna=False, observed=False)["value"].transform("count")
@@ -735,11 +756,9 @@ class Database:
         override = getattr(options, "use_duckdb_csv_import", None)
         if override is not None:
             return bool(override)
-        try:
-            size_bytes = file_path.stat().st_size
-        except Exception:
-            size_bytes = 0
-        return size_bytes >= 100 * 1024 * 1024
+        # Default to DuckDB CSV import for all CSV-like imports unless
+        # explicitly disabled in options.
+        return True
 
     def _import_csv_streaming(self, file_path: Path, options: ImportOptions, unit_callback=None) -> List[int]:
         """Source CSV in read chunks; parse each chunk to tall; insert per chunk."""
@@ -888,13 +907,72 @@ class Database:
                 sample_raw = pd.read_csv(file_path, **read_kwargs)
                 header_rows = header_meta["header_rows"]
                 sample_data = sample_raw.iloc[header_rows:] if header_rows > 0 else sample_raw
-                metric_meta = _infer_csv_metric_columns(sample_data, header_meta, options)
+                numeric_metric_meta = _infer_csv_metric_columns(sample_data, header_meta, options)
+
+                ts_col_idx = int(header_meta.get("ts_col") or 0)
+                ignored_cols = set(int(v) for v in (header_meta.get("ignored_cols") or []))
+                ncols = int(header_meta.get("ncols") or sample_raw.shape[1] or 0)
+                header_tuples = dict(header_meta.get("header_tuples") or {})
+                meta_name_map = dict(header_meta.get("meta_name_map") or {})
+
+                numeric_by_col = {
+                    int(item.get("column_index"))
+                    for item in (numeric_metric_meta or [])
+                    if isinstance(item, dict) and item.get("column_index") is not None
+                }
+
+                def _column_label(col_idx: int) -> str:
+                    tup = header_tuples.get(int(col_idx), ())
+                    for cell in tup:
+                        text = str(cell or "").strip()
+                        if text:
+                            return text
+                    return str(meta_name_map.get(int(col_idx)) or f"col_{int(col_idx)+1}")
+
+                non_numeric_meta: list[dict[str, Optional[str]]] = []
+                dropped_cols: list[str] = []
+                for col_idx in range(ncols):
+                    if col_idx == ts_col_idx or col_idx in ignored_cols:
+                        continue
+                    if col_idx in numeric_by_col:
+                        continue
+                    if col_idx >= sample_data.shape[1]:
+                        continue
+                    s = sample_data.iloc[:, col_idx]
+                    non_empty = s.dropna().astype(str).str.strip()
+                    non_empty = non_empty[non_empty != ""]
+                    if non_empty.empty:
+                        dropped_cols.append(_column_label(col_idx))
+                        continue
+                    label = _column_label(col_idx)
+                    non_numeric_meta.append(
+                        {
+                            "column_index": int(col_idx),
+                            "base_name": label,
+                            "source": "",
+                            "unit": "",
+                            "type": "text",
+                        }
+                    )
+
+                metric_meta = list(numeric_metric_meta or []) + non_numeric_meta
+                if dropped_cols:
+                    dropped_text = ", ".join(dropped_cols[:20])
+                    if len(dropped_cols) > 20:
+                        dropped_text += f", ... (+{len(dropped_cols)-20})"
+                    self._progress(
+                        "import_warning",
+                        0,
+                        0,
+                        f"Dropped empty columns: {dropped_text}",
+                        options.progress_cb,
+                    )
             except UnicodeDecodeError as e:
                 last_error = e
                 continue
 
             if not metric_meta:
-                self.log.warning("No metric columns detected for %s using DuckDB CSV import.", file_path.name)
+                self.log.warning("No usable columns detected for %s using DuckDB CSV import.", file_path.name)
                 return []
 
             def _safe_unregister(con, name: str):
@@ -924,6 +1002,24 @@ class Database:
                         metric_df = pd.DataFrame(metric_meta)
                         metric_df["source"] = metric_df["source"].astype("string").fillna("")
                         metric_df["type"] = metric_df["type"].astype("string").fillna("")
+                        forced_meta_cols = sorted(int(v) for v in (header_meta.get("forced_meta_cols") or []))
+                        forced_meta_cols = [c for c in forced_meta_cols if c >= 0]
+                        forced_group_df = pd.DataFrame(
+                            [
+                                {
+                                    "column_index": int(col_idx),
+                                    "base_name": _column_label(int(col_idx)),
+                                    "source": "",
+                                    "unit": "",
+                                    "type": "group",
+                                    "group_kind": _column_label(int(col_idx)),
+                                }
+                                for col_idx in forced_meta_cols
+                            ]
+                        )
+                        if not forced_group_df.empty:
+                            forced_group_df["source"] = forced_group_df["source"].astype("string").fillna("")
+                            forced_group_df["type"] = forced_group_df["type"].astype("string").fillna("")
 
                         feat_df = (
                             metric_df.sort_values("column_index", kind="stable")
@@ -931,6 +1027,19 @@ class Database:
                             .copy()
                             .rename(columns={"column_index": "feature_order"})
                         )
+                        if not forced_group_df.empty:
+                            forced_feat_df = (
+                                forced_group_df.sort_values("column_index", kind="stable")
+                                .loc[:, ["column_index", "base_name", "source", "unit", "type"]]
+                                .copy()
+                                .rename(columns={"column_index": "feature_order"})
+                            )
+                            feat_df = (
+                                pd.concat([feat_df, forced_feat_df], ignore_index=True, sort=False)
+                                .drop_duplicates(subset=["feature_order"], keep="first")
+                                .sort_values("feature_order", kind="stable")
+                                .reset_index(drop=True)
+                            )
                         if not feat_df.empty:
                             feat_df["system_id"] = int(sys_id)
                             feat_df["notes"] = None
@@ -959,6 +1068,18 @@ class Database:
                         if metric_map.empty:
                             self.log.warning("No feature mapping available for %s.", file_path.name)
                             return []
+                        forced_map = pd.DataFrame(
+                            columns=["column_index", "base_name", "source", "unit", "type", "group_kind", "feature_order", "feature_id", "lag_seconds"]
+                        )
+                        if not forced_group_df.empty:
+                            forced_map = forced_group_df.merge(
+                                feat_map[["feature_order", "feature_id", "lag_seconds"]],
+                                left_on=["column_index"],
+                                right_on=["feature_order"],
+                                how="left",
+                                validate="many_to_one",
+                            )
+                            forced_map = forced_map.dropna(subset=["feature_id"]).copy()
 
                         base_import_id = self.imports_repo.next_id(con)
                         table_name = f"csv_import_{base_import_id}"
@@ -1097,6 +1218,8 @@ class Database:
                             )
 
                         mapping_rows: List[dict] = []
+                        group_mapping_rows: List[dict] = []
+                        group_label_rows: List[dict] = []
 
                         new_import_id = base_import_id
                         self.imports_repo.insert(
@@ -1125,6 +1248,49 @@ class Database:
                                     "column_name": col_name,
                                 }
                             )
+                        for _, row in forced_map.iterrows():
+                            col_idx = int(row["column_index"])
+                            if col_idx < 0 or col_idx >= len(column_names):
+                                continue
+                            col_name = column_names[col_idx]
+                            group_kind = str(row.get("group_kind") or row.get("base_name") or "").strip()
+                            if not group_kind:
+                                continue
+                            feature_id = int(row["feature_id"])
+                            group_mapping_rows.append(
+                                {
+                                    "import_id": new_import_id,
+                                    "feature_id": feature_id,
+                                    "column_name": col_name,
+                                    "group_kind": group_kind,
+                                }
+                            )
+                            try:
+                                labels_df = con.execute(
+                                    f"""
+                                    SELECT DISTINCT trim(cast({_sql_quote_identifier(col_name)} AS VARCHAR)) AS label
+                                    FROM {_sql_quote_identifier(table_name)}
+                                    WHERE trim(cast({_sql_quote_identifier(col_name)} AS VARCHAR)) <> ''
+                                    """
+                                ).df()
+                                if labels_df is not None and not labels_df.empty:
+                                    labels_df["label"] = labels_df["label"].astype(str).str.strip()
+                                    labels_df = labels_df[labels_df["label"] != ""]
+                                    if not labels_df.empty:
+                                        labels_df["kind"] = group_kind
+                                        for record in labels_df[["label", "kind"]].to_dict("records"):
+                                            group_label_rows.append(
+                                                {
+                                                    "label": str(record.get("label") or "").strip(),
+                                                    "kind": str(record.get("kind") or "").strip(),
+                                                }
+                                            )
+                            except Exception:
+                                self.log.warning(
+                                    "Failed to infer group labels from forced meta column '%s'.",
+                                    col_name,
+                                    exc_info=True,
+                                )
 
                         if mapping_rows:
                             mapping_df = pd.DataFrame(mapping_rows)
@@ -1139,6 +1305,25 @@ class Database:
                             _temp_regs_to_cleanup.append("feature_scope_rows")
                             self.feature_scopes_repo.insert_import_scope_from_temp(con, "feature_scope_rows")
                             self.feature_scopes_repo.sync_dataset_scope(con, [int(dataset_id)])
+                        if group_label_rows:
+                            labels_df = pd.DataFrame(group_label_rows)[["label", "kind"]].drop_duplicates()
+                            labels_df["label"] = labels_df["label"].astype(str).str.strip()
+                            labels_df["kind"] = labels_df["kind"].astype(str).str.strip()
+                            labels_df = labels_df[(labels_df["label"] != "") & (labels_df["kind"] != "")]
+                            if not labels_df.empty:
+                                con.register("csv_forced_group_labels", labels_df)
+                                _temp_regs_to_cleanup.append("csv_forced_group_labels")
+                                self.group_labels_repo.insert_new_labels(con, "csv_forced_group_labels")
+                        if group_mapping_rows:
+                            group_df = pd.DataFrame(group_mapping_rows)[
+                                ["import_id", "feature_id", "column_name", "group_kind"]
+                            ].drop_duplicates()
+                            group_df["group_kind"] = group_df["group_kind"].astype(str).str.strip()
+                            group_df = group_df[group_df["group_kind"] != ""]
+                            if not group_df.empty:
+                                con.register("csv_group_mappings", group_df)
+                                _temp_regs_to_cleanup.append("csv_group_mappings")
+                                self.csv_group_columns_repo.insert_mappings(con, "csv_group_mappings")
 
                         return [new_import_id]
                     finally:
@@ -1470,8 +1655,54 @@ class Database:
             self.feature_tags_repo.delete_by_feature_ids(con, ids)
             self.measurements_repo.delete_by_feature_ids(con, ids)
             self.csv_feature_columns_repo.delete_by_feature_ids(con, ids)
+            self.csv_group_columns_repo.delete_by_feature_ids(con, ids)
             self.feature_scopes_repo.delete_by_feature_ids(con, ids)
             self.features_repo.delete_by_ids(con, ids)
+
+    def mark_csv_feature_group_kind(self, *, feature_id: int, group_kind: str) -> int:
+        # @ai(gpt-5, codex-cli, implementation, 2026-03-03)
+        with self.write_transaction() as con:
+            return self.csv_group_columns_repo.upsert_links_for_feature(
+                con,
+                feature_id=int(feature_id),
+                group_kind=str(group_kind or ""),
+            )
+
+    def feature_has_csv_mapping(self, *, feature_id: int) -> bool:
+        # @ai(gpt-5, codex-cli, implementation, 2026-03-03)
+        with self.connection() as con:
+            row = con.execute(
+                "SELECT COUNT(*) FROM csv_feature_columns WHERE feature_id = ?;",
+                [int(feature_id)],
+            ).fetchone()
+            return bool(int((row or [0])[0] or 0) > 0)
+
+    def query_csv_group_points_by_feature(
+        self,
+        *,
+        feature_id: int,
+        group_kind: Optional[str] = None,
+        start=None,
+        end=None,
+        limit: Optional[int] = None,
+    ) -> pd.DataFrame:
+        # @ai(gpt-5, codex-cli, implementation, 2026-03-03)
+        with self.connection() as con:
+            mappings = self.csv_group_columns_repo.list_mappings(
+                con,
+                feature_id=int(feature_id),
+                group_kind=str(group_kind).strip() if group_kind is not None else None,
+            )
+            if mappings is None or mappings.empty:
+                return pd.DataFrame()
+            return self._query_csv_points(
+                con=con,
+                mappings_df=mappings,
+                start=start,
+                end=end,
+                limit=limit,
+                value_mode="text",
+            )
 
     def feature_matrix(
         self,
@@ -1561,6 +1792,7 @@ class Database:
         type: Optional[str] = None,
         feature_ids: Optional[Sequence[int]] = None,
         import_ids: Optional[Sequence[int]] = None,
+        group_ids: Optional[Sequence[int]] = None,
         start: Optional[datetime] = None,
         end: Optional[datetime] = None,
         systems: Optional[Sequence[str]] = None,
@@ -1575,6 +1807,7 @@ class Database:
             type=type,
             feature_ids=feature_ids,
             import_ids=import_ids,
+            group_ids=group_ids,
             start=pd.Timestamp(start) if start is not None else None,
             end=pd.Timestamp(end) if end is not None else None,
             systems=systems,
@@ -1585,6 +1818,7 @@ class Database:
         self,
         *,
         con: duckdb.DuckDBPyConnection,
+        mappings_df: Optional[pd.DataFrame] = None,
         system=None,
         dataset=None,
         systems: Optional[Sequence[str]] = None,
@@ -1595,28 +1829,73 @@ class Database:
         type=None,
         feature_ids: Optional[Sequence[int]] = None,
         import_ids: Optional[Sequence[int]] = None,
+        group_ids: Optional[Sequence[int]] = None,
         start=None,
         end=None,
+        value_mode: str = "numeric",
     ) -> Tuple[str, List[object]]:
-        mappings = self.csv_feature_columns_repo.list_feature_mappings(
-            con,
-            system=system,
-            dataset=dataset,
-            systems=systems,
-            datasets=datasets,
-            base_name=base_name,
-            source=source,
-            unit=unit,
-            type=type,
-            feature_ids=feature_ids,
-            import_ids=import_ids,
-        )
+        if mappings_df is not None:
+            mappings = mappings_df.copy()
+        else:
+            mappings = self.csv_feature_columns_repo.list_feature_mappings(
+                con,
+                system=system,
+                dataset=dataset,
+                systems=systems,
+                datasets=datasets,
+                base_name=base_name,
+                source=source,
+                unit=unit,
+                type=type,
+                feature_ids=feature_ids,
+                import_ids=import_ids,
+            )
         if mappings is None or mappings.empty:
             return "", []
 
         union_parts: List[str] = []
         params: List[object] = []
         column_cache: dict[str, tuple[list[str], dict[str, str]]] = {}
+        group_ids_list: list[int] = [int(gid) for gid in (group_ids or []) if gid is not None]
+        linked_by_import: dict[int, list[tuple[str, list[str]]]] = {}
+        if group_ids_list:
+            ph = ",".join(["?"] * len(group_ids_list))
+            labels_df = con.execute(
+                f"SELECT id, label, kind FROM group_labels WHERE id IN ({ph});",
+                group_ids_list,
+            ).df()
+            labels_by_kind: dict[str, list[str]] = {}
+            if labels_df is not None and not labels_df.empty:
+                for row in labels_df.itertuples(index=False):
+                    kind = str(getattr(row, "kind", "") or "").strip()
+                    label = str(getattr(row, "label", "") or "").strip()
+                    if not kind or not label:
+                        continue
+                    labels_by_kind.setdefault(kind, [])
+                    labels_by_kind[kind].append(label.lower())
+            if labels_by_kind:
+                kinds = sorted(labels_by_kind.keys())
+                phk = ",".join(["?"] * len(kinds))
+                link_df = con.execute(
+                    f"""
+                    SELECT import_id, column_name, group_kind
+                    FROM csv_group_columns
+                    WHERE group_kind IN ({phk})
+                    """,
+                    kinds,
+                ).df()
+                if link_df is not None and not link_df.empty:
+                    for row in link_df.itertuples(index=False):
+                        try:
+                            import_id = int(getattr(row, "import_id"))
+                        except Exception:
+                            continue
+                        col_name = str(getattr(row, "column_name", "") or "").strip()
+                        kind = str(getattr(row, "group_kind", "") or "").strip()
+                        labels = labels_by_kind.get(kind) or []
+                        if not col_name or not labels:
+                            continue
+                        linked_by_import.setdefault(import_id, []).append((col_name, labels))
 
         for row in mappings.itertuples(index=False):
             table_name = getattr(row, "csv_table_name", None)
@@ -1662,18 +1941,23 @@ class Database:
             ts_ref = _sql_quote_identifier(ts_col)
             value_ref = _sql_quote_identifier(value_col)
             ts_expr = self._csv_ts_expr_for_type(ts_ref, table_types.get(ts_col))
-            # Keep CSV numeric parsing tolerant for locale-formatted strings.
-            # This avoids dropping valid decimal-comma values (e.g. "12,34") as NULL.
             value_text = f"trim(cast({value_ref} AS VARCHAR))"
-            value_text_normalized = f"replace(replace({value_text}, ',', '.'), ' ', '')"
-            value_expr = (
-                f"coalesce("
-                f"try_cast({value_ref} AS DOUBLE), "
-                f"try_cast({value_text_normalized} AS DOUBLE)"
-                f")"
-            )
+            mode = str(value_mode or "numeric").strip().lower()
+            if mode == "text":
+                value_expr = value_text
+            else:
+                # Keep CSV numeric parsing tolerant for locale-formatted strings.
+                # This avoids dropping valid decimal-comma values (e.g. "12,34") as NULL.
+                value_text_normalized = f"replace(replace({value_text}, ',', '.'), ' ', '')"
+                value_expr = (
+                    f"coalesce("
+                    f"try_cast({value_ref} AS DOUBLE), "
+                    f"try_cast({value_text_normalized} AS DOUBLE)"
+                    f")"
+                )
             sql = (
                 f"SELECT {ts_expr} AS ts, {value_expr} AS value, "
+                f"{value_text} AS value_text, "
                 f"{int(import_id)} AS import_id, {int(feature_id)} AS feature_id "
                 f"FROM {table_ref}"
             )
@@ -1684,6 +1968,37 @@ class Database:
             if end is not None:
                 where.append(f"{ts_expr} < ?")
                 params.append(pd.Timestamp(end))
+            if group_ids_list:
+                group_predicates: list[str] = []
+                phg = ",".join(["?"] * len(group_ids_list))
+                group_predicates.append(
+                    "EXISTS ("
+                    "SELECT 1 "
+                    "FROM imports ii "
+                    "JOIN group_points gp ON gp.dataset_id = ii.dataset_id "
+                    "WHERE ii.id = ? "
+                    f"AND gp.group_id IN ({phg}) "
+                    f"AND gp.start_ts <= {ts_expr} "
+                    f"AND gp.end_ts >= {ts_expr}"
+                    ")"
+                )
+                params.append(int(import_id))
+                params.extend(group_ids_list)
+
+                linked_rules = linked_by_import.get(int(import_id), [])
+                for linked_col, labels in linked_rules:
+                    if not labels:
+                        continue
+                    if table_cols and linked_col not in table_cols:
+                        continue
+                    linked_ref = _sql_quote_identifier(linked_col)
+                    phl = ",".join(["?"] * len(labels))
+                    group_predicates.append(
+                        f"lower(trim(cast({linked_ref} AS VARCHAR))) IN ({phl})"
+                    )
+                    params.extend(labels)
+                if group_predicates:
+                    where.append("(" + " OR ".join(group_predicates) + ")")
             if where:
                 sql += " WHERE " + " AND ".join(where)
             union_parts.append(sql)
@@ -1775,6 +2090,7 @@ class Database:
         self,
         *,
         con: duckdb.DuckDBPyConnection,
+        mappings_df: Optional[pd.DataFrame] = None,
         system=None,
         dataset=None,
         systems: Optional[Sequence[str]] = None,
@@ -1785,12 +2101,15 @@ class Database:
         type=None,
         feature_ids: Optional[Sequence[int]] = None,
         import_ids: Optional[Sequence[int]] = None,
+        group_ids: Optional[Sequence[int]] = None,
         start=None,
         end=None,
         limit: Optional[int] = None,
+        value_mode: str = "numeric",
     ) -> pd.DataFrame:
         sql_from, params = self._csv_sql_from_and_params(
             con=con,
+            mappings_df=mappings_df,
             system=system,
             dataset=dataset,
             systems=systems,
@@ -1801,8 +2120,10 @@ class Database:
             type=type,
             feature_ids=feature_ids,
             import_ids=import_ids,
+            group_ids=group_ids,
             start=start,
             end=end,
+            value_mode=value_mode,
         )
         if not sql_from:
             return pd.DataFrame()
@@ -1855,6 +2176,7 @@ class Database:
         type=None,
         feature_ids: Optional[Sequence[int]] = None,
         import_ids: Optional[Sequence[int]] = None,
+        group_ids: Optional[Sequence[int]] = None,
         start=None,
         end=None,
         target_points: int = 10000,
@@ -1873,6 +2195,7 @@ class Database:
             type=type,
             feature_ids=feature_ids,
             import_ids=import_ids,
+            group_ids=group_ids,
             start=start,
             end=end,
         )
@@ -2007,9 +2330,29 @@ class Database:
         type=None,
         feature_ids: Optional[Sequence[int]] = None,
         import_ids: Optional[Sequence[int]] = None,
+        group_ids: Optional[Sequence[int]] = None,
         start=None,
         end=None,
     ) -> int:
+        if group_ids:
+            frame = self._query_csv_points(
+                con=con,
+                system=system,
+                dataset=dataset,
+                systems=systems,
+                datasets=datasets,
+                base_name=base_name,
+                source=source,
+                unit=unit,
+                type=type,
+                feature_ids=feature_ids,
+                import_ids=import_ids,
+                group_ids=group_ids,
+                start=start,
+                end=end,
+                limit=None,
+            )
+            return int(len(frame) if frame is not None else 0)
         mappings = self.csv_feature_columns_repo.list_feature_mappings(
             con,
             system=system,
@@ -2104,9 +2447,11 @@ class Database:
         type=None,
         feature_ids: Optional[Sequence[int]] = None,
         import_ids: Optional[Sequence[int]] = None,
+        group_ids: Optional[Sequence[int]] = None,
         start=None,
         end=None,
         limit: Optional[int] = None,
+        csv_value_mode: str = "numeric",
     ) -> pd.DataFrame:
         with self.connection() as con:
             df = self.measurements_repo.query_points(
@@ -2121,6 +2466,7 @@ class Database:
                 type=type,
                 feature_ids=feature_ids,
                 import_ids=import_ids,
+                group_ids=group_ids,
                 start=pd.Timestamp(start) if start is not None else None,
                 end=pd.Timestamp(end) if end is not None else None,
                 limit=limit,
@@ -2137,9 +2483,11 @@ class Database:
                 type=type,
                 feature_ids=feature_ids,
                 import_ids=import_ids,
+                group_ids=group_ids,
                 start=start,
                 end=end,
                 limit=limit,
+                value_mode=csv_value_mode,
             )
 
             if df is None or df.empty:
@@ -2164,6 +2512,7 @@ class Database:
                         system=system, dataset=dataset,
                         base_name=base_name, source=source, unit=unit, type=type,
                         feature_ids=feature_ids,
+                        group_ids=group_ids,
                         start=None, end=start, systems=systems, datasets=datasets
                     )
                     prev = self.measurements_repo.anchor_prev(
@@ -2191,6 +2540,7 @@ class Database:
                         system=system, dataset=dataset,
                         base_name=base_name, source=source, unit=unit, type=type,
                         feature_ids=feature_ids,
+                        group_ids=group_ids,
                         start=end, end=None, systems=systems, datasets=datasets
                     )
                     nxt = self.measurements_repo.anchor_next(
@@ -2241,6 +2591,7 @@ class Database:
         type=None,
         feature_ids: Optional[Sequence[int]] = None,
         import_ids: Optional[Sequence[int]] = None,
+        group_ids: Optional[Sequence[int]] = None,
         start=None,
         end=None,
         target_points: int = 10000,
@@ -2258,6 +2609,7 @@ class Database:
                 base_name=base_name, source=source, unit=unit, type=type,
                 feature_ids=feature_ids,
                 import_ids=import_ids,
+                group_ids=group_ids,
                 start=start, end=end, systems=systems, datasets=datasets
             )
 
@@ -2273,6 +2625,7 @@ class Database:
                 type=type,
                 feature_ids=feature_ids,
                 import_ids=import_ids,
+                group_ids=group_ids,
                 start=pd.Timestamp(start) if start is not None else None,
                 end=pd.Timestamp(end) if end is not None else None,
                 target_points=target_points,
@@ -2291,6 +2644,7 @@ class Database:
                 type=type,
                 feature_ids=feature_ids,
                 import_ids=import_ids,
+                group_ids=group_ids,
                 start=start,
                 end=end,
                 target_points=target_points,

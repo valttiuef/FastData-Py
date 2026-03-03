@@ -10,3 +10,5 @@ CREATE INDEX IF NOT EXISTS idx_fim_feature    ON feature_import_map(feature_id);
 CREATE INDEX IF NOT EXISTS idx_fim_system     ON feature_import_map(system_id);
 CREATE INDEX IF NOT EXISTS idx_fim_dataset    ON feature_import_map(dataset_id);
 CREATE INDEX IF NOT EXISTS idx_fim_import     ON feature_import_map(import_id);
+CREATE INDEX IF NOT EXISTS idx_cgc_feature    ON csv_group_columns(feature_id);
+CREATE INDEX IF NOT EXISTS idx_cgc_kind       ON csv_group_columns(group_kind);

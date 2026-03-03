@@ -344,6 +344,37 @@ def _count_datetime_like(values: pd.Series, max_values: int = _MAX_DATETIME_SCAN
     return count
 
 
+def _guess_force_meta_columns(
+    frame: pd.DataFrame,
+    *,
+    date_column: Optional[str],
+    max_probe_cols: int = 20,
+    sample_rows: int = _MAX_PREVIEW_ROWS,
+) -> list[str]:
+    # @ai(gpt-5, codex-cli, implementation, 2026-03-04)
+    if frame is None or frame.empty:
+        return []
+    guessed: list[str] = []
+    date_name = str(date_column or "").strip().casefold()
+    probe_cols = list(frame.columns)[: max(1, int(max_probe_cols))]
+    for col in probe_cols:
+        name = str(col or "").strip()
+        if not name:
+            continue
+        if date_name and name.casefold() == date_name:
+            continue
+        series = frame[col].head(sample_rows)
+        non_empty = series.dropna().astype(str).str.strip()
+        non_empty = non_empty[non_empty != ""]
+        if non_empty.empty:
+            continue
+        numeric = pd.to_numeric(non_empty, errors="coerce")
+        numeric_ratio = float(numeric.notna().sum()) / float(len(non_empty))
+        if numeric_ratio < 0.2:
+            guessed.append(name)
+    return guessed
+
+
 def build_import_preview_payload(
     *,
     file_path: str,
@@ -365,6 +396,7 @@ def build_import_preview_payload(
         "assume_dayfirst": None,
         "dot_time_as_colon": None,
         "csv_delimiter_guess": None,
+        "force_meta_columns_guess": None,
         "error": None,
     }
 
@@ -440,6 +472,12 @@ def build_import_preview_payload(
             payload["assume_dayfirst"] = bool(dayfirst)
             if dot_time:
                 payload["dot_time_as_colon"] = True
+            if guess:
+                payload["force_meta_columns_guess"] = _guess_force_meta_columns(
+                    df,
+                    date_column=str(payload.get("date_column") or ""),
+                    sample_rows=preview_rows,
+                )
         else:
             df = _read_preview_df(
                 file_path=path,
@@ -449,6 +487,12 @@ def build_import_preview_payload(
                 ncolumns=preview_cols,
                 kwargs=kwargs,
             )
+            if guess:
+                payload["force_meta_columns_guess"] = _guess_force_meta_columns(
+                    df,
+                    date_column=str(payload.get("date_column") or ""),
+                    sample_rows=preview_rows,
+                )
 
         rows = min(preview_rows, len(df.index))
         cols = min(preview_cols, len(df.columns))

@@ -5,6 +5,7 @@ from .feature_scopes import FeatureScopesRepository
 from .feature_tags import FeatureTagsRepository
 from .imports import ImportsRepository
 from .csv_feature_columns import CsvFeatureColumnsRepository
+from .csv_group_columns import CsvGroupColumnsRepository
 from .measurements import MeasurementsRepository
 from .group_labels import GroupLabelsRepository
 from .group_points import GroupPointsRepository
@@ -19,6 +20,7 @@ __all__ = [
     "FeatureTagsRepository",
     "ImportsRepository",
     "CsvFeatureColumnsRepository",
+    "CsvGroupColumnsRepository",
     "MeasurementsRepository",
     "GroupLabelsRepository",
     "GroupPointsRepository",

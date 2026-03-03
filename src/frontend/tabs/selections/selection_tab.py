@@ -682,6 +682,7 @@ class SelectionsTab(TabWidget):
             feature_name=str(payload.get("feature_name") or ""),
             unique_values=list(payload.get("unique_values") or []),
             unique_count=int(payload.get("unique_count") or 0),
+            is_csv_import_feature=bool(payload.get("is_csv_import_feature")),
             parent=self,
         )
         if dialog.exec() != dialog.DialogCode.Accepted:
@@ -709,8 +710,8 @@ class SelectionsTab(TabWidget):
         self._view_model.convert_feature_values_to_group(
             feature_id=int(payload.get("feature_id") or 0),
             group_kind=group_name,
-            keep_original_feature=not bool(values.get("remove_original_feature", True)),
             save_as_timeframes=bool(values.get("save_as_timeframes", True)),
+            link_only_as_group_label=bool(values.get("link_only_as_group_label", False)),
             value_name_map=dict(values.get("value_name_map") or {}),
         )
 
@@ -718,12 +719,16 @@ class SelectionsTab(TabWidget):
         if not payload:
             return
         try:
-            message = tr("Created {groups} groups with {points} entries.").format(
-                groups=int(payload.get("group_labels") or 0),
-                points=int(payload.get("group_points") or 0),
-            )
-            if bool(payload.get("feature_removed")):
-                message = tr("{message} Original feature was removed.").format(message=message)
+            if bool(payload.get("link_only_as_group_label")):
+                message = tr("Saved {groups} group label(s) and linked {links} CSV column mapping(s).").format(
+                    groups=int(payload.get("group_labels") or 0),
+                    links=int(payload.get("csv_group_links") or 0),
+                )
+            else:
+                message = tr("Created {groups} groups with {points} entries.").format(
+                    groups=int(payload.get("group_labels") or 0),
+                    points=int(payload.get("group_points") or 0),
+                )
             toast_success(message, title=tr("Selections"), tab_key="selections")
         except Exception:
             logger.warning("Exception in _on_feature_group_conversion_done", exc_info=True)
