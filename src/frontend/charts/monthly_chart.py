@@ -152,7 +152,7 @@ class MonthlyBarChart(GroupBarChart):
         button = getattr(self, "_reset_button", None)
         if button is None:
             return
-        margin = 25
+        margin = 16
         x = self.width() - button.width() - margin
         y = margin
         x = max(margin, x)

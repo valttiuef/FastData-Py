@@ -31,7 +31,8 @@ class Scatter3DChart(QWidget):
         self._scatter = Q3DScatter()
         self._container = QWidget.createWindowContainer(self._scatter, self)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(2)
         layout.addWidget(self._container, 1)
 
         self._proxy = QScatterDataProxy()

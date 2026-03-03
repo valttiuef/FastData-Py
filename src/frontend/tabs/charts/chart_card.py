@@ -71,6 +71,7 @@ class ChartCard(Panel):
 
         self._chart_container = QWidget()
         self._chart_layout = QVBoxLayout(self._chart_container)
+        self._chart_layout.setContentsMargins(0, 0, 0, 0)
         self._chart_layout.setSpacing(0)
 
         self._stack.addWidget(self._message_label)
