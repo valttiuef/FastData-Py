@@ -473,7 +473,7 @@ class StatisticsService:
                     logger.warning("Exception in _apply_value_filters_long", exc_info=True)
             if max_value is not None:
                 try:
-                    allowed &= series <= float(max_value)
+                    allowed &= series < float(max_value)
                 except Exception:
                     logger.warning("Exception in _apply_value_filters_long", exc_info=True)
             if apply_globally:

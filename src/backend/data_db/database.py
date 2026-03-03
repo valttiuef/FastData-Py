@@ -1833,6 +1833,7 @@ class Database:
         start=None,
         end=None,
         value_mode: str = "numeric",
+        value_filters: Optional[Sequence[Mapping[str, object]]] = None,
     ) -> Tuple[str, List[object]]:
         if mappings_df is not None:
             mappings = mappings_df.copy()
@@ -1855,9 +1856,78 @@ class Database:
 
         union_parts: List[str] = []
         params: List[object] = []
+        per_feature_filters: dict[int, dict[str, object]] = {}
+        for item in value_filters or []:
+            if not isinstance(item, Mapping):
+                continue
+            try:
+                feature_id = int(item.get("feature_id"))
+            except Exception:
+                continue
+            min_value = item.get("min_value")
+            max_value = item.get("max_value")
+            try:
+                min_value = float(min_value) if min_value is not None else None
+            except Exception:
+                min_value = None
+            try:
+                max_value = float(max_value) if max_value is not None else None
+            except Exception:
+                max_value = None
+            if min_value is None and max_value is None:
+                continue
+            if not bool(item.get("apply_globally", False)):
+                continue
+            per_feature_filters[feature_id] = {
+                "min_value": min_value,
+                "max_value": max_value,
+            }
         column_cache: dict[str, tuple[list[str], dict[str, str]]] = {}
         group_ids_list: list[int] = [int(gid) for gid in (group_ids or []) if gid is not None]
         linked_by_import: dict[int, list[tuple[str, list[str]]]] = {}
+        import_feature_columns: dict[int, dict[int, str]] = {}
+        for map_row in mappings.itertuples(index=False):
+            map_import_id = getattr(map_row, "import_id", None)
+            map_feature_id = getattr(map_row, "feature_id", None)
+            map_column_name = getattr(map_row, "column_name", None)
+            try:
+                import_key = int(map_import_id)
+                feature_key = int(map_feature_id)
+            except Exception:
+                continue
+            col_name = str(map_column_name or "").strip()
+            if not col_name:
+                continue
+            import_feature_columns.setdefault(import_key, {})[feature_key] = col_name
+        if per_feature_filters:
+            filter_feature_ids = sorted(per_feature_filters.keys())
+            filter_mappings = self.csv_feature_columns_repo.list_feature_mappings(
+                con,
+                system=system,
+                dataset=dataset,
+                systems=systems,
+                datasets=datasets,
+                base_name=None,
+                source=None,
+                unit=None,
+                type=None,
+                feature_ids=filter_feature_ids,
+                import_ids=import_ids,
+            )
+            if filter_mappings is not None and not filter_mappings.empty:
+                for map_row in filter_mappings.itertuples(index=False):
+                    map_import_id = getattr(map_row, "import_id", None)
+                    map_feature_id = getattr(map_row, "feature_id", None)
+                    map_column_name = getattr(map_row, "column_name", None)
+                    try:
+                        import_key = int(map_import_id)
+                        feature_key = int(map_feature_id)
+                    except Exception:
+                        continue
+                    col_name = str(map_column_name or "").strip()
+                    if not col_name:
+                        continue
+                    import_feature_columns.setdefault(import_key, {})[feature_key] = col_name
         if group_ids_list:
             ph = ",".join(["?"] * len(group_ids_list))
             labels_df = con.execute(
@@ -1968,6 +2038,34 @@ class Database:
             if end is not None:
                 where.append(f"{ts_expr} < ?")
                 params.append(pd.Timestamp(end))
+            if per_feature_filters:
+                import_filter_columns = import_feature_columns.get(int(import_id), {})
+                for filtered_feature_id, filter_spec in per_feature_filters.items():
+                    filtered_column_raw = import_filter_columns.get(int(filtered_feature_id))
+                    if not filtered_column_raw:
+                        continue
+                    filtered_column = _normalize_col(filtered_column_raw)
+                    if not filtered_column:
+                        continue
+                    if table_cols and filtered_column not in table_cols:
+                        continue
+                    filtered_ref = _sql_quote_identifier(filtered_column)
+                    filtered_text = f"trim(cast({filtered_ref} AS VARCHAR))"
+                    filtered_normalized = f"replace(replace({filtered_text}, ',', '.'), ' ', '')"
+                    filtered_numeric = (
+                        f"coalesce("
+                        f"try_cast({filtered_ref} AS DOUBLE), "
+                        f"try_cast({filtered_normalized} AS DOUBLE)"
+                        f")"
+                    )
+                    min_value = filter_spec.get("min_value")
+                    max_value = filter_spec.get("max_value")
+                    if min_value is not None:
+                        where.append(f"{filtered_numeric} >= ?")
+                        params.append(float(min_value))
+                    if max_value is not None:
+                        where.append(f"{filtered_numeric} < ?")
+                        params.append(float(max_value))
             if group_ids_list:
                 group_predicates: list[str] = []
                 phg = ",".join(["?"] * len(group_ids_list))
@@ -2106,6 +2204,7 @@ class Database:
         end=None,
         limit: Optional[int] = None,
         value_mode: str = "numeric",
+        value_filters: Optional[Sequence[Mapping[str, object]]] = None,
     ) -> pd.DataFrame:
         sql_from, params = self._csv_sql_from_and_params(
             con=con,
@@ -2124,6 +2223,7 @@ class Database:
             start=start,
             end=end,
             value_mode=value_mode,
+            value_filters=value_filters,
         )
         if not sql_from:
             return pd.DataFrame()
@@ -2182,6 +2282,7 @@ class Database:
         target_points: int = 10000,
         agg: str = "avg",
         step_seconds: Optional[int] = None,
+        value_filters: Optional[Sequence[Mapping[str, object]]] = None,
     ) -> pd.DataFrame:
         sql_from, params = self._csv_sql_from_and_params(
             con=con,
@@ -2198,6 +2299,7 @@ class Database:
             group_ids=group_ids,
             start=start,
             end=end,
+            value_filters=value_filters,
         )
         if not sql_from:
             return pd.DataFrame()
@@ -2452,6 +2554,7 @@ class Database:
         end=None,
         limit: Optional[int] = None,
         csv_value_mode: str = "numeric",
+        value_filters: Optional[Sequence[Mapping[str, object]]] = None,
     ) -> pd.DataFrame:
         with self.connection() as con:
             df = self.measurements_repo.query_points(
@@ -2488,6 +2591,7 @@ class Database:
                 end=end,
                 limit=limit,
                 value_mode=csv_value_mode,
+                value_filters=value_filters,
             )
 
             if df is None or df.empty:
@@ -2597,6 +2701,7 @@ class Database:
         target_points: int = 10000,
         agg: str = "avg",  # "avg"|"min"|"max"|"first"|"last"|"median"
         step_seconds: Optional[int] = None,
+        value_filters: Optional[Sequence[Mapping[str, object]]] = None,
     ) -> pd.DataFrame:
         """
         Downsample in the DB to roughly target_points using time bins.
@@ -2650,6 +2755,7 @@ class Database:
                 target_points=target_points,
                 agg=agg,
                 step_seconds=step_seconds,
+                value_filters=value_filters,
             )
 
             if df is None or len(df) == 0:

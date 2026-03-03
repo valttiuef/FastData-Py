@@ -799,6 +799,25 @@ class HybridPandasModel(DatabaseModel):
             start=start,
             end=end,
         )
+        value_filters_payload = []
+        for flt in self._value_filters or []:
+            feature_id = getattr(flt, "feature_id", None)
+            if feature_id is None:
+                continue
+            min_value = getattr(flt, "min_value", None)
+            max_value = getattr(flt, "max_value", None)
+            if min_value is None and max_value is None:
+                continue
+            value_filters_payload.append(
+                {
+                    "feature_id": int(feature_id),
+                    "min_value": min_value,
+                    "max_value": max_value,
+                    "apply_globally": bool(getattr(flt, "apply_globally", False)),
+                }
+            )
+        if value_filters_payload:
+            common_kwargs["value_filters"] = value_filters_payload
 
         if feature_ids:
             common_kwargs["feature_ids"] = feature_ids
@@ -1882,7 +1901,7 @@ class HybridPandasModel(DatabaseModel):
             if flt.min_value is not None:
                 mask &= series >= flt.min_value
             if flt.max_value is not None:
-                mask &= series <= flt.max_value
+                mask &= series < flt.max_value
             if flt.apply_globally:
                 result = result.loc[mask].reset_index(drop=True)
             else:

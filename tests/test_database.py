@@ -551,6 +551,57 @@ def test_query_raw_group_ids_linked_labels_filter_other_feature_columns(temp_db:
     assert values == [10.0, 30.0]
 
 
+def test_query_raw_csv_value_filters_can_use_other_csv_columns(temp_db: Database, tmp_path: Path):
+    csv_path = tmp_path / "csv_value_filter_other_column.csv"
+    csv_path.write_text(
+        "\n".join(
+            [
+                "Time,Gate,Value",
+                "2026-02-01 00:00:00,1,10",
+                "2026-02-01 00:01:00,2,20",
+                "2026-02-01 00:02:00,3,30",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    opts = ImportOptions(
+        system_name="SysCsvWhereFilter",
+        dataset_name="DataCsvWhereFilter",
+        csv_header_rows=1,
+        auto_detect_datetime=False,
+        date_column="Time",
+        csv_delimiter=",",
+        use_duckdb_csv_import=True,
+    )
+    temp_db.import_file(csv_path, opts)
+
+    features = temp_db.list_features(systems=["SysCsvWhereFilter"], datasets=["DataCsvWhereFilter"])
+    assert not features.empty
+    gate_feature = features[features["name"].astype(str) == "Gate"]
+    value_feature = features[features["name"].astype(str) == "Value"]
+    assert not gate_feature.empty
+    assert not value_feature.empty
+    gate_feature_id = int(gate_feature.iloc[0]["feature_id"])
+    value_feature_id = int(value_feature.iloc[0]["feature_id"])
+
+    filtered = temp_db.query_raw(
+        systems=["SysCsvWhereFilter"],
+        datasets=["DataCsvWhereFilter"],
+        feature_ids=[value_feature_id],
+        value_filters=[
+            {
+                "feature_id": gate_feature_id,
+                "min_value": 2.0,
+                "max_value": 3.0,
+                "apply_globally": True,
+            }
+        ],
+    )
+    assert len(filtered) == 1
+    assert pd.to_numeric(filtered["v"], errors="coerce").dropna().tolist() == [20.0]
+
+
 def test_import_preview_guesses_force_meta_columns_only_when_guess_enabled(tmp_path: Path):
     csv_path = tmp_path / "preview_force_meta_guess.csv"
     header = [f"Col{i}" for i in range(1, 14)]
