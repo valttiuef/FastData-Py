@@ -115,6 +115,7 @@ class AboutWindow(QDialog):
 
         if links_lines:
             links_label = QLabel(" | ".join(links_lines), self)
+            links_label.setObjectName("aboutLinksLabel")
             links_label.setTextFormat(Qt.TextFormat.RichText)
             links_label.setOpenExternalLinks(True)
             links_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -130,9 +131,9 @@ class AboutWindow(QDialog):
 
         if copyright_lines:
             copyright_label = QLabel("<br>".join(copyright_lines), self)
+            copyright_label.setObjectName("aboutCopyrightLabel")
             copyright_label.setTextFormat(Qt.TextFormat.RichText)
             copyright_label.setWordWrap(True)
-            copyright_label.setStyleSheet("color: gray; font-size: 10px;")
             copyright_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             layout.addWidget(copyright_label)
 

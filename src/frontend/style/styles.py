@@ -27,6 +27,8 @@ THEMES = {
         "BRD_3": "#444444",
         "IN_BG_DIS": "#2a2a2a",
         "SEL_BG": "#505050",
+        "LINK": "#66b3ff",
+        "LINK_VIS": "#8ac5ff",
     },
     "light": {
         "BG_1": "#f4f4f4",
@@ -42,6 +44,8 @@ THEMES = {
         "BRD_3": "#dddddd",
         "IN_BG_DIS": "#f2f2f2",
         "SEL_BG": "#dcdcdc",
+        "LINK": "#005fcc",
+        "LINK_VIS": "#2f4fd8",
     },
 }
 
@@ -147,7 +151,12 @@ def _build_palette(theme_colors: dict[str, str]) -> QPalette:
     set_roles(active_inactive, QPalette.ButtonText, theme_colors["TXT_1"])
     set_roles(active_inactive, QPalette.Highlight, theme_colors["SEL_BG"])
     set_roles(active_inactive, QPalette.HighlightedText, theme_colors["TXT_1"])
-    set_roles(active_inactive, QPalette.Link, theme_colors["SEL_BG"])
+    set_roles(active_inactive, QPalette.Link, theme_colors.get("LINK", theme_colors["SEL_BG"]))
+    set_roles(
+        active_inactive,
+        QPalette.LinkVisited,
+        theme_colors.get("LINK_VIS", theme_colors.get("LINK", theme_colors["SEL_BG"])),
+    )
     set_roles(active_inactive, QPalette.PlaceholderText, theme_colors["TXT_DIS"])
 
     set_roles(active_inactive, QPalette.Mid, theme_colors["BRD_1"])
@@ -168,6 +177,11 @@ def _build_palette(theme_colors: dict[str, str]) -> QPalette:
     palette.setColor(QPalette.Disabled, QPalette.Highlight, _qcolor(theme_colors["BG_DIS"]))
     palette.setColor(QPalette.Disabled, QPalette.HighlightedText, _qcolor(theme_colors["TXT_DIS"]))
     palette.setColor(QPalette.Disabled, QPalette.Link, _qcolor(theme_colors["BRD_DIS"]))
+    palette.setColor(
+        QPalette.Disabled,
+        QPalette.LinkVisited,
+        _qcolor(theme_colors.get("LINK_VIS", theme_colors["BRD_DIS"])),
+    )
     palette.setColor(QPalette.Disabled, QPalette.PlaceholderText, _qcolor(theme_colors["TXT_DIS"]))
     palette.setColor(QPalette.Disabled, QPalette.Mid, _qcolor(theme_colors["BRD_3"]))
     palette.setColor(QPalette.Disabled, QPalette.Dark, _qcolor(theme_colors["BRD_DIS"]))

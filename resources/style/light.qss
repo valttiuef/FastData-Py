@@ -13,6 +13,60 @@ QLabel, QCheckBox, QRadioButton {
     background: transparent;
 }
 
+/* ---------- Checkboxes / Radio ---------- */
+QCheckBox::indicator,
+QRadioButton::indicator,
+QAbstractItemView::indicator {
+    width: 12px;
+    height: 12px;
+}
+
+QCheckBox::indicator,
+QAbstractItemView::indicator {
+    background: #f8f8f8;
+    border: 1px solid #1f1f1f;
+    border-radius: 2px;
+}
+
+QCheckBox::indicator:checked,
+QAbstractItemView::indicator:checked {
+    background: #f8f8f8;
+    border: 1px solid #1f1f1f;
+    image: url(resources/style/checkbox_checkmark_dark.svg);
+}
+
+QCheckBox::indicator:unchecked,
+QAbstractItemView::indicator:unchecked {
+    image: none;
+}
+
+QCheckBox::indicator:disabled,
+QAbstractItemView::indicator:disabled {
+    background: #e8e8e8;
+    border: 1px solid #9a9a9a;
+}
+
+QRadioButton::indicator {
+    background: #f8f8f8;
+    border: 1px solid #1f1f1f;
+    border-radius: 6px;
+}
+
+QRadioButton::indicator:checked {
+    background: #2563eb;
+    border: 1px solid #1f1f1f;
+}
+
+QLabel#aboutLinksLabel {
+    color: #005fcc;
+    font-weight: 600;
+}
+
+QLabel#aboutCopyrightLabel {
+    color: #666666;
+    font-size: 10px;
+}
+
 /* GroupBox */
 QGroupBox {
     background: #ececec;     /* surface */
