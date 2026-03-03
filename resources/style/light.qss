@@ -133,6 +133,26 @@ QToolButton:disabled {
     border: 1px dashed #d6d6d6;
 }
 
+QToolButton#chartResetButton {
+    min-width: 20px;
+    max-width: 20px;
+    min-height: 20px;
+    max-height: 20px;
+    padding: 0px;
+    border-radius: 10px;
+    background-color: #dedede;
+    border: 1px solid #cbcbcb;
+    color: #6a6a6a;
+}
+
+QToolButton#chartResetButton:hover {
+    background-color: #e6e6e6;
+}
+
+QToolButton#chartResetButton:pressed {
+    background-color: #d5d5d5;
+}
+
 /* ---------- ProgressBar ---------- */
 QProgressBar {
     background: #ffffff;

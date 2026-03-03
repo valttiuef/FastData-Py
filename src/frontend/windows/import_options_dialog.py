@@ -11,7 +11,7 @@ from typing import Optional, Sequence, TYPE_CHECKING
 
 import pandas as pd
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QSize
 from PySide6.QtWidgets import (
 
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout,
@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QToolButton, QSizePolicy, QStyle
 )
 from ..localization import tr
+import qtawesome as qta
 
 from backend.models import ImportOptions, HeaderRoles
 from backend.importing import _get_encoding_candidates
@@ -507,11 +508,17 @@ class ImportOptionsDialog(QDialog):
         self._refresh_btn = QToolButton(self)
         self._refresh_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         try:
-            icon = self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserStop)
+            icon = qta.icon("fa5s.sync-alt")
         except Exception:
-            icon = None
+            try:
+                icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DialogResetButton)
+            except Exception:
+                icon = None
         if icon:
             self._refresh_btn.setIcon(icon)
+        self._refresh_btn.setAutoRaise(True)
+        self._refresh_btn.setFixedSize(20, 20)
+        self._refresh_btn.setIconSize(QSize(14, 14))
         self._refresh_btn.setToolTip(tr("Refresh preview (use current settings)"))
         # Clicking refresh should refresh preview but skip guessing
         self._refresh_btn.clicked.connect(lambda: self._request_preview_refresh(guess=False))

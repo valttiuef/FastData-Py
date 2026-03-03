@@ -143,10 +143,6 @@
           "label": "🚀 Create GitHub Release",
           "type": "shell",
           "command": "${workspaceFolder}/scripts/release-windows.ps1",
-          "group": {
-              "kind": "build",
-              "isDefault": true
-          },
           "presentation": {
               "echo": true,
               "reveal": "always",

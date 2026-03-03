@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from collections.abc import Callable
 from typing import Optional
 
-from PySide6.QtCore import QEvent, QTimer, Qt, Signal
-from PySide6.QtGui import QCloseEvent, QShowEvent
+from PySide6.QtCore import QEvent, QTimer, Qt, Signal, QSize
+from PySide6.QtGui import QCloseEvent, QShowEvent, QColor
 from PySide6.QtWidgets import (
 
     QAbstractItemView,
@@ -23,11 +23,14 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QStyle,
+    QToolButton,
     QSizePolicy,
     QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
+import qtawesome as qta
 from ..localization import tr
 
 from ..models.log_model import LogEvent
@@ -789,12 +792,16 @@ class _ChatBubbleWidget(QWidget):
         header_layout.setContentsMargins(0, 0, 0, 0)
         header_layout.setSpacing(0)
         header_layout.addStretch(1)
-        self._copy_button = QPushButton(tr("Copy"), header)
+        self._copy_button = QToolButton(header)
         self._copy_button.setObjectName("chatBubbleCopyButton")
+        self._copy_button.setText("")
         self._copy_button.setToolTip(tr("Copy message to clipboard"))
         self._copy_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._copy_button.setFixedHeight(18)
+        self._copy_button.setAutoRaise(True)
+        self._copy_button.setFixedSize(20, 20)
+        self._copy_button.setIconSize(self._copy_button.size() - QSize(6, 6))
         self._copy_button.clicked.connect(self._copy_to_clipboard)
+        self._set_copy_button_icon(role)
         header_layout.addWidget(self._copy_button, 0, Qt.AlignmentFlag.AlignRight)
         bubble_layout.addWidget(header)
 
@@ -826,23 +833,22 @@ class _ChatBubbleWidget(QWidget):
             QFrame#chatBubble[role="user"] { background: #2563eb; color: #ffffff; border-radius: 14px; }
             QFrame#chatBubble[role="assistant"] { background: rgba(127, 127, 127, 0.18); border-radius: 14px; }
             QFrame#chatBubble[role="error"] { background: rgba(240, 98, 146, 0.20); color: #f06292; border-radius: 14px; }
-            QPushButton#chatBubbleCopyButton {
-                padding: 0 6px;
+            QToolButton#chatBubbleCopyButton {
+                padding: 0px;
                 border: none;
-                border-radius: 8px;
+                border-radius: 10px;
                 background: rgba(255, 255, 255, 0.12);
                 color: rgba(255, 255, 255, 0.90);
-                font-size: 11px;
             }
-            QFrame#chatBubble[role=\"assistant\"] QPushButton#chatBubbleCopyButton {
+            QFrame#chatBubble[role=\"assistant\"] QToolButton#chatBubbleCopyButton {
                 background: rgba(0, 0, 0, 0.18);
                 color: rgba(255, 255, 255, 0.85);
             }
-            QFrame#chatBubble[role=\"error\"] QPushButton#chatBubbleCopyButton {
+            QFrame#chatBubble[role=\"error\"] QToolButton#chatBubbleCopyButton {
                 background: rgba(240, 98, 146, 0.25);
                 color: rgba(240, 98, 146, 0.95);
             }
-            QPushButton#chatBubbleCopyButton:hover { background: rgba(255, 255, 255, 0.18); }
+            QToolButton#chatBubbleCopyButton:hover { background: rgba(255, 255, 255, 0.18); }
             """
         )
 
@@ -871,6 +877,18 @@ class _ChatBubbleWidget(QWidget):
         else:
             clipboard.setText(self._raw_content)
 
+    def _set_copy_button_icon(self, role: str) -> None:
+        try:
+            if role == "assistant":
+                color = QColor(235, 235, 235)
+            elif role == "error":
+                color = QColor(240, 98, 146)
+            else:
+                color = QColor(250, 250, 250)
+            self._copy_button.setIcon(qta.icon("fa5s.copy", color=color))
+        except Exception:
+            self._copy_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon))
+
     def set_available_width(self, width: int) -> None:
         self._available_width = max(240, width)
         ratio = 0.60 if self._role == "user" else 0.78
@@ -890,6 +908,7 @@ class _ChatBubbleWidget(QWidget):
         self._bubble.setProperty("role", role)
         self._bubble.style().unpolish(self._bubble)
         self._bubble.style().polish(self._bubble)
+        self._set_copy_button_icon(role)
 
         if self._rich_view is not None:
             html_body = assistant_formatter(content)

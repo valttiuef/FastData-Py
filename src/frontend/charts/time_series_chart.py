@@ -4,10 +4,11 @@ from bisect import bisect_left
 import numpy as np
 import pandas as pd
 
-from PySide6.QtCore import Qt, QDate, QDateTime, QTime, QPointF, QRectF, QTimer, Signal
-from PySide6.QtWidgets import QFrame, QVBoxLayout, QGraphicsRectItem, QGraphicsSimpleTextItem
+from PySide6.QtCore import Qt, QDate, QDateTime, QTime, QPointF, QRectF, QTimer, Signal, QSize
+from PySide6.QtWidgets import QFrame, QVBoxLayout, QGraphicsRectItem, QGraphicsSimpleTextItem, QToolButton, QStyle
 from PySide6.QtCharts import QChart, QLineSeries, QDateTimeAxis, QValueAxis
 from PySide6.QtGui import QColor, QPen, QPalette, QBrush, QFont
+import qtawesome as qta
 
 from .interactive_chart_view import InteractiveChartView
 from . import (
@@ -129,6 +130,16 @@ class TimeSeriesChart(QFrame):
 
         lay = QVBoxLayout(self)
         lay.addWidget(self.view)
+        self._reset_button = QToolButton(self)
+        self._reset_button.setObjectName("chartResetButton")
+        self._set_reset_button_icon()
+        self._reset_button.setIconSize(QSize(14, 14))
+        self._reset_button.setAutoRaise(True)
+        self._reset_button.setToolTip("Reset chart view")
+        self._reset_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._reset_button.setFixedSize(20, 20)
+        self._reset_button.clicked.connect(lambda: self._bubble_reset(True, True))
+        self._position_reset_button()
 
         self.chart.setTitle(title)
 
@@ -177,6 +188,42 @@ class TimeSeriesChart(QFrame):
             self.chart.plotAreaChanged.connect(lambda *_args: self._refresh_group_timeline_overlays())
         except Exception:
             logger.warning("Failed to connect plot-area change handler for timeline overlays.", exc_info=True)
+    # @ai(gpt-5, codex, ui-enhancement, 2026-03-03)
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._position_reset_button()
+
+    # @ai(gpt-5, codex, ui-enhancement, 2026-03-03)
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._position_reset_button()
+        try:
+            self._reset_button.setVisible(True)
+            self._reset_button.raise_()
+        except Exception:
+            logger.warning("Failed to refresh reset button visibility when showing time-series chart.", exc_info=True)
+
+    def _position_reset_button(self) -> None:
+        button = getattr(self, "_reset_button", None)
+        if button is None:
+            return
+        margin = 25
+        x = self.width() - button.width() - margin
+        y = margin
+        x = max(margin, x)
+        y = max(margin, y)
+        button.move(x, y)
+        button.raise_()
+
+    def _set_reset_button_icon(self) -> None:
+        button = getattr(self, "_reset_button", None)
+        if button is None:
+            return
+        try:
+            color = self.palette().color(QPalette.ColorRole.ButtonText)
+            button.setIcon(qta.icon("fa5s.home", color=color))
+        except Exception:
+            button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirHomeIcon))
 
     # @ai(gpt-5, codex, refactor, 2026-02-27)
     def clear(
@@ -1021,6 +1068,7 @@ class TimeSeriesChart(QFrame):
             self.chart.setTitleBrush(QBrush(colors.text))
         except Exception:
             logger.warning("Failed to set title brush while applying time-series theme.", exc_info=True)
+        self._set_reset_button_icon()
 
         frame_palette = self.palette()
         frame_palette.setColor(QPalette.ColorRole.Window, container_color)

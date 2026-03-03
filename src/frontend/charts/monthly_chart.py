@@ -6,15 +6,18 @@ logger = logging.getLogger(__name__)
 from typing import Iterable, List
 import pandas as pd
 
-from PySide6.QtCore import Qt, Signal, QRectF, QPointF, QTimer
-from PySide6.QtGui import QPen, QBrush, QColor, QCursor
+from PySide6.QtCore import Qt, Signal, QRectF, QPointF, QTimer, QSize
+from PySide6.QtGui import QPen, QBrush, QColor, QCursor, QPalette
 from PySide6.QtCharts import QBarSet
 from PySide6.QtWidgets import (
     QApplication,
     QGraphicsRectItem,
     QGraphicsLineItem,
     QToolTip,
+    QToolButton,
+    QStyle,
 )
+import qtawesome as qta
 
 from ..style.chart_theme import style_legend
 from ..style.group_colors import group_color_cycle
@@ -118,10 +121,58 @@ class MonthlyBarChart(GroupBarChart):
         self._connect_hover_signals()
         self.view.mousePressEvent = self._mouse_press_wrapper(self._native_mouse_press_event)
         self.view.mouseDoubleClickEvent = self._mouse_double_click_wrapper(self._native_mouse_double_click_event)
+        self._reset_button = QToolButton(self)
+        self._reset_button.setObjectName("chartResetButton")
+        self._set_reset_button_icon()
+        self._reset_button.setIconSize(QSize(14, 14))
+        self._reset_button.setAutoRaise(True)
+        self._reset_button.setToolTip("Reset chart view")
+        self._reset_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._reset_button.setFixedSize(20, 20)
+        self._reset_button.clicked.connect(self.reset_to_base)
+        self._position_reset_button()
         self._apply_theme(self._current_theme)
+
+    # @ai(gpt-5, codex, ui-enhancement, 2026-03-03)
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._position_reset_button()
+
+    # @ai(gpt-5, codex, ui-enhancement, 2026-03-03)
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._position_reset_button()
+        try:
+            self._reset_button.setVisible(True)
+            self._reset_button.raise_()
+        except Exception:
+            logger.warning("Failed to refresh reset button visibility when showing monthly chart.", exc_info=True)
+
+    def _position_reset_button(self) -> None:
+        button = getattr(self, "_reset_button", None)
+        if button is None:
+            return
+        margin = 25
+        x = self.width() - button.width() - margin
+        y = margin
+        x = max(margin, x)
+        y = max(margin, y)
+        button.move(x, y)
+        button.raise_()
+
+    def _set_reset_button_icon(self) -> None:
+        button = getattr(self, "_reset_button", None)
+        if button is None:
+            return
+        try:
+            color = self.palette().color(QPalette.ColorRole.ButtonText)
+            button.setIcon(qta.icon("fa5s.home", color=color))
+        except Exception:
+            button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirHomeIcon))
 
     def _apply_theme(self, theme_name: str | None = None):
         super()._apply_theme(theme_name)
+        self._set_reset_button_icon()
         colors = self._chart_colors
         self._set_zero_line_pen(colors)
 

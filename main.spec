@@ -105,6 +105,9 @@ if sql_dir.exists():
 # Add duckdb metadata
 datas += copy_metadata("duckdb")
 
+# qtawesome icons
+datas += collect_data_files("qtawesome")
+
 release_modules = get_release_tab_modules()
 release_libraries = {lib for module in release_modules for lib in module.libraries}
 include_sktime = "sktime" in release_libraries
