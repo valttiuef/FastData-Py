@@ -25,7 +25,6 @@ from ..style.chart_theme import (
     style_axis,
     style_legend,
     is_dark_color,
-    window_color_from_theme,
 )
 
 import logging
@@ -122,6 +121,7 @@ class TimeSeriesChart(QFrame):
         self.chart.addAxis(self.axis_y, Qt.AlignmentFlag.AlignLeft)
 
         self.view = InteractiveChartView(self.chart)
+        self.view.setFrameShape(QFrame.Shape.NoFrame)
         self.view._owner = self  # best-effort
         self.view.set_live_pan_emit_enabled(True)
         self.view.user_reset_requested.connect(self._bubble_reset)
@@ -129,6 +129,8 @@ class TimeSeriesChart(QFrame):
         self.view.axis_lock_hint_changed.connect(self._on_axis_lock_hint_changed)
 
         lay = QVBoxLayout(self)
+        lay.setContentsMargins(4, 4, 4, 4)
+        lay.setSpacing(2)
         lay.addWidget(self.view)
         self._reset_button = QToolButton(self)
         self._reset_button.setObjectName("chartResetButton")
@@ -207,7 +209,7 @@ class TimeSeriesChart(QFrame):
         button = getattr(self, "_reset_button", None)
         if button is None:
             return
-        margin = 25
+        margin = 16
         x = self.width() - button.width() - margin
         y = margin
         x = max(margin, x)
@@ -1062,7 +1064,11 @@ class TimeSeriesChart(QFrame):
         self._apply_axis_lock_visuals()
         self._refresh_axis_lock_hint_overlay()
 
-        container_color = window_color_from_theme(self, theme_name)
+        parent = self.parentWidget()
+        if parent is not None:
+            container_color = parent.palette().color(QPalette.ColorRole.Window)
+        else:
+            container_color = self.palette().color(QPalette.ColorRole.Window)
 
         try:
             self.chart.setTitleBrush(QBrush(colors.text))

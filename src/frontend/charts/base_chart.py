@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Optional
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QPainter
+from PySide6.QtGui import QPainter, QPalette, QBrush, QColor
 from PySide6.QtWidgets import QFrame, QVBoxLayout
 from PySide6.QtCharts import QChart, QChartView
 
@@ -22,8 +22,11 @@ class BaseChart(QFrame):
         self.chart = QChart()
         self.chart.setTitle(title)
         self.view = QChartView(self.chart, self)
+        self.view.setFrameShape(QFrame.Shape.NoFrame)
         self.view.setRenderHint(QPainter.RenderHint.Antialiasing)
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(2)
         layout.addWidget(self.view)
 
         self._theme_ready = False
@@ -45,7 +48,38 @@ class BaseChart(QFrame):
             return
         colors = make_colors_from_palette(self, theme_name)
         apply_chart_background(self.chart, colors)
+        container_color = self._container_surface_color()
+        self._apply_container_background(container_color)
         self._apply_colors(colors)
+
+    def _container_surface_color(self) -> QColor:
+        parent = self.parentWidget()
+        if parent is not None:
+            color = parent.palette().color(QPalette.ColorRole.Window)
+            if color.isValid():
+                return color
+        return self.palette().color(QPalette.ColorRole.Window)
+
+    def _apply_container_background(self, color: QColor) -> None:
+        frame_palette = self.palette()
+        frame_palette.setColor(QPalette.ColorRole.Window, color)
+        frame_palette.setColor(QPalette.ColorRole.Base, color)
+        self.setPalette(frame_palette)
+        self.setAutoFillBackground(True)
+
+        view_palette = self.view.palette()
+        view_palette.setColor(QPalette.ColorRole.Window, color)
+        view_palette.setColor(QPalette.ColorRole.Base, color)
+        self.view.setPalette(view_palette)
+        self.view.setAutoFillBackground(True)
+        self.view.setBackgroundBrush(QBrush(color))
+
+        viewport = self.view.viewport()
+        viewport_palette = viewport.palette()
+        viewport_palette.setColor(QPalette.ColorRole.Window, color)
+        viewport_palette.setColor(QPalette.ColorRole.Base, color)
+        viewport.setPalette(viewport_palette)
+        viewport.setAutoFillBackground(True)
 
     def _apply_colors(self, colors):
         raise NotImplementedError

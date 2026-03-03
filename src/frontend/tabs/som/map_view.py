@@ -7,8 +7,8 @@ from typing import Callable, List, Optional, Iterable, Tuple, Set
 
 import numpy as np
 import pandas as pd
-from PySide6.QtCore import QPointF, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPen, QPolygonF, QAction, QPixmap
+from PySide6.QtCore import QPointF, Qt, Signal, QEvent
+from PySide6.QtGui import QColor, QPainter, QPen, QPolygonF, QAction, QPixmap, QPalette
 from PySide6.QtWidgets import QToolTip, QWidget, QMenu, QInputDialog
 from ...localization import tr
 from ...style.group_colors import build_group_palette
@@ -65,7 +65,8 @@ class SomMapView(QWidget):
         self._centroid_cache_key: Optional[tuple] = None
         self._placeholder_text: str = ""
         self.setMouseTracking(True)
-        self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, False)
+        self.setAutoFillBackground(False)
 
     # ------------------------------------------------------------------
     def set_map_data(
@@ -263,7 +264,7 @@ class SomMapView(QWidget):
         # double painting on some styles; Qt will clear the background for QWidget.
         if self._matrix is None or self._values is None:
             painter = QPainter(self)
-            painter.fillRect(self.rect(), self.palette().window().color())
+            painter.fillRect(self.rect(), QColor(0, 0, 0, 0))
             if self._placeholder_text:
                 painter.setPen(self.palette().text().color())
                 painter.drawText(
@@ -317,6 +318,14 @@ class SomMapView(QWidget):
 
     def _render_cache_key_for_current_state(self) -> tuple:
         size = (self.width(), self.height())
+        palette = self.palette()
+        palette_key = (
+            palette.color(self.backgroundRole()).rgba(),
+            palette.color(self.foregroundRole()).rgba(),
+            palette.color(QPalette.ColorRole.Window).rgba(),
+            palette.color(QPalette.ColorRole.Base).rgba(),
+            palette.color(QPalette.ColorRole.Text).rgba(),
+        )
         return (
             size,
             float(self.devicePixelRatioF()),
@@ -327,6 +336,7 @@ class SomMapView(QWidget):
             bool(self._cluster_fill_only),
             bool(self._cluster_border_mode),
             bool(self._show_cluster_centered_labels),
+            palette_key,
         )
 
     def _invalidate_render_cache(self) -> None:
@@ -338,7 +348,7 @@ class SomMapView(QWidget):
         dpr = float(self.devicePixelRatioF())
         pixmap = QPixmap(int(size.width() * dpr), int(size.height() * dpr))
         pixmap.setDevicePixelRatio(dpr)
-        pixmap.fill(self.palette().window().color())
+        pixmap.fill(QColor(0, 0, 0, 0))
 
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
@@ -436,6 +446,16 @@ class SomMapView(QWidget):
 
         painter.end()
         return pixmap
+
+    def changeEvent(self, event):  # type: ignore[override]
+        if event is not None and event.type() in (
+            QEvent.Type.PaletteChange,
+            QEvent.Type.ApplicationPaletteChange,
+            QEvent.Type.StyleChange,
+        ):
+            self._invalidate_render_cache()
+            self.update()
+        super().changeEvent(event)
 
     # ------------------------------------------------------------------
     def _cell_from_point(self, pos: QPointF) -> tuple[Optional[int], Optional[int]]:

@@ -28,7 +28,6 @@ from ..style.chart_theme import (
     style_axis,
     style_legend,
     is_dark_color,
-    window_color_from_theme,
 )
 from ..style.theme_manager import theme_manager
 from ..style.group_colors import group_color_cycle
@@ -53,6 +52,7 @@ class _ChartView(QChartView):
     
     def __init__(self, chart: QChart, parent=None):
         super().__init__(chart, parent)
+        self.setFrameShape(QFrame.Shape.NoFrame)
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.setRubberBand(QChartView.RubberBand.NoRubberBand)
 
@@ -90,6 +90,8 @@ class GroupBarChart(QFrame):
         if y_label == "Value":
             y_label = tr("Value")
         lay = QVBoxLayout(self)
+        lay.setContentsMargins(4, 4, 4, 4)
+        lay.setSpacing(2)
         self._title = title
         self._y_label = y_label
 
@@ -169,7 +171,11 @@ class GroupBarChart(QFrame):
         style_axis(self.axis_y, colors)
         style_legend(self.chart.legend(), colors)
 
-        container_color = window_color_from_theme(self, theme_name)
+        parent = self.parentWidget()
+        if parent is not None:
+            container_color = parent.palette().color(QPalette.ColorRole.Window)
+        else:
+            container_color = self.palette().color(QPalette.ColorRole.Window)
 
         try:
             self.chart.setTitleBrush(QBrush(colors.text))

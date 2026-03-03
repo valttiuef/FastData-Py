@@ -16,7 +16,7 @@ from PySide6.QtCharts import (
     QBarSeries,
     QLegend,
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QMargins
 
 from frontend.style.styles import THEMES
 
@@ -118,8 +118,8 @@ def apply_chart_background(chart: QChart, colors: ChartColors):
 
     chart.setPlotAreaBackgroundVisible(True)
     chart.setPlotAreaBackgroundBrush(QBrush(colors.plot_bg))
-    plot_pen = QPen(Qt.PenStyle.NoPen)
-    chart.setPlotAreaBackgroundPen(plot_pen)
+    chart.setPlotAreaBackgroundPen(QPen(Qt.PenStyle.NoPen))
+    chart.setMargins(QMargins(6, 6, 6, 6))
 
 def style_axis(ax, colors: ChartColors):
     # Supports QValueAxis / QDateTimeAxis / QBarCategoryAxis
