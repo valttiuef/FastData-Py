@@ -10,6 +10,10 @@ import threading
 
 import numpy as np
 import pandas as pd
+from core.training_settings import (
+    TRAINING_SPARSE_FEATURE_NAN_RATIO_THRESHOLD,
+    TRAINING_STATIC_FEATURE_MAX_UNIQUE_NON_NULL,
+)
 
 from sklearn.base import RegressorMixin, clone
 from sklearn.ensemble import (
@@ -252,6 +256,7 @@ class RegressionService:
         return list(self._test_split_labels.items())
 
     # ------------------------------------------------------------------
+    # @ai(gpt-5, codex, refactor, 2026-03-03)
     def run_regressions(
         self,
         *,
@@ -394,6 +399,7 @@ class RegressionService:
 
         target_name = display_name(target_payload)
         input_names = [display_name(p) for p in input_payloads]
+        requested_input_names = list(input_names)
 
         required_cols = ["t", target_name] + input_names
         stratify_label = display_name(stratify_payload) if stratify_payload else None
@@ -403,6 +409,44 @@ class RegressionService:
         missing = [c for c in required_cols if c not in data.columns]
         if missing:
             raise ValueError(f"Missing expected columns in dataset: {missing}")
+
+        dropped_sparse_input_names: list[str] = []
+        dropped_static_input_names: list[str] = []
+        if input_names:
+            nan_ratio = data[input_names].isna().mean(axis=0)
+            dropped_sparse_input_names = [
+                name
+                for name in input_names
+                if float(nan_ratio.get(name, 0.0)) > TRAINING_SPARSE_FEATURE_NAN_RATIO_THRESHOLD
+            ]
+            if dropped_sparse_input_names:
+                input_names = [name for name in input_names if name not in set(dropped_sparse_input_names)]
+                dropped_text = ", ".join(dropped_sparse_input_names)
+                _emit_status(
+                    f"WARNING: Dropped sparse input features (>95% missing values): {dropped_text}"
+                )
+            if input_names:
+                dropped_static_input_names = [
+                    name
+                    for name in input_names
+                    if int(pd.Series(data[name]).dropna().nunique()) <= TRAINING_STATIC_FEATURE_MAX_UNIQUE_NON_NULL
+                ]
+                if dropped_static_input_names:
+                    input_names = [name for name in input_names if name not in set(dropped_static_input_names)]
+                    dropped_text = ", ".join(dropped_static_input_names)
+                    _emit_status(
+                        f"WARNING: Dropped static input features (constant values): {dropped_text}"
+                    )
+
+            if not input_names:
+                raise ValueError(
+                    "All input features were dropped by training rules (>95% missing or static values). "
+                    "Select denser, varying input features."
+                )
+
+            required_cols = ["t", target_name] + input_names
+            if stratify_label and stratify_label not in required_cols:
+                required_cols.append(stratify_label)
 
         data = data.dropna(subset=required_cols)
         if data.empty:
@@ -564,7 +608,10 @@ class RegressionService:
                                 "rows_test": int(len(X_test)),
                                 "inputs_selected": int(inputs_selected),
                                 "inputs_total": int(len(input_names)),
+                                "inputs_requested_total": int(len(requested_input_names)),
                                 "inputs_selected_names": list(selected_names),
+                                "inputs_dropped_sparse_names": list(dropped_sparse_input_names),
+                                "inputs_dropped_static_names": list(dropped_static_input_names),
                             },
                         )
                         runs.append(run)

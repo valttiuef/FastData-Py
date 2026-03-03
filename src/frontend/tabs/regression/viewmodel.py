@@ -17,7 +17,7 @@ from ...viewmodels.log_view_model import get_log_view_model
 
 from ...threading.runner import run_in_thread
 from ...threading.utils import run_in_main_thread
-from ...utils import clear_progress, set_progress, toast_error, toast_info, toast_success
+from ...utils import clear_progress, set_progress, toast_error, toast_info, toast_success, toast_warn
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +58,7 @@ class RegressionViewModel(QObject):
         self._save_predictions_running = False
         self._pending_auto_saves: dict[str, tuple[RegressionRunResult, dict[str, object]]] = {}
         self._last_status_message: Optional[str] = None
+        self._seen_runtime_warnings: set[str] = set()
 
         # React to DB path changes inside the HybridPandasModel
         self._data_model.database_changed.connect(self._on_database_changed)
@@ -80,6 +81,7 @@ class RegressionViewModel(QObject):
         self._service = None
         self._feature_service = None
         self._last_status_message = None
+        self._seen_runtime_warnings.clear()
         # NOTE: we do NOT clear self._data_model – it is owned by the caller.
 
     def close_database(self) -> None:
@@ -702,6 +704,7 @@ class RegressionViewModel(QObject):
             raise RuntimeError("Regression run already in progress")
 
         self._last_status_message = None
+        self._seen_runtime_warnings.clear()
         try:
             toast_info("Starting regression experiments…", title="Regression", tab_key="regression")
         except Exception:
@@ -830,6 +833,16 @@ class RegressionViewModel(QObject):
 
     def _handle_service_status_update(self, message: Optional[str]) -> None:
         text = str(message or "").strip()
+        if text.startswith("WARNING:"):
+            warning_text = text[len("WARNING:"):].strip()
+            if warning_text and warning_text not in self._seen_runtime_warnings:
+                self._seen_runtime_warnings.add(warning_text)
+                try:
+                    toast_warn(warning_text, title="Regression", tab_key="regression")
+                except Exception:
+                    logger.warning("Exception in _handle_service_status_update", exc_info=True)
+            self._handle_status_update("Regression inputs adjusted.")
+            return
         if text:
             self._log_info(text)
         if self._running:

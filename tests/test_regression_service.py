@@ -206,3 +206,101 @@ def test_regression_with_multiple_reducers_multiplies_runs():
     assert len(summary.runs) == 2
     reducer_keys = {run.reducer_key for run in summary.runs}
     assert reducer_keys == {"pca", "truncated_svd"}
+
+
+def test_regression_drops_sparse_input_features_and_reports_warning():
+    service = RegressionService(StubDatabase(), feature_selection_service=FeatureSelectionService())
+    times = pd.date_range("2023-01-01", periods=40, freq="h")
+    data_frame = pd.DataFrame(
+        {
+            "t": times,
+            "Input Dense": np.linspace(0.0, 39.0, 40),
+            "Input Sparse": [np.nan] * 39 + [1.0],
+            "Target": np.linspace(10.0, 49.0, 40),
+        }
+    )
+    status_messages: list[str] = []
+
+    summary = service.run_regressions(
+        input_features=[
+            {"feature_id": 1, "base_name": "Input Dense"},
+            {"feature_id": 2, "base_name": "Input Sparse"},
+        ],
+        target_feature={"feature_id": 3, "base_name": "Target"},
+        selectors=["none"],
+        models=["linear_regression"],
+        data_frame=data_frame,
+        cv_strategy="none",
+        status_callback=status_messages.append,
+    )
+
+    assert summary.runs
+    run = summary.runs[0]
+    dropped = run.metadata.get("inputs_dropped_sparse_names") or []
+    assert dropped == ["Input Sparse"]
+    assert run.metadata.get("inputs_total") == 1
+    assert any("Dropped sparse input features" in msg for msg in status_messages)
+
+
+def test_regression_fails_when_all_inputs_are_sparse():
+    service = RegressionService(StubDatabase(), feature_selection_service=FeatureSelectionService())
+    times = pd.date_range("2023-01-01", periods=30, freq="h")
+    data_frame = pd.DataFrame(
+        {
+            "t": times,
+            "Input Sparse A": [np.nan] * 29 + [1.0],
+            "Input Sparse B": [np.nan] * 29 + [2.0],
+            "Target": np.linspace(0.0, 29.0, 30),
+        }
+    )
+
+    try:
+        service.run_regressions(
+            input_features=[
+                {"feature_id": 1, "base_name": "Input Sparse A"},
+                {"feature_id": 2, "base_name": "Input Sparse B"},
+            ],
+            target_feature={"feature_id": 3, "base_name": "Target"},
+            selectors=["none"],
+            models=["linear_regression"],
+            data_frame=data_frame,
+            cv_strategy="none",
+        )
+    except ValueError as exc:
+        assert "All input features were dropped by training rules" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError when all input features exceed sparse threshold")
+
+
+def test_regression_drops_static_input_features_and_reports_warning():
+    service = RegressionService(StubDatabase(), feature_selection_service=FeatureSelectionService())
+    times = pd.date_range("2023-01-01", periods=40, freq="h")
+    data_frame = pd.DataFrame(
+        {
+            "t": times,
+            "Input Variable": np.linspace(0.0, 39.0, 40),
+            "Input Static": [7.0] * 40,
+            "Target": np.linspace(10.0, 49.0, 40),
+        }
+    )
+    status_messages: list[str] = []
+
+    summary = service.run_regressions(
+        input_features=[
+            {"feature_id": 1, "base_name": "Input Variable"},
+            {"feature_id": 2, "base_name": "Input Static"},
+        ],
+        target_feature={"feature_id": 3, "base_name": "Target"},
+        selectors=["none"],
+        models=["linear_regression"],
+        data_frame=data_frame,
+        cv_strategy="none",
+        status_callback=status_messages.append,
+    )
+
+    assert summary.runs
+    run = summary.runs[0]
+    dropped_static = run.metadata.get("inputs_dropped_static_names") or []
+    assert dropped_static == ["Input Static"]
+    assert run.metadata.get("inputs_total") == 1
+    assert any("Dropped static input features" in msg for msg in status_messages)

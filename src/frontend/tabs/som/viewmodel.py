@@ -18,6 +18,11 @@ from backend.services import (
     ClusteringInputs,
     ClusteringMethodSpec,
 )
+from backend.services.modeling_shared import display_name
+from core.training_settings import (
+    TRAINING_SPARSE_FEATURE_NAN_RATIO_THRESHOLD,
+    TRAINING_STATIC_FEATURE_MAX_UNIQUE_NON_NULL,
+)
 
 import logging
 logger = logging.getLogger(__name__)
@@ -46,6 +51,8 @@ class SomViewModel(QObject):
     selected_feature_payloads_changed = Signal(object)
     timeline_display_options_changed = Signal(object)
     timeline_table_dataframe_changed = Signal(object)
+    sparse_features_dropped = Signal(object)
+    static_features_dropped = Signal(object)
     _TIMELINE_DISPLAY_ALLOWED = {"bmu", "cluster", "selected_features"}
     _TIMELINE_DISPLAY_DEFAULT = ("bmu",)
 
@@ -960,7 +967,7 @@ class SomViewModel(QObject):
 
         self._last_neuron_clusters = None
         self._last_feature_clusters = None
-        self._feature_display_map = self._build_feature_display_map(feature_payloads)
+        full_feature_display_map = self._build_feature_display_map(feature_payloads)
 
         params = dict(preprocessing or {})
         params.pop("target_points", None)
@@ -989,11 +996,54 @@ class SomViewModel(QObject):
         if not feature_cols:
             raise ValueError("No measurements available for the selected features")
 
-        combined = (
-            base_df.set_index("t")[feature_cols]
-            .apply(pd.to_numeric, errors="coerce")
-            .dropna(how="any")
-        )
+        numeric_df = base_df.set_index("t")[feature_cols].apply(pd.to_numeric, errors="coerce")
+        nan_ratio = numeric_df.isna().mean(axis=0)
+        dropped_sparse_cols = [
+            name
+            for name in feature_cols
+            if float(nan_ratio.get(name, 0.0)) > TRAINING_SPARSE_FEATURE_NAN_RATIO_THRESHOLD
+        ]
+        if dropped_sparse_cols:
+            dropped_display = [full_feature_display_map.get(name, name) for name in dropped_sparse_cols]
+
+            def _emit_sparse_warning(names: list[str]) -> None:
+                self.sparse_features_dropped.emit(list(names))
+
+            run_in_main_thread(_emit_sparse_warning, dropped_display)
+            feature_cols = [name for name in feature_cols if name not in set(dropped_sparse_cols)]
+
+        dropped_static_cols: list[str] = []
+        if feature_cols:
+            dropped_static_cols = [
+                name
+                for name in feature_cols
+                if int(pd.Series(numeric_df[name]).dropna().nunique()) <= TRAINING_STATIC_FEATURE_MAX_UNIQUE_NON_NULL
+            ]
+            if dropped_static_cols:
+                dropped_display = [full_feature_display_map.get(name, name) for name in dropped_static_cols]
+
+                def _emit_static_warning(names: list[str]) -> None:
+                    self.static_features_dropped.emit(list(names))
+
+                run_in_main_thread(_emit_static_warning, dropped_display)
+                feature_cols = [name for name in feature_cols if name not in set(dropped_static_cols)]
+
+        if not feature_cols:
+            raise ValueError("All selected features were dropped by training rules (>95% missing or static values).")
+
+        feature_cols_set = set(feature_cols)
+        filtered_feature_payloads = [
+            dict(payload)
+            for payload in feature_payloads
+            if display_name(dict(payload or {})) in feature_cols_set
+        ]
+        if not filtered_feature_payloads:
+            raise ValueError("Unable to resolve feature metadata for the filtered SOM feature set")
+
+        self._feature_display_map = self._build_feature_display_map(filtered_feature_payloads)
+        filtered_feature_labels = [self._feature_display_map.get(name, name) for name in feature_cols]
+
+        combined = numeric_df.loc[:, feature_cols].dropna(how="any")
 
         combined = combined[~combined.index.duplicated(keep="last")]
         combined = combined.sort_index()
@@ -1021,11 +1071,13 @@ class SomViewModel(QObject):
         self._result = result
         self._last_dataframe = combined
         self._last_training_context = {
-            "feature_labels": list(feature_labels),
-            "feature_payloads": [dict(payload) for payload in feature_payloads],
+            "feature_labels": list(filtered_feature_labels),
+            "feature_payloads": filtered_feature_payloads,
+            "sparse_features_dropped": [full_feature_display_map.get(name, name) for name in dropped_sparse_cols],
+            "static_features_dropped": [full_feature_display_map.get(name, name) for name in dropped_static_cols],
             "filters": normalize_for_json(
                 {
-                    "features": [dict(payload) for payload in feature_payloads],
+                    "features": filtered_feature_payloads,
                     "start": start,
                     "end": end,
                     "group_ids": list(group_ids) if group_ids else None,

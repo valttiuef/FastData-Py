@@ -439,6 +439,8 @@ class SomSidebar(SidebarWidget):
         if self._view_model:
             self._view_model.training_started.connect(self._on_training_started)
             self._view_model.training_finished.connect(self._on_training_finished)
+            self._view_model.sparse_features_dropped.connect(self._on_sparse_features_dropped)
+            self._view_model.static_features_dropped.connect(self._on_static_features_dropped)
             self._view_model.set_selected_feature_payloads(self.data_selector.features_widget.selected_payloads())
 
     def _parse_dimension(self, text: str) -> Optional[int]:
@@ -658,6 +660,26 @@ class SomSidebar(SidebarWidget):
         """React to training completion."""
         self.train_button.setEnabled(True)
         self.save_button.setEnabled(result is not None)
+
+    def _on_sparse_features_dropped(self, feature_names: object) -> None:
+        names = [str(name).strip() for name in (feature_names or []) if str(name).strip()]
+        if not names:
+            return
+        text = tr("Dropped sparse SOM features (>95% missing values): {features}").format(
+            features=", ".join(names)
+        )
+        set_status_text(tr("SOM inputs adjusted."))
+        self._log(text, level=logging.WARNING)
+
+    def _on_static_features_dropped(self, feature_names: object) -> None:
+        names = [str(name).strip() for name in (feature_names or []) if str(name).strip()]
+        if not names:
+            return
+        text = tr("Dropped static SOM features (constant values): {features}").format(
+            features=", ".join(names)
+        )
+        set_status_text(tr("SOM inputs adjusted."))
+        self._log(text, level=logging.WARNING)
 
     def set_timeline_cluster_save_enabled(self, enabled: bool) -> None:
         self.save_timeline_clusters_button.setEnabled(bool(enabled))
