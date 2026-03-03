@@ -42,6 +42,8 @@ class LocalizationManager(QObject):
         super().__init__(app)
         self._app = app
         self._translator: JsonTranslator | None = None
+        self._current_language: str = "en"
+        self._reverse_messages: dict[str, str] = {}
 
     def available_languages(self) -> dict[str, str]:
         return {"en": "English", "fi": "Suomi"}
@@ -50,6 +52,7 @@ class LocalizationManager(QObject):
         code = (language_code or "en").lower()
         self.clear_language()
         if code == "en":
+            self._current_language = "en"
             return True
 
         lang_path = get_resource_path(f"languages/{code}.json")
@@ -58,12 +61,22 @@ class LocalizationManager(QObject):
             return False
         self._app.installTranslator(translator)
         self._translator = translator
+        self._current_language = code
+        # Reverse-map translated text back to source text so runtime language
+        # switching can resolve source keys also when UI is already translated.
+        self._reverse_messages = {value: key for key, value in translator._messages.items() if value}
         return True
 
     def clear_language(self) -> None:
         if self._translator is not None:
             self._app.removeTranslator(self._translator)
             self._translator = None
+        self._current_language = "en"
+
+    def source_text(self, text: str) -> str:
+        if not text:
+            return text
+        return self._reverse_messages.get(text, text)
 
 
 _localization_manager: LocalizationManager | None = None

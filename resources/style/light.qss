@@ -1,14 +1,17 @@
-/* Light theme stylesheet */
+/* Light theme stylesheet (Soft Neutral, dark-theme-equivalent structure) */
 
 /* ---------- Global ---------- */
 QWidget {
     font-family: "Segoe UI";
     font-size: 8pt;
+    background: #e3e3e3;     /* base */
+    color: #2a2a2a;
 }
 
 /* GroupBox */
 QGroupBox {
-    border: 1px solid #cfcfcf;
+    background: #ececec;     /* surface */
+    border: 1px solid #bfbfbf;
     border-radius: 6px;
     margin-top: 10px; /* space for title */
     padding: 4px 6px;
@@ -18,104 +21,116 @@ QGroupBox::title {
     subcontrol-origin: margin;
     left: 8px;
     padding: 0 4px;
-    color: #222222;
+    color: #2a2a2a;
     background-color: transparent;
 }
 
 /* ---------- Menus & Toolbars ---------- */
 QMenuBar {
-    background-color: #f4f4f4;
-    color: #222222;
+    background-color: #ececec;   /* match pane + selected tab */
+    color: #2a2a2a;
 }
+
 QMenuBar::item {
     background: transparent;
     padding: 4px 8px;
 }
+
 QMenuBar::item:selected {
-    background: #ededed;
-    color: #222222;
+    background: #dcdcdc;   /* hover state */
+    color: #2a2a2a;
 }
 
 QMenu {
-    background-color: #e6e6e6;
-    color: #222222;
+    background-color: #dcdcdc;
+    color: #2a2a2a;
+    border: 1px solid #bfbfbf;
 }
 QMenu::item {
     padding: 6px 18px 6px 28px;
 }
 QMenu::item:selected {
-    background-color: #dcdcdc;
-    color: #222222;
+    background-color: #cfcfcf;
+    color: #2a2a2a;
 }
 QMenu::separator {
     height: 1px;
-    background: #cfcfcf;
+    background: #bfbfbf;
     margin: 4px 6px;
 }
 
 /* ---------- StatusBar ---------- */
 QStatusBar {
-    background: #e6e6e6;
-    color: #222222;
-    border-top: 1px solid #cfcfcf;
+    background: #dcdcdc;
+    color: #2a2a2a;
+    border-top: 1px solid #bfbfbf;
 }
 
 /* ---------- Tabs ---------- */
-/* Stop Qt from drawing the white baseline under the tabs */
+/* Stop Qt from drawing the baseline under the tabs */
 QTabBar {
     qproperty-drawBase: 0;
 }
 
 /* PANE: visible frame, no top edge, rounded corners, inner spacing */
 QTabWidget::pane {
-    border: 1px solid #cfcfcf;
+    border: 1px solid #bfbfbf;
     border-top: none;             /* no line under the tabs */
-    background: #f4f4f4;
+    background: #ececec;
     border-radius: 6px;
 
     /* Create space so the page doesn't cover the border/corners */
-    padding: 8px;                 /* inner space between frame and page */
-    /* If you still want the overlap trick, use a tiny lift only */
-    top: -1px;                    /* keep small; large values can look odd */
+    padding: 8px;
+    top: -1px;                    /* SAME behavior as dark theme */
+}
+
+/* Make the page match the pane exactly (prevents mismatched tab-view area) */
+QTabWidget > QWidget {
+    background: #ececec;
 }
 
 /* Tabs: keep consistent sizing so they don't jump */
 QTabBar::tab {
-    background: #e6e6e6;
-    color: #222222;
-    border: 1px solid #cfcfcf;
+    background: #dcdcdc;
+    color: #2a2a2a;
+
+    /* Match border to tab fill (same trick as dark theme) */
+    border: 1px solid #dcdcdc;
     border-bottom: none;        /* tab looks attached to pane */
+
     border-top-left-radius: 2px;
     border-top-right-radius: 8px;
     padding: 6px 10px;
 
     /* Prevent height changes when selecting/hovering */
-    min-height: 28px;           /* pick a value that fits your font/metrics */
+    min-height: 28px;
 }
 
 /* Selected tab: overlap the pane’s top border to remove the line under it */
 QTabBar::tab:selected, QTabBar::tab:selected:hover {
-    background: #f4f4f4;
+    background: #ececec;
     margin-bottom: -1px;        /* covers the pane border under the selected tab */
-    border-color: #cfcfcf;
+    border-color: #bfbfbf;      /* match pane border */
+    color: #2a2a2a;
 }
+
 /* Hover: don’t change border thickness or bottom border */
 QTabBar::tab:hover {
-    background: #ededed;
-    border-color: #cfcfcf;      /* same width; keeps size stable */
-    color: #222222;
+    background: #d2d2d2;
+    border-color: #d2d2d2;      /* same width; keeps size stable + avoids halo */
+    color: #2a2a2a;
 }
 
 /* Optional polish: keep unselected tabs slightly “lower” for depth */
 QTabBar::tab:!selected {
-    /* no margin change needed; leaving here in case you later want :selected { top: 1px } */
+    /* keep as-is */
 }
 
-/* Keep your shared style, then specialize QToolButton */
+/* ---------- Buttons / ToolButtons ---------- */
 QPushButton, QToolButton {
-    background-color: #e6e6e6;
-    color: #222222;
-    border: 1px solid #cfcfcf;
+    background-color: #dcdcdc;
+    color: #2a2a2a;
+    border: 1px solid #bfbfbf;
     border-radius: 4px;
     padding: 4px 8px;      /* symmetric */
 }
@@ -124,13 +139,13 @@ QToolButton {
     padding: 4px 0px;      /* smaller */
 }
 
-QPushButton:hover, QToolButton:hover   { background-color: #ededed; }
-QPushButton:pressed, QToolButton:pressed { background-color: #f4f4f4; }
+QPushButton:hover, QToolButton:hover   { background-color: #d2d2d2; }
+QPushButton:pressed, QToolButton:pressed { background-color: #c9c9c9; }
 QPushButton:disabled, QToolButton:disabled,
 QToolButton:disabled {
-    background-color: #f2f2f2;
+    background-color: #e5e5e5;
     color: #9a9a9a;
-    border: 1px dashed #d6d6d6;
+    border: 1px dashed #cfcfcf;
 }
 
 QToolButton#chartResetButton {
@@ -140,107 +155,83 @@ QToolButton#chartResetButton {
     max-height: 20px;
     padding: 0px;
     border-radius: 10px;
-    background-color: #dedede;
-    border: 1px solid #cbcbcb;
+    background-color: #d7d7d7;
+    border: 1px solid #c3c3c3;
     color: #6a6a6a;
 }
-
 QToolButton#chartResetButton:hover {
-    background-color: #e6e6e6;
+    background-color: #dcdcdc;
 }
-
 QToolButton#chartResetButton:pressed {
-    background-color: #d5d5d5;
+    background-color: #cccccc;
 }
 
 /* ---------- ProgressBar ---------- */
 QProgressBar {
-    background: #ffffff;
-    color: #222222;
-    border: 1px solid #cfcfcf;
+    background: #e8e8e8;
+    color: #2a2a2a;
+    border: 1px solid #bfbfbf;
     border-radius: 4px;
     text-align: center;
 }
 QProgressBar::chunk {
-    background: #dcdcdc;
+    background: #c6c6c6;
     margin: 0px;
     border-radius: 4px;
 }
 
+/* ---------- Tables & headers ---------- */
 QHeaderView::section {
-    background: #e6e6e6;
-    color: #222222;
-    border: 1px solid #cfcfcf;
+    background: #dcdcdc;
+    color: #2a2a2a;
+    border: 1px solid #bfbfbf;
     padding: 4px 6px;
 }
 QTableCornerButton::section {
-    background: #e6e6e6;   /* same as header */
-    border: 1px solid #cfcfcf;
+    background: #dcdcdc;   /* same as header */
+    border: 1px solid #bfbfbf;
 }
 QTableView {
-    gridline-color: #cfcfcf;
+    background: #ececec;
+    gridline-color: #bfbfbf;
     border-radius: 4px;
     font-size: 8pt;
 }
 QTableView::item:selected {
-    background-color: #dcdcdc;
+    background-color: #cfcfcf;
+    color: #1f1f1f;
 }
 
 /* ---------- Tooltips ---------- */
 QToolTip {
-    color: #222222;
-    background-color: #e6e6e6;
-    border: 1px solid #cfcfcf;
+    color: #2a2a2a;
+    background-color: #dcdcdc;
+    border: 1px solid #bfbfbf;
     padding: 4px 6px;
     border-radius: 4px;
 }
 
 /* ---------- MessageBox buttons (inherit QPushButton) ---------- */
 QMessageBox {
-    background: #f4f4f4;
-    color: #222222;
+    background: #e3e3e3;
+    color: #2a2a2a;
 }
 
 /* =========================
    Global text + selection
    ========================= */
-QWidget { color: #222222; }
 QAbstractItemView {
-    color: #222222;
-    selection-background-color: #dcdcdc;
-    selection-color: #222222;     /* ensure contrast vs SEL_BG in your palette */
-}
-
-/* =========================
-   Tables & headers (context)
-   ========================= */
-QHeaderView::section {
-    background: #e6e6e6;
-    color: #222222;
-    border: 1px solid #cfcfcf;
-    padding: 4px 6px;
-}
-QTableCornerButton::section {
-    background: #e6e6e6;
-    border: 1px solid #cfcfcf;
-}
-QTableView {
-    background: #f4f4f4;
-    gridline-color: #cfcfcf;
-    border-radius: 4px;
-    font-size: 8pt;
-}
-QTableView::item:selected {
-    background: #dcdcdc;
-    color: #222222;
+    color: #2a2a2a;
+    selection-background-color: #cfcfcf;
+    selection-color: #1f1f1f;
 }
 
 /* =========================
    Lists / Trees specifics
    ========================= */
 QListView, QListWidget, QTreeView {
-    background: #f4f4f4;
-    alternate-background-color: #e6e6e6;
+    background: #ececec;
+    alternate-background-color: #e2e2e2;
     outline: none;
 }
 
@@ -248,51 +239,35 @@ QListView, QListWidget, QTreeView {
    Splitters
    ========================= */
 QSplitter {
-    background: #f4f4f4;
+    background: #ececec;
     /* optional: border around entire splitter area
-    border: 1px solid #cfcfcf;
+    border: 1px solid #bfbfbf;
     */
 }
 QSplitter::handle {
-    background: #e6e6e6;              /* base handle fill */
-    border: 1px solid #cfcfcf;       /* subtle edge to separate panes */
+    background: #dcdcdc;          /* base handle fill */
+    border: 1px solid #bfbfbf;    /* subtle edge to separate panes */
     margin: 0;
 }
 QSplitter::handle:hover {
-    background: #ededed;
-    border-color: #cfcfcf;
+    background: #d2d2d2;
+    border-color: #d2d2d2;
 }
 QSplitter::handle:pressed {
-    background: #e6e6e6;
-    border-color: #dddddd;
+    background: #dcdcdc;
+    border-color: #cfcfcf;
 }
-
-/* =========================
-   Group headers in lists (if you keep them enabled)
-   ========================= */
-/* If your header items are enabled (but not selectable), you can still
-   give them a distinct look via palette roles from code, or use a style
-   objectName and target it here. Example if you set objectName="groupHeader":
-#groupHeader {
-    color: #222222;
-    font-weight: bold;
-    background: transparent;
-}
-*/
 
 /* =========================
    Chart Cards
    ========================= */
 QWidget#chartCard {
-    background-color: #f4f4f4;
-    border: 1px solid #d7d7d7;
+    background-color: #ececec;
+    border: 1px solid #c7c7c7;
     border-radius: 10px;
 }
 
 QWidget#chartCard[selectedTarget="true"] {
-    background-color: #f4f4f4;
-    border-color: #bcbcbc;
+    background-color: #ececec;
+    border-color: #a8a8a8;
 }
-
-
-

@@ -12,16 +12,25 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
 
     QApplication,
+    QCheckBox,
+    QComboBox,
     QDialogButtonBox,
     QFileDialog,
+    QGroupBox,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMessageBox,
+    QPlainTextEdit,
     QProgressBar,
+    QPushButton,
+    QRadioButton,
     QSplitter,
     QStatusBar,
     QTabWidget,
     QSizePolicy,
+    QTextEdit,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -35,6 +44,7 @@ from ..style.styles import detect_system_theme  # optional fallback
 from backend.help_manager import get_help_manager
 from core.paths import get_app_metadata_path, get_help_path, get_resource_path
 from ..menu import init_menu_bar
+from ..localization import get_localization_manager
 from ..models.hybrid_pandas_model import HybridPandasModel
 from ..viewmodels import get_log_view_model
 from ..models.settings_model import SettingsModel
@@ -919,6 +929,7 @@ class MainWindow(QMainWindow):
             logger.warning("Exception in _update_tab_loading_status", exc_info=True)
 
     # --- Theme ---------------------------------------------------------------
+    # @ai(gpt-5, codex, refactor, 2026-03-03)
     def apply_theme(self, theme: str, *, apply_runtime: bool = False):
         app = QApplication.instance()
         if app is None:
@@ -952,21 +963,227 @@ class MainWindow(QMainWindow):
                 logger.warning("Exception in apply_theme", exc_info=True)
 
 
+    def _tab_base_label(self, tab_key: str) -> str:
+        base_by_key = {
+            "data": "Data",
+            "selections": "Selections",
+            "statistics": "Statistics",
+            "charts": "Charts",
+            "som": "SOM",
+            "regression": "Regression",
+            "forecasting": "Forecasting",
+        }
+        return base_by_key.get(tab_key, tab_key.title())
+
+    def _refresh_tab_labels(self) -> None:
+        app = QApplication.instance()
+        if app is None:
+            return
+
+        for module in self._tab_modules:
+            widget = self._loaded_tabs.get(module.help_key)
+            if widget is None:
+                widget = self._placeholder_containers.get(module.help_key)
+            if widget is None:
+                widget = getattr(self, module.instance_attr, None)
+            if widget is None:
+                continue
+            index = self.tabs.indexOf(widget)
+            if index < 0:
+                continue
+            translated = app.translate("tabs", self._tab_base_label(module.key))
+            self.tabs.setTabText(index, translated)
+
+            label = self._placeholder_labels.get(module.help_key)
+            if label is not None:
+                label.setText(self.tr("Loading {name}…").format(name=translated))
+
+    def _rebuild_menu_bar(self) -> None:
+        menubar = self.menuBar()
+        menubar.clear()
+        init_menu_bar(self)
+        for code, action in getattr(self, "language_actions", {}).items():
+            action.setChecked(code == self.settings_model.language)
+        self._update_log_action(self._log_visible)
+        al = getattr(self, "action_light", None)
+        if al is not None:
+            al.setChecked(self.current_theme == "light")
+        ad = getattr(self, "action_dark", None)
+        if ad is not None:
+            ad.setChecked(self.current_theme == "dark")
+
+    def _retranslate_visible_widgets(self) -> None:
+        for widget in self.findChildren(QWidget):
+            if widget is self:
+                continue
+            handler = getattr(widget, "retranslate_ui", None)
+            if callable(handler):
+                try:
+                    handler()
+                except Exception:
+                    logger.warning("Exception in _retranslate_visible_widgets", exc_info=True)
+
+    def _translate_source_text(self, source_text: str) -> str:
+        if not source_text:
+            return source_text
+        app = QApplication.instance()
+        if app is None:
+            return source_text
+        translated = app.translate("app", source_text)
+        if translated == source_text:
+            translated = app.translate("tabs", source_text)
+        return translated
+
+    def _source_text_from_current(self, current_text: str) -> str:
+        source_text = current_text
+        localization = get_localization_manager()
+        if localization is not None:
+            try:
+                source_text = localization.source_text(current_text)
+            except Exception:
+                logger.warning("Exception in _source_text_from_current", exc_info=True)
+        return source_text
+
+    def _widget_source_text(self, widget: QWidget, key: str, current_text: str) -> str:
+        if not current_text:
+            return current_text
+        prop_name = f"_i18n_source_{key}"
+        stored = widget.property(prop_name)
+        if isinstance(stored, str) and stored:
+            return stored
+        source_text = self._source_text_from_current(current_text)
+        widget.setProperty(prop_name, source_text)
+        return source_text
+
+    def _combo_item_source_text(self, combo: QComboBox, index: int, current_text: str) -> str:
+        source_role = Qt.ItemDataRole.UserRole + 97
+        stored = combo.itemData(index, source_role)
+        if isinstance(stored, str) and stored:
+            return stored
+        source_text = self._source_text_from_current(current_text)
+        combo.setItemData(index, source_text, source_role)
+        return source_text
+
+    def _tab_source_text(self, tab_widget: QTabWidget, index: int, current_text: str) -> str:
+        tab_bar = tab_widget.tabBar()
+        if tab_bar is None:
+            return self._source_text_from_current(current_text)
+        stored = tab_bar.tabData(index)
+        if isinstance(stored, str) and stored:
+            return stored
+        source_text = self._source_text_from_current(current_text)
+        tab_bar.setTabData(index, source_text)
+        return source_text
+
+    def _retranslate_widget_tree(self, root: QWidget, visited: set[int]) -> None:
+        widgets: list[QWidget] = [root]
+        widgets.extend(root.findChildren(QWidget))
+        for widget in widgets:
+            widget_id = id(widget)
+            if widget_id in visited:
+                continue
+            visited.add(widget_id)
+            try:
+                if isinstance(widget, QLabel):
+                    source = self._widget_source_text(widget, "text", widget.text())
+                    widget.setText(self._translate_source_text(source))
+                elif isinstance(widget, (QPushButton, QToolButton, QCheckBox, QRadioButton)):
+                    source = self._widget_source_text(widget, "text", widget.text())
+                    widget.setText(self._translate_source_text(source))
+                elif isinstance(widget, QGroupBox):
+                    source = self._widget_source_text(widget, "title", widget.title())
+                    widget.setTitle(self._translate_source_text(source))
+                elif isinstance(widget, (QLineEdit, QTextEdit, QPlainTextEdit)):
+                    if hasattr(widget, "placeholderText") and hasattr(widget, "setPlaceholderText"):
+                        placeholder = widget.placeholderText()
+                        source = self._widget_source_text(widget, "placeholder", placeholder)
+                        widget.setPlaceholderText(self._translate_source_text(source))
+                elif isinstance(widget, QComboBox):
+                    for i in range(widget.count()):
+                        item_text = widget.itemText(i)
+                        source = self._combo_item_source_text(widget, i, item_text)
+                        widget.setItemText(i, self._translate_source_text(source))
+                    line_edit = widget.lineEdit()
+                    if line_edit is not None:
+                        placeholder = line_edit.placeholderText()
+                        source = self._widget_source_text(line_edit, "placeholder", placeholder)
+                        line_edit.setPlaceholderText(self._translate_source_text(source))
+                elif isinstance(widget, QTabWidget):
+                    for i in range(widget.count()):
+                        tab_text = widget.tabText(i)
+                        source = self._tab_source_text(widget, i, tab_text)
+                        widget.setTabText(i, self._translate_source_text(source))
+
+                tip = widget.toolTip()
+                if tip:
+                    source = self._widget_source_text(widget, "tooltip", tip)
+                    widget.setToolTip(self._translate_source_text(source))
+            except Exception:
+                logger.warning("Exception in _retranslate_widget_tree", exc_info=True)
+
+    def _retranslate_common_controls(self) -> None:
+        visited: set[int] = set()
+        self._retranslate_widget_tree(self, visited)
+
+        for tab_widget in self.findChildren(QTabWidget):
+            try:
+                for index in range(tab_widget.count()):
+                    page = tab_widget.widget(index)
+                    if page is not None:
+                        self._retranslate_widget_tree(page, visited)
+            except Exception:
+                logger.warning("Exception in _retranslate_common_controls", exc_info=True)
+
+    # @ai(gpt-5, codex, feature, 2026-03-03)
+    def apply_language(self, language_code: str, *, apply_runtime: bool = False) -> bool:
+        normalized = (language_code or "en").lower()
+        if normalized not in {"en", "fi"}:
+            normalized = "en"
+
+        previous = self.settings_model.language
+        if normalized != previous:
+            self.settings_model.set_language(normalized)
+        for code, action in getattr(self, "language_actions", {}).items():
+            action.setChecked(code == self.settings_model.language)
+
+        if not apply_runtime:
+            if self.settings_model.language != previous:
+                message = self.tr("Language preference saved. Apply from View > Language > Apply Translations or restart the application.")
+                self.set_status_text(message)
+                try:
+                    self.toast_manager.info(message, title=self.tr("Restart required"))
+                except Exception:
+                    logger.warning("Exception in apply_language", exc_info=True)
+            return True
+
+        localization = get_localization_manager()
+        if localization is None:
+            try:
+                self.toast_manager.error(self.tr("Localization manager is not available."), title=self.tr("Language"))
+            except Exception:
+                logger.warning("Exception in apply_language", exc_info=True)
+            return False
+
+        if not localization.apply_language(self.settings_model.language):
+            try:
+                self.toast_manager.error(self.tr("Failed to apply translations."), title=self.tr("Language"))
+            except Exception:
+                logger.warning("Exception in apply_language", exc_info=True)
+            return False
+
+        self._rebuild_menu_bar()
+        self._refresh_tab_labels()
+        self._on_database_changed(self.database_model.path)
+        self._retranslate_common_controls()
+        self._retranslate_visible_widgets()
+        return True
+
     def available_languages(self) -> dict[str, str]:
         return {"en": self.tr("English"), "fi": self.tr("Finnish")}
 
+    # @ai(gpt-5, codex, refactor, 2026-03-03)
     def change_language(self, language_code: str) -> None:
-        previous = self.settings_model.language
-        self.settings_model.set_language(language_code)
-        for code, action in getattr(self, "language_actions", {}).items():
-            action.setChecked(code == self.settings_model.language)
-        if self.settings_model.language != previous:
-            message = self.tr("Language preference saved. Restart the application for the change to take effect.")
-            self.set_status_text(message)
-            try:
-                self.toast_manager.info(message, title=self.tr("Restart required"))
-            except Exception:
-                logger.warning("Exception in change_language", exc_info=True)
+        self.apply_language(language_code, apply_runtime=False)
 
     def show_about_dialog(self):
         window = AboutWindow(self)

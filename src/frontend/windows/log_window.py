@@ -57,8 +57,8 @@ class LogWindow(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
 
-        settings_section = CollapsibleSection(tr("Settings"), collapsed=True, parent=self)
-        settings_layout = settings_section.body_layout()
+        self._settings_section = CollapsibleSection(tr("Settings"), collapsed=True, parent=self)
+        settings_layout = self._settings_section.body_layout()
         settings_layout.setContentsMargins(0, 0, 0, 0)
         settings_layout.setSpacing(6)
 
@@ -77,11 +77,11 @@ class LogWindow(QWidget):
         self._logger_selector.selection_changed.connect(self._on_logger_selection_changed)
         filter_layout.addWidget(self._logger_selector, stretch=1)
         self._filter_bar.setVisible(False)
-        sources_label = QLabel(tr("Sources:"), self)
-        grid.addWidget(sources_label, 0, 0)
+        self._sources_label = QLabel(tr("Sources:"), self)
+        grid.addWidget(self._sources_label, 0, 0)
         grid.addWidget(self._filter_bar, 0, 1)
 
-        labels = [sources_label]
+        labels = [self._sources_label]
 
         max_width = max(label.sizeHint().width() for label in labels)
         grid.setColumnMinimumWidth(0, max_width)
@@ -107,7 +107,7 @@ class LogWindow(QWidget):
 
         settings_layout.addLayout(button_row)
 
-        layout.addWidget(settings_section)
+        layout.addWidget(self._settings_section)
 
         self._view = QTextEdit(self)
         self._view.setReadOnly(True)
@@ -117,7 +117,8 @@ class LogWindow(QWidget):
         search_row = QHBoxLayout()
         search_row.setContentsMargins(0, 4, 0, 0)
         search_row.setSpacing(8)
-        search_row.addWidget(QLabel(tr("Search:"), self))
+        self._search_label = QLabel(tr("Search:"), self)
+        search_row.addWidget(self._search_label)
         self._search_input = QLineEdit(self)
         self._search_input.setPlaceholderText(tr("Search logs…"))
         self._search_input.returnPressed.connect(self._search_next)
@@ -145,6 +146,17 @@ class LogWindow(QWidget):
             logger.warning("Exception in __init__", exc_info=True)
 
         self._mark_search_dirty()
+
+    def retranslate_ui(self) -> None:
+        self._settings_section.set_title(tr("Settings"))
+        self._sources_label.setText(tr("Sources:"))
+        self._logger_selector.set_placeholder(tr("All sources"))
+        self._load_log_button.setText(tr("Load log…"))
+        self._save_log_button.setText(tr("Save log as…"))
+        self._reset_log_button.setText(tr("Reset log"))
+        self._search_label.setText(tr("Search:"))
+        self._search_input.setPlaceholderText(tr("Search logs…"))
+        self._search_button.setText(tr("Search"))
 
     # ------------------------------------------------------------------
     def _append_entry(self, event: LogEvent) -> None:

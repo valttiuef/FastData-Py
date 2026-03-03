@@ -65,10 +65,14 @@ def init_menu_bar(window):
     window.language_actions = {}
     for code, label in window.available_languages().items():
         action = QAction(label, window, checkable=True)
-        action.triggered.connect(lambda checked=False, c=code: window.change_language(c))
+        action.triggered.connect(lambda checked=False, c=code: _change_language_with_confirmation(window, c))
         language_group.addAction(action)
         language_menu.addAction(action)
         window.language_actions[code] = action
+    language_menu.addSeparator()
+    action_apply_translations = QAction(tr("Apply Translations"), window)
+    action_apply_translations.triggered.connect(lambda: _apply_saved_language_now(window))
+    language_menu.addAction(action_apply_translations)
 
     theme_menu = view_menu.addMenu(tr("Theme"))
 
@@ -104,6 +108,7 @@ def init_menu_bar(window):
 
     window.action_light = action_light
     window.action_dark = action_dark
+    window.action_apply_translations = action_apply_translations
     window.action_apply_theme = action_apply_theme
     window.action_show_log = log_action
     window.action_open_chat = chat_action
@@ -166,3 +171,36 @@ def _apply_saved_theme_now(window) -> None:
         window.toast_manager.success(message, title=tr("Theme"))
     except Exception:
         logger.warning("Exception in _apply_saved_theme_now", exc_info=True)
+
+
+def _change_language_with_confirmation(window, language_code: str) -> None:
+    reply = QMessageBox.question(
+        window,
+        tr("Apply Translations"),
+        tr("Apply the selected language now?\n\nThis can take some time."),
+        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        QMessageBox.StandardButton.No,
+    )
+    apply_now = reply == QMessageBox.StandardButton.Yes
+    ok = window.apply_language(language_code, apply_runtime=apply_now)
+    if apply_now and ok:
+        message = tr("Translations applied.")
+        window.set_status_text(message)
+        try:
+            window.toast_manager.success(message, title=tr("Language"))
+        except Exception:
+            logger.warning("Exception in _change_language_with_confirmation", exc_info=True)
+
+
+def _apply_saved_language_now(window) -> None:
+    language = getattr(window.settings_model, "language", "") or "en"
+    ok = window.apply_language(language, apply_runtime=True)
+    if not ok:
+        return
+
+    message = tr("Translations applied.")
+    window.set_status_text(message)
+    try:
+        window.toast_manager.success(message, title=tr("Language"))
+    except Exception:
+        logger.warning("Exception in _apply_saved_language_now", exc_info=True)

@@ -91,8 +91,8 @@ class ChatWindow(QWidget):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
 
-        settings_section = CollapsibleSection(tr("Settings"), collapsed=True, parent=self)
-        settings_layout = settings_section.body_layout()
+        self._settings_section = CollapsibleSection(tr("Settings"), collapsed=True, parent=self)
+        settings_layout = self._settings_section.body_layout()
         settings_layout.setContentsMargins(0, 0, 0, 0)
         settings_layout.setSpacing(6)
 
@@ -102,19 +102,19 @@ class ChatWindow(QWidget):
         grid.setVerticalSpacing(6)
         settings_layout.addLayout(grid)
 
-        provider_label = QLabel(tr("LLM Provider:"), self)
+        self._provider_label = QLabel(tr("LLM Provider:"), self)
         self._provider_selector = QComboBox(self)
         self._provider_selector.addItem(tr("ChatGPT (OpenAI)"), "openai")
         self._provider_selector.addItem(tr("Ollama (Local)"), "ollama")
         self._provider_selector.currentIndexChanged.connect(self._on_provider_changed)
-        grid.addWidget(provider_label, 0, 0)
+        grid.addWidget(self._provider_label, 0, 0)
         grid.addWidget(self._with_info(self._provider_selector, "chat.settings.provider"), 0, 1)
 
-        model_label = QLabel(tr("Model name:"), self)
+        self._model_label = QLabel(tr("Model name:"), self)
         self._model_input = QLineEdit(self)
         self._model_input.setPlaceholderText(tr("Model identifier (e.g. gpt-4o-mini, llama3.2)"))
         self._model_input.editingFinished.connect(self._persist_model_choice)
-        grid.addWidget(model_label, 1, 0)
+        grid.addWidget(self._model_label, 1, 0)
         grid.addWidget(self._with_info(self._model_input, "chat.settings.model_name"), 1, 1)
 
         self._api_label = QLabel(tr("API Key:"), self)
@@ -135,7 +135,7 @@ class ChatWindow(QWidget):
         grid.addWidget(self._api_label, 2, 0)
         grid.addWidget(self._api_key_row_container, 2, 1)
 
-        labels = [provider_label, model_label, self._api_label]
+        labels = [self._provider_label, self._model_label, self._api_label]
         max_width = max(label.sizeHint().width() for label in labels)
         grid.setColumnMinimumWidth(0, max_width)
         for label in labels:
@@ -150,7 +150,7 @@ class ChatWindow(QWidget):
         clear_row.addWidget(self._clear_chats_button)
         settings_layout.addLayout(clear_row)
 
-        layout.addWidget(settings_section)
+        layout.addWidget(self._settings_section)
 
         self._chat_list = QListWidget(self)
         self._chat_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -191,6 +191,22 @@ class ChatWindow(QWidget):
 
         self._restore_llm_settings()
         self._rebuild_from_log()
+
+    def retranslate_ui(self) -> None:
+        self.setWindowTitle(tr("Chat"))
+        self._settings_section.set_title(tr("Settings"))
+        self._provider_label.setText(tr("LLM Provider:"))
+        self._provider_selector.setItemText(0, tr("ChatGPT (OpenAI)"))
+        self._provider_selector.setItemText(1, tr("Ollama (Local)"))
+        self._model_label.setText(tr("Model name:"))
+        self._model_input.setPlaceholderText(tr("Model identifier (e.g. gpt-4o-mini, llama3.2)"))
+        self._api_label.setText(tr("API Key:"))
+        self._api_key_input.setPlaceholderText(tr("OpenAI API key"))
+        self._clear_api_key_button.setText(tr("Clear"))
+        self._clear_api_key_button.setToolTip(tr("Clear stored API key"))
+        self._clear_chats_button.setText(tr("Clear chats"))
+        self._input.setPlaceholderText(tr("Ask anything…"))
+        self._send_button.setText(tr("Send"))
 
     def eventFilter(self, watched: object, event: QEvent) -> bool:
         if watched is self._chat_list.viewport() and event.type() == QEvent.Type.Resize:
