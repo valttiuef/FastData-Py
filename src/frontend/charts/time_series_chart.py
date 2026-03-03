@@ -10,7 +10,12 @@ from PySide6.QtCharts import QChart, QLineSeries, QDateTimeAxis, QValueAxis
 from PySide6.QtGui import QColor, QPen, QPalette, QBrush, QFont
 
 from .interactive_chart_view import InteractiveChartView
-from . import MAX_FEATURES_SHOWN_LEGEND
+from . import (
+    MAX_FEATURES_SHOWN_LEGEND,
+    TIMESERIES_GAP_DETECTION_ENABLED,
+    TIMESERIES_GAP_IRREGULAR_MULTIPLIER,
+    TIMESERIES_GAP_REGULAR_MULTIPLIER,
+)
 from ..style.group_colors import group_color_for_label, group_color_cycle
 from ..style.chart_theme import (
 
@@ -131,6 +136,7 @@ class TimeSeriesChart(QFrame):
         self._series_colors: dict[str, QColor] = {}
         self._feature_order: list[str] = []
         self._max_series: int = MAX_FEATURES_SHOWN_LEGEND
+        self._gap_threshold_ms: int | None = None
         self._current_frame: pd.DataFrame = pd.DataFrame()
         self._current_theme: str | None = None
         self._dark_theme: bool = False
@@ -220,6 +226,95 @@ class TimeSeriesChart(QFrame):
                 self.view.viewport().update()
             except Exception:
                 logger.warning("Failed to refresh chart viewport after clearing time-series chart.", exc_info=True)
+
+    def _estimate_gap_threshold_ms(self, times_ms: np.ndarray) -> int | None:
+        """
+        Estimate a stable, robust gap threshold from timestamp deltas.
+
+        The threshold is intentionally smoothed across updates to avoid visible
+        gap flicker while panning/zooming through nearby ranges.
+        """
+        if times_ms is None:
+            return self._gap_threshold_ms
+        if not TIMESERIES_GAP_DETECTION_ENABLED:
+            return None
+        # Internal stability/sensitivity constants. Keep these local so only
+        # the primary multipliers remain public in chart globals.
+        regularity_ratio = 3.8
+        regular_mad_multiplier = 16.0
+        irregular_mad_multiplier = 24.0
+        reset_low_ratio = 0.08
+        reset_high_ratio = 12.0
+        bound_low_ratio = 0.65
+        bound_high_ratio = 1.75
+        smooth_prev_weight = 0.95
+        smooth_curr_weight = 0.05
+        try:
+            ts = np.asarray(times_ms, dtype=np.int64)
+        except Exception:
+            return self._gap_threshold_ms
+        if ts.size < 3:
+            return self._gap_threshold_ms
+
+        deltas = np.diff(ts)
+        deltas = deltas[deltas > 0]
+        if deltas.size == 0:
+            return self._gap_threshold_ms
+
+        median_step = float(np.median(deltas))
+        if not np.isfinite(median_step) or median_step <= 0:
+            return self._gap_threshold_ms
+
+        p80 = float(np.quantile(deltas, 0.80))
+        core = deltas[deltas <= p80]
+        if core.size == 0:
+            core = deltas
+
+        core_median = float(np.median(core))
+        if not np.isfinite(core_median) or core_median <= 0:
+            core_median = median_step
+
+        mad = float(np.median(np.abs(core - core_median))) if core.size else 0.0
+        p90 = float(np.quantile(deltas, 0.90))
+        p95 = float(np.quantile(deltas, 0.95))
+        regular = p90 <= (core_median * float(regularity_ratio))
+
+        if regular:
+            candidate = max(
+                core_median * float(TIMESERIES_GAP_REGULAR_MULTIPLIER),
+                core_median + max(1.0, float(regular_mad_multiplier) * mad),
+            )
+        else:
+            candidate = max(
+                core_median * float(TIMESERIES_GAP_IRREGULAR_MULTIPLIER),
+                core_median + max(1.0, float(irregular_mad_multiplier) * mad),
+            )
+        # Forgiving guard for mixed/coarse cadences:
+        # keep threshold near upper-typical spacing so same-day fragments do not
+        # become separate segments in month-like timelines.
+        candidate = max(candidate, p95 * 0.80)
+
+        if self._gap_threshold_ms is None:
+            self._gap_threshold_ms = int(max(1.0, round(candidate)))
+            return self._gap_threshold_ms
+
+        prev = float(self._gap_threshold_ms)
+        if (
+            candidate >= prev * float(reset_high_ratio)
+            or candidate <= prev * float(reset_low_ratio)
+        ):
+            self._gap_threshold_ms = int(max(1.0, round(candidate)))
+            return self._gap_threshold_ms
+        bounded = min(
+            max(candidate, prev * float(bound_low_ratio)),
+            prev * float(bound_high_ratio),
+        )
+        smoothed = (
+            float(smooth_prev_weight) * prev
+            + float(smooth_curr_weight) * bounded
+        )
+        self._gap_threshold_ms = int(max(1.0, round(smoothed)))
+        return self._gap_threshold_ms
 
     def set_title(self, title: str):
         self.chart.setTitle(title)
@@ -725,11 +820,30 @@ class TimeSeriesChart(QFrame):
             self._set_series_pen(series, color)
             return [series]
 
-        # Keep NaN/inf gaps as hard breaks. Gap filling/interpolation must come
-        # from preprocessing options, not chart rendering.
-        # find runs of consecutive finite values
-        edges = np.flatnonzero(np.diff(np.concatenate(([0], finite.view(np.int8), [0]))))
-        runs = list(zip(edges[0::2], edges[1::2]))
+        # Keep NaN/inf gaps as hard breaks. Also detect large timestamp jumps
+        # and split lines there to make missing periods visually explicit.
+        gap_threshold_ms = self._estimate_gap_threshold_ms(times_ms)
+        time_gap_breaks = np.zeros(max(0, len(times_ms) - 1), dtype=bool)
+        if TIMESERIES_GAP_DETECTION_ENABLED and gap_threshold_ms is not None and len(times_ms) > 1:
+            deltas = np.diff(np.asarray(times_ms, dtype=np.int64))
+            time_gap_breaks = deltas > int(gap_threshold_ms)
+        runs: list[tuple[int, int]] = []
+        start_idx: int | None = None
+        last_idx = len(vals) - 1
+        for idx in range(len(vals)):
+            if not finite[idx]:
+                if start_idx is not None:
+                    runs.append((start_idx, idx))
+                    start_idx = None
+                continue
+            if start_idx is None:
+                start_idx = idx
+            is_end = idx >= last_idx
+            next_non_finite = (not is_end) and (not finite[idx + 1])
+            has_large_time_gap = (not is_end) and bool(time_gap_breaks[idx])
+            if is_end or next_non_finite or has_large_time_gap:
+                runs.append((start_idx, idx + 1))
+                start_idx = None
 
         # Create QLineSeries for each run
         for seg_idx, (start_idx, end_idx) in enumerate(runs):
