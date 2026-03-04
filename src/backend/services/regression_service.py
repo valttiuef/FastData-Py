@@ -13,6 +13,7 @@ import pandas as pd
 from core.training_settings import (
     TRAINING_SPARSE_FEATURE_NAN_RATIO_THRESHOLD,
     TRAINING_STATIC_FEATURE_MAX_UNIQUE_NON_NULL,
+    TRAINING_STRATIFIED_KFOLD_MERGE_SMALL_GROUPS,
 )
 
 from sklearn.base import RegressorMixin, clone
@@ -892,8 +893,20 @@ class RegressionService:
                 _warn("Stratified K-Fold has only one stratum; falling back to K-Fold.")
                 return KFold(n_splits=folds, shuffle=shuffle, random_state=random_state)
             if int(counts.min()) < folds:
-                _warn("Not enough samples per stratum for Stratified K-Fold; falling back to K-Fold.")
-                return KFold(n_splits=folds, shuffle=shuffle, random_state=random_state)
+                if bool(int(TRAINING_STRATIFIED_KFOLD_MERGE_SMALL_GROUPS)):
+                    merge_result = self._merge_small_strata_for_kfold(labels, folds)
+                    if merge_result is not None:
+                        labels, merged_source_labels = merge_result
+                        merged_preview = ", ".join(merged_source_labels[:8])
+                        if len(merged_source_labels) > 8:
+                            merged_preview = f"{merged_preview}, ..."
+                        _warn(f"Stratified K-Fold combined small strata into one group: {merged_preview}.")
+                    else:
+                        _warn("Not enough samples per stratum for Stratified K-Fold; falling back to K-Fold.")
+                        return KFold(n_splits=folds, shuffle=shuffle, random_state=random_state)
+                else:
+                    _warn("Not enough samples per stratum for Stratified K-Fold; falling back to K-Fold.")
+                    return KFold(n_splits=folds, shuffle=shuffle, random_state=random_state)
             splitter = StratifiedKFold(n_splits=folds, shuffle=shuffle, random_state=random_state)
             return list(splitter.split(np.zeros(len(y)), labels.astype(str).to_numpy()))
         if strategy == "time_series":
@@ -1100,6 +1113,33 @@ class RegressionService:
         if labels.dropna().empty:
             return None
         return labels
+
+    def _merge_small_strata_for_kfold(self, labels: pd.Series, folds: int) -> Optional[tuple[pd.Series, list[str]]]:
+        if folds <= 1:
+            return labels, []
+        counts = labels.value_counts(dropna=True)
+        if counts.empty:
+            return None
+        if int(counts.min()) >= folds:
+            return labels, []
+
+        small_labels = counts[counts < folds].index.tolist()
+        if not small_labels:
+            return labels, []
+        small_label_names = [str(v) for v in small_labels]
+
+        merged = labels.astype("string").copy()
+        merged_label = "__combined_small_strata__"
+        while merged_label in set(merged.dropna().unique()):
+            merged_label = f"{merged_label}_x"
+        merged = merged.where(~merged.isin(small_labels), other=merged_label)
+
+        merged_counts = merged.value_counts(dropna=True)
+        if merged_counts.empty or len(merged_counts) < 2:
+            return None
+        if int(merged_counts.min()) < folds:
+            return None
+        return merged, small_label_names
 
     def _cross_validate(self, pipeline: Pipeline, X: pd.DataFrame, y: pd.Series, cv) -> dict[str, list[float]]:
         if cv is None:
