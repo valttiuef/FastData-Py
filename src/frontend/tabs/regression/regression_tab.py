@@ -92,6 +92,12 @@ class RegressionTab(TabWidget):
 
     def _connect_signals(self) -> None:
         self._view_model.features_changed.connect(self._update_stratify_options)
+        self._view_model.data_model.groups_changed.connect(self._on_groups_changed)
+
+    def _on_groups_changed(self) -> None:
+        group_kinds = self._view_model.available_group_kinds()
+        self.sidebar.set_group_kinds(group_kinds)
+        self._update_stratify_options()
 
     # ------------------------------------------------------------------
     def _populate_options(self) -> None:

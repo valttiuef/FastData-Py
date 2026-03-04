@@ -2,6 +2,7 @@
 from __future__ import annotations
 from pathlib import Path
 import logging
+import re
 import threading
 import time
 from shutil import copy2
@@ -20,6 +21,33 @@ from ..threading.runner import run_in_thread
 from ..threading.utils import run_in_main_thread
 
 logger = logging.getLogger(__name__)
+
+_MODE_TYPE_PATTERN = re.compile(r"^\s*(text|group)\s*\((.*)\)\s*$", re.IGNORECASE)
+
+def _extract_original_type(type_value: object) -> str:
+    text = str(type_value or "").strip()
+    if not text:
+        return ""
+    while True:
+        match = _MODE_TYPE_PATTERN.match(text)
+        if not match:
+            break
+        inner = str(match.group(2) or "").strip()
+        if not inner:
+            return ""
+        text = inner
+    if text.casefold() in {"text", "group"}:
+        return ""
+    return text
+
+def _compose_mode_type(mode: str, *, current_type: object = None) -> str:
+    mode_text = str(mode or "").strip().casefold()
+    if mode_text not in {"text", "group"}:
+        return str(mode or "").strip()
+    original = _extract_original_type(current_type)
+    if not original:
+        return mode_text
+    return f"{mode_text} ({original})"
 
 class _DatabaseHandle:
     """Lightweight proxy that keeps a shared :class:`backend.data_db.Database` alive.
@@ -1281,6 +1309,7 @@ class DatabaseModel(QObject):
         feature_source = str((feature_row or ["", "", ""])[0] or "").strip()
         feature_unit = str((feature_row or ["", "", ""])[1] or "").strip()
         feature_type = str((feature_row or ["", "", ""])[2] or "").strip()
+        group_feature_type = _compose_mode_type("group", current_type=feature_type)
         if bool(link_only_as_group_label):
             frame = self._group_source_dataframe(feature_id=fid, group_kind=kind)
             if frame is None or frame.empty or "v" not in frame.columns:
@@ -1308,15 +1337,15 @@ class DatabaseModel(QObject):
                 aliases_df=aliases_df,
                 source=feature_source,
                 unit=feature_unit,
-                type=feature_type or "group",
+                type=group_feature_type,
             )
             csv_group_links = int(db.mark_csv_feature_group_kind(feature_id=fid, group_kind=kind) or 0)
             if csv_group_links <= 0:
                 raise ValueError("Selected feature has no CSV import column mapping to link.")
             with db.write_transaction() as con:
-                db.features_repo.update_feature(con, fid, type="group")
+                db.features_repo.update_feature(con, fid, type=group_feature_type)
             self.notify_features_changed(
-                updated_features=[(fid, {"type": "group"})],
+                updated_features=[(fid, {"type": group_feature_type})],
             )
             return {
                 "feature_id": fid,
@@ -1357,13 +1386,13 @@ class DatabaseModel(QObject):
             aliases_df=aliases_df,
             source=feature_source,
             unit=feature_unit,
-            type=feature_type or "group",
+            type=group_feature_type,
         )
         csv_group_links = int(db.mark_csv_feature_group_kind(feature_id=fid, group_kind=kind) or 0)
         with db.write_transaction() as con:
-            db.features_repo.update_feature(con, fid, type="group")
+            db.features_repo.update_feature(con, fid, type=group_feature_type)
         self.notify_features_changed(
-            updated_features=[(fid, {"type": "group"})],
+            updated_features=[(fid, {"type": group_feature_type})],
         )
         return {
             "feature_id": fid,

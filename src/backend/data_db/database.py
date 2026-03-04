@@ -75,6 +75,46 @@ def _safe_alias(alias: str) -> str:
         a = "db"
     return a
 
+_MODE_TYPE_PATTERN = re.compile(r"^\s*(text|group)\s*\((.*)\)\s*$", re.IGNORECASE)
+
+def _mode_type_token(type_value: object) -> Optional[str]:
+    text = str(type_value or "").strip()
+    if not text:
+        return None
+    lowered = text.casefold()
+    if lowered in {"text", "group"}:
+        return lowered
+    match = _MODE_TYPE_PATTERN.match(text)
+    if not match:
+        return None
+    token = str(match.group(1) or "").strip().casefold()
+    return token if token in {"text", "group"} else None
+
+def _innermost_original_type(type_value: object) -> str:
+    text = str(type_value or "").strip()
+    if not text:
+        return ""
+    while True:
+        match = _MODE_TYPE_PATTERN.match(text)
+        if not match:
+            break
+        inner = str(match.group(2) or "").strip()
+        if not inner:
+            return ""
+        text = inner
+    if text.casefold() in {"text", "group"}:
+        return ""
+    return text
+
+def _compose_mode_type(mode: str, *, original_type: object = None) -> str:
+    mode_text = str(mode or "").strip().casefold()
+    if mode_text not in {"text", "group"}:
+        return str(mode or "").strip()
+    original = _innermost_original_type(original_type)
+    if not original:
+        return mode_text
+    return f"{mode_text} ({original})"
+
 def _guess_csv_delimiter(file_path: Path, *, encoding: Optional[str]) -> Optional[str]:
     candidates = [",", ";", "\t", "|"]
     counts = {c: 0 for c in candidates}
@@ -189,6 +229,83 @@ class Database:
             feat_map.sort_values(["base_name", "source", "type", "feature_id"])
             .drop_duplicates(subset=["base_name", "source", "type"], keep="first")
         )
+
+    def _apply_mode_type_context_from_existing_features(
+        self,
+        con: duckdb.DuckDBPyConnection,
+        *,
+        system_id: int,
+        features_df: pd.DataFrame,
+    ) -> pd.DataFrame:
+        if (
+            features_df is None
+            or features_df.empty
+            or not {"base_name", "source", "type"}.issubset(set(features_df.columns))
+        ):
+            return features_df
+        out = features_df.copy()
+        out["base_name"] = out["base_name"].astype("string").fillna("")
+        out["source"] = out["source"].astype("string").fillna("")
+        out["type"] = out["type"].astype("string").fillna("")
+        mode_mask = out["type"].map(_mode_type_token).notna()
+        if not bool(mode_mask.any()):
+            return out
+
+        pair_rows = out.loc[mode_mask, ["base_name", "source"]].drop_duplicates()
+        if pair_rows.empty:
+            return out
+
+        temp_name = "feature_mode_pairs"
+        try:
+            con.register(temp_name, pair_rows)
+            existing = con.execute(
+                f"""
+                SELECT
+                    f.name AS base_name,
+                    COALESCE(f.source, '') AS source,
+                    COALESCE(f.type, '') AS type
+                FROM features f
+                JOIN {temp_name} p
+                  ON p.base_name = f.name
+                 AND p.source = COALESCE(f.source, '')
+                WHERE f.system_id = ?
+                ORDER BY f.id ASC
+                """,
+                [int(system_id)],
+            ).df()
+        finally:
+            try:
+                con.unregister(temp_name)
+            except Exception:
+                self.log.warning("Failed to unregister temp table %s", temp_name, exc_info=True)
+
+        original_by_pair: dict[tuple[str, str], str] = {}
+        if existing is not None and not existing.empty:
+            for row in existing.itertuples(index=False):
+                key = (
+                    str(getattr(row, "base_name", "") or ""),
+                    str(getattr(row, "source", "") or ""),
+                )
+                if key in original_by_pair:
+                    continue
+                original = _innermost_original_type(getattr(row, "type", ""))
+                if not original:
+                    continue
+                original_by_pair[key] = original
+
+        for idx in out.index[mode_mask]:
+            mode = _mode_type_token(out.at[idx, "type"])
+            if not mode:
+                continue
+            current_original = _innermost_original_type(out.at[idx, "type"])
+            if not current_original:
+                pair_key = (
+                    str(out.at[idx, "base_name"] or ""),
+                    str(out.at[idx, "source"] or ""),
+                )
+                current_original = original_by_pair.get(pair_key, "")
+            out.at[idx, "type"] = _compose_mode_type(mode, original_type=current_original)
+        return out
 
     @contextmanager
     def connection(self):
@@ -486,6 +603,11 @@ class Database:
                                 .reset_index(drop=True)
                             )
                             feat_df["feature_order"] = pd.RangeIndex(start=0, stop=len(feat_df), step=1)
+                        feat_df = self._apply_mode_type_context_from_existing_features(
+                            con,
+                            system_id=int(sys_id),
+                            features_df=feat_df,
+                        )
                         feat_df["system_id"] = int(sys_id)
                         feat_df["notes"] = None
                         con.register("new_features_df", feat_df)
@@ -881,6 +1003,7 @@ class Database:
 
         return results
 
+    # @ai(gpt-5, codex-cli, bugfix, 2026-03-04)
     def _import_csv_duckdb(self, file_path: Path, options: ImportOptions, unit_callback=None) -> List[int]:
         file_path = Path(file_path)
         encodings_to_try = _get_encoding_candidates(options.csv_encoding)
@@ -1006,6 +1129,18 @@ class Database:
                         metric_df["type"] = metric_df["type"].astype("string").fillna("")
                         forced_meta_cols = sorted(int(v) for v in (header_meta.get("forced_meta_cols") or []))
                         forced_meta_cols = [c for c in forced_meta_cols if c >= 0]
+                        forced_meta_set = set(forced_meta_cols)
+                        if forced_meta_set and not metric_df.empty:
+                            forced_metric_mask = metric_df["column_index"].isin(list(forced_meta_set))
+                            if bool(forced_metric_mask.any()):
+                                metric_df.loc[forced_metric_mask, "type"] = metric_df.loc[
+                                    forced_metric_mask, "type"
+                                ].map(lambda value: _compose_mode_type("group", original_type=value))
+                        forced_type_by_column = {
+                            int(row.column_index): str(row.type or "")
+                            for row in metric_df.itertuples(index=False)
+                            if getattr(row, "column_index", None) is not None
+                        }
                         forced_group_df = pd.DataFrame(
                             [
                                 {
@@ -1013,7 +1148,10 @@ class Database:
                                     "base_name": _column_label(int(col_idx)),
                                     "source": "",
                                     "unit": "",
-                                    "type": "group",
+                                    "type": _compose_mode_type(
+                                        "group",
+                                        original_type=forced_type_by_column.get(int(col_idx), ""),
+                                    ),
                                     "group_kind": _column_label(int(col_idx)),
                                 }
                                 for col_idx in forced_meta_cols
@@ -1043,6 +1181,11 @@ class Database:
                                 .reset_index(drop=True)
                             )
                         if not feat_df.empty:
+                            feat_df = self._apply_mode_type_context_from_existing_features(
+                                con,
+                                system_id=int(sys_id),
+                                features_df=feat_df,
+                            )
                             feat_df["system_id"] = int(sys_id)
                             feat_df["notes"] = None
                             con.register("new_features_df", feat_df)
@@ -1578,6 +1721,7 @@ class Database:
             df["tags"] = [[] for _ in range(len(df))]
             return df
 
+    # @ai(gpt-5, codex-cli, bugfix, 2026-03-04)
     def save_features(
         self,
         *,
@@ -1634,6 +1778,20 @@ class Database:
                 tag_update = None
                 if tag_payload is not None:
                     tag_update = self._prepare_tag_payload(tag_payload)
+                if "type" in changes:
+                    target_mode = _mode_type_token(changes.get("type"))
+                    if target_mode in {"text", "group"}:
+                        requested_original = _innermost_original_type(changes.get("type"))
+                        current_row = con.execute(
+                            "SELECT type FROM features WHERE id = ? LIMIT 1;",
+                            [int(feature_id)],
+                        ).fetchone()
+                        current_type = str((current_row or [""])[0] or "").strip()
+                        current_original = _innermost_original_type(current_type)
+                        changes["type"] = _compose_mode_type(
+                            target_mode,
+                            original_type=requested_original or current_original,
+                        )
                 if changes:
                     self.features_repo.update_feature(
                         con,

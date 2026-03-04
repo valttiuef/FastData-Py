@@ -1139,11 +1139,18 @@ class RegressionSidebar(SidebarWidget):
         self._on_cv_changed()
 
     def set_group_kinds(self, items: list[tuple[str, str]]) -> None:
+        current_value = self.cv_group_combo.currentData()
         self.cv_group_combo.clear()
         self.cv_group_combo.addItem(tr("None"), None)
         for key, label in items:
             self.cv_group_combo.addItem(tr(label), key)
-        self.cv_group_combo.setCurrentIndex(0)
+        target_index = 0
+        if current_value is not None:
+            for idx in range(self.cv_group_combo.count()):
+                if self.cv_group_combo.itemData(idx) == current_value:
+                    target_index = idx
+                    break
+        self.cv_group_combo.setCurrentIndex(target_index)
 
     def selected_group_kind(self) -> Optional[str]:
         value = self.cv_group_combo.currentData()

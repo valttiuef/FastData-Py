@@ -14,6 +14,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from backend.data_db.database import Database
 from backend.models import ImportOptions
+from frontend.models.database_model import DatabaseModel
 from frontend.models.settings_model import SettingsModel
 from frontend.models.hybrid_pandas_model import HybridPandasModel, DataFilters, FeatureSelection
 from frontend.tabs.data.import_preview_logic import build_import_preview_payload
@@ -684,8 +685,207 @@ def test_duckdb_import_force_meta_columns_creates_group_labels_and_links(temp_db
             """,
             [int(import_ids[0])],
         ).fetchall()
+        type_row = con.execute(
+            """
+            SELECT f.type
+            FROM csv_group_columns cgc
+            JOIN features f ON f.id = cgc.feature_id
+            WHERE cgc.import_id = ? AND cgc.group_kind = ?
+            LIMIT 1
+            """,
+            [int(import_ids[0]), "Status"],
+        ).fetchone()
     assert link_rows
     assert any(str(row[0]) == "Status" for row in link_rows)
+    assert str((type_row or [""])[0] or "").strip() == "group"
+
+
+def test_duckdb_import_force_meta_columns_preserve_original_type_in_group_type(
+    temp_db: Database,
+    tmp_path: Path,
+):
+    with temp_db.write_transaction() as con:
+        system_id = int(temp_db.systems_repo.upsert(con, "SysForceMetaType"))
+        temp_db.features_repo.insert_feature(
+            con,
+            system_id=system_id,
+            name="Status",
+            source="",
+            unit="",
+            type="MoPs",
+            notes=None,
+            lag_seconds=0,
+        )
+
+    csv_path = tmp_path / "duckdb_force_meta_groups_preserve_type.csv"
+    csv_path.write_text(
+        "\n".join(
+            [
+                "Time,Status,Value",
+                "2026-02-01 00:00:00,Open,1.0",
+                "2026-02-01 00:01:00,Closed,2.0",
+                "2026-02-01 00:02:00,Open,3.0",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    opts = ImportOptions(
+        system_name="SysForceMetaType",
+        dataset_name="DataForceMetaType",
+        csv_header_rows=1,
+        auto_detect_datetime=False,
+        date_column="Time",
+        csv_delimiter=",",
+        use_duckdb_csv_import=True,
+        force_meta_columns=["Status"],
+    )
+    import_ids = temp_db.import_file(csv_path, opts)
+    assert len(import_ids) == 1
+
+    with temp_db.connection() as con:
+        type_row = con.execute(
+            """
+            SELECT f.type
+            FROM csv_group_columns cgc
+            JOIN features f ON f.id = cgc.feature_id
+            WHERE cgc.import_id = ? AND cgc.group_kind = ?
+            LIMIT 1
+            """,
+            [int(import_ids[0]), "Status"],
+        ).fetchone()
+    assert str((type_row or [""])[0] or "").strip() == "group (MoPs)"
+
+
+def test_duckdb_import_non_numeric_text_type_preserves_existing_original_type(
+    temp_db: Database,
+    tmp_path: Path,
+):
+    with temp_db.write_transaction() as con:
+        system_id = int(temp_db.systems_repo.upsert(con, "SysTextType"))
+        temp_db.features_repo.insert_feature(
+            con,
+            system_id=system_id,
+            name="State",
+            source="",
+            unit="",
+            type="MoPs",
+            notes=None,
+            lag_seconds=0,
+        )
+
+    csv_path = tmp_path / "duckdb_text_preserve_type.csv"
+    csv_path.write_text(
+        "\n".join(
+            [
+                "Time,State,Value",
+                "2026-02-01 00:00:00,Open,1.0",
+                "2026-02-01 00:01:00,Closed,2.0",
+                "2026-02-01 00:02:00,Open,3.0",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    opts = ImportOptions(
+        system_name="SysTextType",
+        dataset_name="DataTextType",
+        csv_header_rows=1,
+        auto_detect_datetime=False,
+        date_column="Time",
+        csv_delimiter=",",
+        use_duckdb_csv_import=True,
+    )
+    import_ids = temp_db.import_file(csv_path, opts)
+    assert len(import_ids) == 1
+
+    with temp_db.connection() as con:
+        type_row = con.execute(
+            """
+            SELECT f.type
+            FROM csv_feature_columns cfc
+            JOIN features f ON f.id = cfc.feature_id
+            WHERE cfc.import_id = ? AND f.name = ?
+            LIMIT 1
+            """,
+            [int(import_ids[0]), "State"],
+        ).fetchone()
+    assert str((type_row or [""])[0] or "").strip() == "text (MoPs)"
+
+
+def test_convert_feature_values_to_group_preserves_original_feature_type(
+    temp_db: Database,
+    tmp_path: Path,
+):
+    csv_path = tmp_path / "convert_group_preserve_type.csv"
+    csv_path.write_text(
+        "\n".join(
+            [
+                "Time,Status,Value",
+                "2026-02-01 00:00:00,Open,1.0",
+                "2026-02-01 00:01:00,Closed,2.0",
+                "2026-02-01 00:02:00,Open,3.0",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    opts = ImportOptions(
+        system_name="SysConvertGroupType",
+        dataset_name="DataConvertGroupType",
+        csv_header_rows=1,
+        auto_detect_datetime=False,
+        date_column="Time",
+        csv_delimiter=",",
+        use_duckdb_csv_import=True,
+    )
+    import_ids = temp_db.import_file(csv_path, opts)
+    assert len(import_ids) == 1
+
+    with temp_db.connection() as con:
+        feature_row = con.execute(
+            """
+            SELECT f.id
+            FROM csv_feature_columns cfc
+            JOIN features f ON f.id = cfc.feature_id
+            WHERE cfc.import_id = ? AND f.name = ?
+            LIMIT 1
+            """,
+            [int(import_ids[0]), "Status"],
+        ).fetchone()
+    assert feature_row is not None
+    feature_id = int(feature_row[0])
+
+    temp_db.save_features(
+        new_features=[],
+        updated_features=[(feature_id, {"type": "MoPs"})],
+    )
+
+    settings = SettingsModel(
+        organization="FastDataTests",
+        application="FastDataConvertGroupType",
+    )
+    settings.set_database_path(temp_db.path)
+    model = DatabaseModel(settings)
+    try:
+        payload = model.convert_feature_values_to_group(
+            feature_id=feature_id,
+            group_kind="Status",
+            link_only_as_group_label=True,
+        )
+        assert int(payload.get("csv_group_links") or 0) >= 1
+    finally:
+        model._close_database()
+
+    with temp_db.connection() as con:
+        updated = con.execute(
+            "SELECT type FROM features WHERE id = ? LIMIT 1;",
+            [int(feature_id)],
+        ).fetchone()
+    assert str((updated or [""])[0] or "").strip() == "group (MoPs)"
 
 
 def test_duckdb_import_keeps_non_numeric_columns_as_features(temp_db: Database, tmp_path: Path):
