@@ -629,7 +629,7 @@ class RegressionTab(TabWidget):
             options.append((self.sidebar.payload_label(payload), payload))
 
         for kind, label in group_kinds:
-            group_label = f"{tr('Group')}: {label}"
+            group_label = str(label)
             payload = {"group_kind": str(kind), "label": group_label}
             options.append((group_label, payload))
 

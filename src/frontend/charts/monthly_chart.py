@@ -124,11 +124,10 @@ class MonthlyBarChart(GroupBarChart):
         self._reset_button = QToolButton(self)
         self._reset_button.setObjectName("chartResetButton")
         self._set_reset_button_icon()
-        self._reset_button.setIconSize(QSize(14, 14))
+        self._reset_button.setIconSize(QSize(12, 12))
         self._reset_button.setAutoRaise(True)
         self._reset_button.setToolTip("Reset chart view")
         self._reset_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._reset_button.setFixedSize(20, 20)
         self._reset_button.clicked.connect(self.reset_to_base)
         self._position_reset_button()
         self._apply_theme(self._current_theme)
@@ -152,7 +151,7 @@ class MonthlyBarChart(GroupBarChart):
         button = getattr(self, "_reset_button", None)
         if button is None:
             return
-        margin = 16
+        margin = 24
         x = self.width() - button.width() - margin
         y = margin
         x = max(margin, x)

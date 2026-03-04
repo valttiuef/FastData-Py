@@ -233,12 +233,12 @@ QToolButton:disabled {
 }
 
 QToolButton#chartResetButton {
-    min-width: 20px;
-    max-width: 20px;
-    min-height: 20px;
-    max-height: 20px;
+    min-width: 16px;
+    max-width: 16px;
+    min-height: 16px;
+    max-height: 16px;
     padding: 0px;
-    border-radius: 10px;
+    border-radius: 8px;
     background-color: #535353;
     border: 1px solid #626262;
     color: #bdbdbd;
