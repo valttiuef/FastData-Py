@@ -837,6 +837,7 @@ class RegressionViewModel(QObject):
             warning_text = text[len("WARNING:"):].strip()
             if warning_text and warning_text not in self._seen_runtime_warnings:
                 self._seen_runtime_warnings.add(warning_text)
+                self._log(warning_text, level="warning")
                 try:
                     toast_warn(warning_text, title="Regression", tab_key="regression")
                 except Exception:
@@ -862,6 +863,7 @@ class RegressionViewModel(QObject):
     def _log(self, message: str, *, level: str = "info") -> None:
         levels = {
             "info": logging.INFO,
+            "warning": logging.WARNING,
             "error": logging.ERROR,
         }
         lvl = levels.get(level, logging.INFO)

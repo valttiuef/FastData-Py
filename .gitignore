@@ -50,6 +50,8 @@ desktop.ini
 .cache/
 pytest_cache/
 htmlcov/
+tests/temp/*
+!tests/temp/.gitkeep
 
 # Temporary files
 *.tmp

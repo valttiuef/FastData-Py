@@ -349,9 +349,13 @@ class RegressionService:
         input_payloads = [dict(p) for p in input_features]
         target_payload = dict(target_feature)
         stratify_payload = dict(stratify_feature) if stratify_feature else None
+        stratify_is_group_kind = bool(
+            isinstance(stratify_payload, Mapping)
+            and str(stratify_payload.get("group_kind") or "").strip()
+        )
 
         expected_payloads: list[Mapping[str, object]] = [target_payload] + input_payloads
-        if stratify_payload:
+        if stratify_payload and not stratify_is_group_kind:
             expected_payloads.append(stratify_payload)
 
         combined_payloads: list[Mapping[str, object]] = []
@@ -373,7 +377,21 @@ class RegressionService:
 
         if data_frame is not None:
             _check_cancel()
-            data = normalize_preprocessed_frame(data_frame, expected_payloads)
+            source_frame = data_frame.copy()
+            data = normalize_preprocessed_frame(source_frame, expected_payloads)
+            if stratify_is_group_kind and stratify_payload is not None:
+                stratify_group_col = display_name(stratify_payload)
+                if (
+                    stratify_group_col
+                    and stratify_group_col in source_frame.columns
+                    and stratify_group_col not in data.columns
+                ):
+                    aligned = pd.Series(source_frame[stratify_group_col], index=source_frame.index)
+                    data[stratify_group_col] = aligned.reindex(data.index).astype(object)
+            cv_group_col = str(cv_group_kind or "").strip()
+            if cv_group_col and cv_group_col in source_frame.columns and cv_group_col not in data.columns:
+                aligned = pd.Series(source_frame[cv_group_col], index=source_frame.index)
+                data[cv_group_col] = aligned.reindex(data.index).astype(object)
         else:
             if not feature_ids:
                 raise ValueError("Missing feature identifiers for database query")
@@ -403,7 +421,8 @@ class RegressionService:
 
         required_cols = ["t", target_name] + input_names
         stratify_label = display_name(stratify_payload) if stratify_payload else None
-        if stratify_label and stratify_label not in required_cols:
+        require_stratify_col = bool(stratify_label and not stratify_is_group_kind)
+        if require_stratify_col and stratify_label not in required_cols:
             required_cols.append(stratify_label)
 
         missing = [c for c in required_cols if c not in data.columns]
@@ -445,7 +464,7 @@ class RegressionService:
                 )
 
             required_cols = ["t", target_name] + input_names
-            if stratify_label and stratify_label not in required_cols:
+            if require_stratify_col and stratify_label not in required_cols:
                 required_cols.append(stratify_label)
 
         data = data.dropna(subset=required_cols)
@@ -457,13 +476,28 @@ class RegressionService:
         X = data[input_names]
         y = data[target_name]
 
-        stratify_series = self._prepare_stratify_series(data, stratify_payload, target_name, stratify_bins)
+        stratify_series = self._prepare_stratify_series(
+            data,
+            stratify_payload,
+            target_name,
+            stratify_bins,
+            systems=systems,
+            datasets=Datasets,
+        )
         group_series = None
         if (cv_strategy or "").lower() == "group_kfold":
+            group_column_name = str(cv_group_kind or "").strip()
+            if group_column_name and group_column_name in data.columns:
+                candidate_series = pd.Series(data[group_column_name], index=data.index)
+                candidate_labels = candidate_series.astype("string").str.strip().replace("", pd.NA)
+                if not candidate_labels.dropna().empty:
+                    group_series = candidate_series
             group_series = self._prepare_group_kfold_series(
                 data,
                 group_kind=cv_group_kind,
-            )
+                systems=systems,
+                datasets=Datasets,
+            ) if group_series is None else group_series
 
         _check_cancel()
 
@@ -476,6 +510,7 @@ class RegressionService:
             stratify_bins=stratify_bins,
             shuffle=shuffle,
             random_state=random_state,
+            status_callback=_emit_status,
         )
 
         cv = self._build_cv(
@@ -650,6 +685,7 @@ class RegressionService:
         stratify_bins: int,
         shuffle: bool,
         random_state: int,
+        status_callback: Optional[Callable[[str], None]] = None,
     ) -> tuple[
         pd.DataFrame,
         pd.DataFrame,
@@ -666,6 +702,13 @@ class RegressionService:
 
         strategy = (strategy or "random").lower()
         indices = np.arange(len(X))
+        stratified_requested = strategy == "stratified"
+        warned_stratified_fallback = False
+
+        def _warn(message: str) -> None:
+            if status_callback is None:
+                return
+            status_callback(f"WARNING: {message}")
 
         if strategy == "time":
             if isinstance(test_size, (int, np.integer)) and test_size >= 1:
@@ -679,16 +722,44 @@ class RegressionService:
         else:
             stratify_values = None
             if strategy == "stratified" and stratify_series is not None:
-                stratify_values = stratify_series.to_numpy()
+                stratify_labels = pd.Series(stratify_series, index=X.index).astype("string").str.strip()
+                stratify_labels = stratify_labels.replace("", pd.NA)
+                if not stratify_labels.dropna().empty and not stratify_labels.isna().any():
+                    label_counts = stratify_labels.value_counts(dropna=True)
+                    if len(label_counts) >= 2 and int(label_counts.min()) >= 2:
+                        stratify_values = stratify_labels.astype(str).to_numpy()
+                    else:
+                        warned_stratified_fallback = True
+                        _warn("Stratified test split has insufficient samples per stratum; falling back to random split.")
+                else:
+                    warned_stratified_fallback = True
+                    _warn("Stratified test split has missing stratification labels; falling back to random split.")
+            elif strategy == "stratified":
+                warned_stratified_fallback = True
+                _warn("Stratified test split has no stratification labels; falling back to random split.")
             if isinstance(test_size, (int, np.integer)) and test_size >= 1:
                 test_size = min(int(test_size), max(1, len(indices) - 1))
-            train_idx, test_idx = train_test_split(
-                indices,
-                test_size=test_size,
-                shuffle=shuffle,
-                random_state=random_state,
-                stratify=stratify_values,
-            )
+            try:
+                train_idx, test_idx = train_test_split(
+                    indices,
+                    test_size=test_size,
+                    shuffle=shuffle,
+                    random_state=random_state,
+                    stratify=stratify_values,
+                )
+            except ValueError:
+                if stratified_requested:
+                    if not warned_stratified_fallback:
+                        _warn("Stratified test split could not be applied; falling back to random split.")
+                    train_idx, test_idx = train_test_split(
+                        indices,
+                        test_size=test_size,
+                        shuffle=shuffle,
+                        random_state=random_state,
+                        stratify=None,
+                    )
+                else:
+                    raise
             train_idx = np.sort(train_idx)
             test_idx = np.sort(test_idx)
 
@@ -720,13 +791,26 @@ class RegressionService:
         stratify_payload: Optional[Mapping[str, object]],
         target_label: str,
         bins: int,
+        systems: Optional[Sequence[str]] = None,
+        datasets: Optional[Sequence[str]] = None,
     ) -> Optional[pd.Series]:
         if stratify_payload is not None:
             if isinstance(stratify_payload, Mapping) and stratify_payload.get("group_kind"):
-                return self._prepare_group_kfold_series(
+                group_column = display_name(stratify_payload)
+                if group_column in data.columns:
+                    series = pd.Series(data[group_column], index=data.index)
+                    labels = series.astype("string").str.strip().replace("", pd.NA)
+                    if not labels.dropna().empty:
+                        return series
+                fallback_series = self._prepare_group_kfold_series(
                     data,
                     group_kind=str(stratify_payload.get("group_kind")),
+                    systems=systems,
+                    datasets=datasets,
                 )
+                if fallback_series is not None:
+                    return fallback_series
+                return pd.Series(data[group_column], index=data.index) if group_column in data.columns else None
             column = display_name(stratify_payload)
             if column in data.columns:
                 series = data[column]
@@ -741,8 +825,9 @@ class RegressionService:
                 return None
             return pd.Series(binned, index=series.index)
 
-        return pd.Series(series, index=series.index).astype(str)
+        return pd.Series(series, index=series.index)
 
+    # @ai(gpt-5, codex, refactor, 2026-03-04)
     def _build_cv(
         self,
         X: pd.DataFrame,
@@ -763,29 +848,54 @@ class RegressionService:
             return None
         if strategy == "kfold":
             return KFold(n_splits=folds, shuffle=shuffle, random_state=random_state)
+
+        def _warn(message: str) -> None:
+            if status_callback is None:
+                return
+            status_callback(f"WARNING: {message}")
+
         if strategy == "group_kfold":
             if group_series is None:
-                if status_callback is not None:
-                    status_callback("Group K-Fold requires a valid group; falling back to K-Fold.")
+                _warn("Group K-Fold requires a valid group; falling back to K-Fold.")
                 return KFold(n_splits=folds, shuffle=shuffle, random_state=random_state)
-            groups = pd.Series(group_series, index=X.index).astype(str)
-            if groups is None or groups.dropna().empty:
-                if status_callback is not None:
-                    status_callback("Group K-Fold has no group assignments; falling back to K-Fold.")
+            groups = pd.Series(group_series, index=X.index)
+            groups = groups.astype("string").str.strip()
+            groups = groups.replace("", pd.NA)
+            if groups.dropna().empty:
+                _warn("Group K-Fold has no group assignments; falling back to K-Fold.")
                 return KFold(n_splits=folds, shuffle=shuffle, random_state=random_state)
-            unique_groups = pd.Series(groups).dropna().unique()
+            if groups.isna().any():
+                _warn("Group K-Fold has rows without group assignments; falling back to K-Fold.")
+                return KFold(n_splits=folds, shuffle=shuffle, random_state=random_state)
+            unique_groups = groups.dropna().unique()
             if len(unique_groups) < folds:
-                if status_callback is not None:
-                    status_callback("Not enough groups for Group K-Fold; falling back to K-Fold.")
+                _warn("Not enough groups for Group K-Fold; falling back to K-Fold.")
                 return KFold(n_splits=folds, shuffle=shuffle, random_state=random_state)
             splitter = GroupKFold(n_splits=folds)
-            return list(splitter.split(X, y, groups=groups))
+            return list(splitter.split(X, y, groups=groups.astype(str)))
         if strategy == "stratified_kfold":
             labels = self._prepare_stratify_labels(stratify_series, y, stratify_bins)
             if labels is None:
+                _warn("Stratified K-Fold could not build strata; falling back to K-Fold.")
+                return KFold(n_splits=folds, shuffle=shuffle, random_state=random_state)
+            labels = pd.Series(labels).reindex(X.index)
+            labels = labels.astype("string").str.strip()
+            labels = labels.replace("", pd.NA)
+            if labels.dropna().empty:
+                _warn("Stratified K-Fold has no stratification labels; falling back to K-Fold.")
+                return KFold(n_splits=folds, shuffle=shuffle, random_state=random_state)
+            if labels.isna().any():
+                _warn("Stratified K-Fold has rows without stratification labels; falling back to K-Fold.")
+                return KFold(n_splits=folds, shuffle=shuffle, random_state=random_state)
+            counts = labels.value_counts(dropna=True)
+            if len(counts) < 2:
+                _warn("Stratified K-Fold has only one stratum; falling back to K-Fold.")
+                return KFold(n_splits=folds, shuffle=shuffle, random_state=random_state)
+            if int(counts.min()) < folds:
+                _warn("Not enough samples per stratum for Stratified K-Fold; falling back to K-Fold.")
                 return KFold(n_splits=folds, shuffle=shuffle, random_state=random_state)
             splitter = StratifiedKFold(n_splits=folds, shuffle=shuffle, random_state=random_state)
-            return list(splitter.split(np.zeros(len(y)), labels))
+            return list(splitter.split(np.zeros(len(y)), labels.astype(str).to_numpy()))
         if strategy == "time_series":
             splitter = TimeSeriesSplit(n_splits=folds, gap=max(0, int(gap)))
             return splitter
@@ -796,6 +906,8 @@ class RegressionService:
         data: pd.DataFrame,
         *,
         group_kind: Optional[str],
+        systems: Optional[Sequence[str]] = None,
+        datasets: Optional[Sequence[str]] = None,
     ) -> Optional[pd.Series]:
         if data is None or data.empty or "t" not in data.columns:
             return None
@@ -804,17 +916,31 @@ class RegressionService:
         group_kind = str(group_kind).strip()
         if not group_kind:
             return None
-        labels_df = self._db.list_group_labels(kind=group_kind)
+        try:
+            labels_df = self._db.list_group_labels(kind=group_kind)
+        except Exception:
+            labels_df = pd.DataFrame()
         if labels_df is None or labels_df.empty:
-            return None
+            return self._prepare_csv_group_series(data, group_kind=group_kind)
         group_ids = labels_df["group_id"].tolist()
         if not group_ids:
-            return None
+            return self._prepare_csv_group_series(
+                data,
+                group_kind=group_kind,
+                systems=systems,
+                datasets=datasets,
+            )
         start_ts = data["t"].min()
         end_ts = data["t"].max()
-        group_points = self._db.group_points(group_ids, start=start_ts, end=end_ts)
+        end_inclusive = pd.Timestamp(end_ts) + pd.Timedelta(seconds=1)
+        group_points = self._db.group_points(group_ids, start=start_ts, end=end_inclusive)
         if group_points is None or group_points.empty:
-            return None
+            return self._prepare_csv_group_series(
+                data,
+                group_kind=group_kind,
+                systems=systems,
+                datasets=datasets,
+            )
 
         label_map = dict(zip(labels_df["group_id"], labels_df["label"]))
         group_points = group_points.copy()
@@ -850,6 +976,93 @@ class RegressionService:
         series = pd.Series(assigned, index=df.index)
         return series.reindex(data.index)
 
+    def _prepare_csv_group_series(
+        self,
+        data: pd.DataFrame,
+        *,
+        group_kind: str,
+        systems: Optional[Sequence[str]] = None,
+        datasets: Optional[Sequence[str]] = None,
+    ) -> Optional[pd.Series]:
+        list_features = getattr(self._db, "list_features", None)
+        query_csv_groups = getattr(self._db, "query_csv_group_points_by_feature", None)
+        if not callable(list_features) or not callable(query_csv_groups):
+            return None
+
+        try:
+            features_df = list_features(
+                systems=list(systems or []) or None,
+                datasets=list(datasets or []) or None,
+            )
+        except Exception:
+            try:
+                features_df = list_features()
+            except Exception:
+                return None
+        if features_df is None or features_df.empty:
+            return None
+        if "feature_id" not in features_df.columns:
+            return None
+
+        kind_text = str(group_kind or "").strip()
+        if not kind_text:
+            return None
+        wanted = kind_text.casefold()
+        candidate_ids: list[int] = []
+        for _, row in features_df.iterrows():
+            name = str(row.get("name") or "").strip()
+            notes = str(row.get("notes") or "").strip()
+            if not name and not notes:
+                continue
+            if name.casefold() != wanted and notes.casefold() != wanted:
+                continue
+            try:
+                candidate_ids.append(int(row.get("feature_id")))
+            except Exception:
+                continue
+        if not candidate_ids:
+            return None
+
+        start_ts = pd.to_datetime(data["t"], errors="coerce").min()
+        end_ts = pd.to_datetime(data["t"], errors="coerce").max()
+        if pd.isna(start_ts) or pd.isna(end_ts):
+            return None
+        end_inclusive = end_ts + pd.Timedelta(seconds=1)
+
+        label_frames: list[pd.DataFrame] = []
+        for fid in candidate_ids:
+            try:
+                group_df = query_csv_groups(
+                    feature_id=int(fid),
+                    group_kind=kind_text,
+                    start=start_ts,
+                    end=end_inclusive,
+                )
+            except Exception:
+                continue
+            if group_df is None or group_df.empty:
+                continue
+            if "t" not in group_df.columns or "v" not in group_df.columns:
+                continue
+            piece = group_df.loc[:, ["t", "v"]].copy()
+            piece["t"] = pd.to_datetime(piece["t"], errors="coerce")
+            piece["v"] = piece["v"].astype("string").str.strip()
+            piece = piece.dropna(subset=["t", "v"])
+            piece = piece[piece["v"] != ""]
+            if not piece.empty:
+                label_frames.append(piece)
+        if not label_frames:
+            return None
+
+        labels = pd.concat(label_frames, ignore_index=True)
+        labels = labels.sort_values("t")
+        labels = labels.drop_duplicates(subset=["t"], keep="last")
+        label_map = pd.Series(labels["v"].to_numpy(), index=labels["t"]).to_dict()
+
+        data_ts = pd.to_datetime(data["t"], errors="coerce")
+        assigned = data_ts.map(label_map)
+        return pd.Series(assigned.to_numpy(), index=data.index)
+
     def _selected_input_count(self, pipeline: Pipeline, X_train: pd.DataFrame) -> int:
         selector = pipeline.named_steps.get("selector")
         if selector is None:
@@ -865,16 +1078,28 @@ class RegressionService:
         stratify_series: Optional[pd.Series],
         y: pd.Series,
         bins: int,
-    ) -> Optional[np.ndarray]:
+    ) -> Optional[pd.Series]:
         if stratify_series is not None:
-            series = stratify_series
+            series = pd.Series(stratify_series, index=stratify_series.index)
         else:
-            series = y
-        if series is None or len(series) == 0:
+            series = pd.Series(y, index=y.index)
+        if len(series) == 0:
             return None
+
         if pd.api.types.is_numeric_dtype(series):
-            return self._bin_target(pd.Series(series), bins)
-        return pd.Series(series).astype(str).to_numpy()
+            binned = self._bin_target(pd.Series(series), bins)
+            if binned is None:
+                return None
+            labels = pd.Series(binned, index=series.index).astype("string").str.strip()
+            labels = labels.replace("", pd.NA)
+            if labels.dropna().empty:
+                return None
+            return labels
+        labels = pd.Series(series, index=series.index).astype("string").str.strip()
+        labels = labels.replace("", pd.NA)
+        if labels.dropna().empty:
+            return None
+        return labels
 
     def _cross_validate(self, pipeline: Pipeline, X: pd.DataFrame, y: pd.Series, cv) -> dict[str, list[float]]:
         if cv is None:
@@ -903,6 +1128,8 @@ class RegressionService:
     def _cross_val_predictions(self, pipeline: Pipeline, X: pd.DataFrame, y: pd.Series, cv):
         if cv is None:
             return None
+        if not self._cv_has_partition_test_folds(X, y, cv):
+            return None
         with warnings.catch_warnings():
             warnings.filterwarnings(
                 "ignore",
@@ -910,7 +1137,37 @@ class RegressionService:
                 category=UserWarning,
                 module=r"sklearn\.utils\.parallel",
             )
-            return cross_val_predict(pipeline, X, y, cv=cv)
+            try:
+                return cross_val_predict(pipeline, X, y, cv=cv)
+            except ValueError as exc:
+                if "only works for partitions" in str(exc).lower():
+                    return None
+                raise
+
+    def _cv_has_partition_test_folds(self, X: pd.DataFrame, y: pd.Series, cv) -> bool:
+        if cv is None:
+            return False
+        n = len(X)
+        if n <= 0:
+            return False
+        seen = np.zeros(n, dtype=np.int32)
+        if hasattr(cv, "split"):
+            split_iter = cv.split(X, y)
+        else:
+            split_iter = iter(cv)
+        try:
+            for _train_idx, test_idx in split_iter:
+                arr = np.asarray(test_idx, dtype=int)
+                if arr.size == 0:
+                    continue
+                if np.any(arr < 0) or np.any(arr >= n):
+                    return False
+                seen[arr] += 1
+                if np.any(seen[arr] > 1):
+                    return False
+        except Exception:
+            return False
+        return bool(np.all(seen == 1))
 
     def _selected_input_names(self, pipeline: Pipeline, input_names: list[str]) -> list[str]:
         selector = pipeline.named_steps.get("selector")

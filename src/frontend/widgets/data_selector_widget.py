@@ -292,9 +292,35 @@ class DataSelectorViewModel(QObject):
             params["fill"] = "none"
         return params
 
+    def _append_requested_group_columns(
+        self,
+        frame: pd.DataFrame,
+        *,
+        group_payloads: Optional[Sequence[Mapping[str, object]]] = None,
+        group_kinds: Optional[Sequence[str]] = None,
+    ) -> pd.DataFrame:
+        model = self._data_model
+        if frame is None or model is None:
+            return frame
+        if not group_payloads and not group_kinds:
+            return frame
+        try:
+            return model.append_group_columns(
+                frame,
+                group_payloads=group_payloads,
+                group_kinds=group_kinds,
+            )
+        except Exception:
+            logger.warning("Exception in _append_requested_group_columns", exc_info=True)
+            return frame
+
     # @ai(gpt-5, codex, refactor, 2026-03-02)
     def fetch_base_dataframe(
-        self, *, preprocessing_override: Optional[Mapping[str, object]] = None
+        self,
+        *,
+        preprocessing_override: Optional[Mapping[str, object]] = None,
+        group_payloads: Optional[Sequence[Mapping[str, object]]] = None,
+        group_kinds: Optional[Sequence[str]] = None,
     ) -> Optional[pd.DataFrame]:
         model = self._data_model
         filters = self.build_data_filters()
@@ -307,7 +333,12 @@ class DataSelectorViewModel(QObject):
 
         try:
             model.load_base(filters, **params)
-            return model.base_dataframe().copy()
+            frame = model.base_dataframe().copy()
+            return self._append_requested_group_columns(
+                frame,
+                group_payloads=group_payloads,
+                group_kinds=group_kinds,
+            )
         except Exception:
             return None
 
@@ -316,6 +347,8 @@ class DataSelectorViewModel(QObject):
         self,
         *,
         preprocessing_override: Optional[Mapping[str, object]] = None,
+        group_payloads: Optional[Sequence[Mapping[str, object]]] = None,
+        group_kinds: Optional[Sequence[str]] = None,
         on_result=None,
         on_error=None,
         owner: object | None = None,
@@ -332,7 +365,12 @@ class DataSelectorViewModel(QObject):
 
         def _work() -> pd.DataFrame:
             model.load_base(filters, **params)
-            return model.base_dataframe().copy()
+            frame = model.base_dataframe().copy()
+            return self._append_requested_group_columns(
+                frame,
+                group_payloads=group_payloads,
+                group_kinds=group_kinds,
+            )
 
         run_in_thread(
             _work,
@@ -358,6 +396,8 @@ class DataSelectorViewModel(QObject):
         feature_payloads: Sequence[Mapping[str, object]],
         *,
         preprocessing_override: Optional[Mapping[str, object]] = None,
+        group_payloads: Optional[Sequence[Mapping[str, object]]] = None,
+        group_kinds: Optional[Sequence[str]] = None,
         start: Optional[pd.Timestamp] = None,
         end: Optional[pd.Timestamp] = None,
         systems: Optional[Sequence[str]] = None,
@@ -404,7 +444,12 @@ class DataSelectorViewModel(QObject):
 
         def _work() -> pd.DataFrame:
             model.load_base(filters, **params)
-            return model.base_dataframe().copy()
+            frame = model.base_dataframe().copy()
+            return self._append_requested_group_columns(
+                frame,
+                group_payloads=group_payloads,
+                group_kinds=group_kinds,
+            )
 
         run_in_thread(
             _work,
@@ -888,9 +933,17 @@ class DataSelectorWidget(QGroupBox):
         return self.view_model.build_data_filters()
 
     # ------------------------------------------------------------------
-    def fetch_base_dataframe(self, *, preprocessing_override: Optional[Mapping[str, object]] = None) -> Optional[pd.DataFrame]:
+    def fetch_base_dataframe(
+        self,
+        *,
+        preprocessing_override: Optional[Mapping[str, object]] = None,
+        group_payloads: Optional[Sequence[Mapping[str, object]]] = None,
+        group_kinds: Optional[Sequence[str]] = None,
+    ) -> Optional[pd.DataFrame]:
         return self.view_model.fetch_base_dataframe(
-            preprocessing_override=preprocessing_override
+            preprocessing_override=preprocessing_override,
+            group_payloads=group_payloads,
+            group_kinds=group_kinds,
         )
 
     # @ai(gpt-5, codex, refactor, 2026-03-02)
@@ -898,6 +951,8 @@ class DataSelectorWidget(QGroupBox):
         self,
         *,
         preprocessing_override: Optional[Mapping[str, object]] = None,
+        group_payloads: Optional[Sequence[Mapping[str, object]]] = None,
+        group_kinds: Optional[Sequence[str]] = None,
         on_result=None,
         on_error=None,
         owner: object | None = None,
@@ -906,6 +961,8 @@ class DataSelectorWidget(QGroupBox):
     ) -> bool:
         return self.view_model.fetch_base_dataframe_async(
             preprocessing_override=preprocessing_override,
+            group_payloads=group_payloads,
+            group_kinds=group_kinds,
             on_result=on_result,
             on_error=on_error,
             owner=owner,
@@ -944,6 +1001,8 @@ class DataSelectorWidget(QGroupBox):
         feature_payloads: Sequence[Mapping[str, object]],
         *,
         preprocessing_override: Optional[Mapping[str, object]] = None,
+        group_payloads: Optional[Sequence[Mapping[str, object]]] = None,
+        group_kinds: Optional[Sequence[str]] = None,
         start: Optional[pd.Timestamp] = None,
         end: Optional[pd.Timestamp] = None,
         systems: Optional[Sequence[str]] = None,
@@ -958,6 +1017,8 @@ class DataSelectorWidget(QGroupBox):
         return self.view_model.fetch_base_dataframe_for_features_async(
             feature_payloads,
             preprocessing_override=preprocessing_override,
+            group_payloads=group_payloads,
+            group_kinds=group_kinds,
             start=start,
             end=end,
             systems=systems,

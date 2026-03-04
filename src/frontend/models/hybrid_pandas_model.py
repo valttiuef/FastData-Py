@@ -1,7 +1,7 @@
 
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Optional, Tuple, List, Sequence, Dict, Any
+from typing import Optional, Tuple, List, Sequence, Dict, Any, Mapping
 
 import pandas as pd
 import numpy as np
@@ -517,6 +517,53 @@ class HybridPandasModel(DatabaseModel):
     def base_dataframe(self) -> pd.DataFrame:
         """Return a copy of the postprocessed, wide-span BASE cache."""
         return self._base_df.copy()
+
+    # @ai(gpt-5, codex, feature, 2026-03-04)
+    def append_group_columns(
+        self,
+        frame: pd.DataFrame,
+        *,
+        group_payloads: Optional[Sequence[Mapping[str, object]]] = None,
+        group_kinds: Optional[Sequence[str]] = None,
+    ) -> pd.DataFrame:
+        """
+        Append one categorical column per requested group kind using saved group ranges.
+
+        This keeps regression/classic sklearn flows simple by returning one flat
+        dataframe containing both numeric features and grouping/stratification labels.
+        """
+        if frame is None:
+            return pd.DataFrame(columns=["t"])
+        if frame.empty or "t" not in frame.columns:
+            return frame.copy()
+
+        requests = self._resolve_group_column_requests(
+            group_payloads=group_payloads,
+            group_kinds=group_kinds,
+        )
+        if not requests:
+            return frame.copy()
+
+        out = frame.copy()
+        out["t"] = self._series_to_naive_utc(pd.to_datetime(out["t"], errors="coerce"))
+        valid_times = out["t"].dropna()
+        if valid_times.empty:
+            return out
+
+        start_ts = pd.Timestamp(valid_times.min())
+        end_ts = pd.Timestamp(valid_times.max())
+
+        for kind, requested_label in requests:
+            labels = self._group_labels_for_kind(
+                out["t"],
+                group_kind=kind,
+                start=start_ts,
+                end=end_ts,
+            )
+            column_name = self._resolve_unique_group_column_name(out.columns, requested_label or kind)
+            out[column_name] = labels
+
+        return out
 
     def current_base_cache_key(self):
         """Return the active BASE cache key for callers that coordinate shared model state."""
@@ -1928,6 +1975,243 @@ class HybridPandasModel(DatabaseModel):
             n = secs // 60
             return f"{n}min"
         return f"{secs}s"
+
+    def _resolve_group_column_requests(
+        self,
+        *,
+        group_payloads: Optional[Sequence[Mapping[str, object]]],
+        group_kinds: Optional[Sequence[str]],
+    ) -> list[tuple[str, str]]:
+        requests: list[tuple[str, str]] = []
+        seen_kinds: set[str] = set()
+
+        for payload in group_payloads or []:
+            if not isinstance(payload, Mapping):
+                continue
+            kind = str(payload.get("group_kind") or "").strip()
+            if not kind or kind in seen_kinds:
+                continue
+            seen_kinds.add(kind)
+            label = str(payload.get("label") or payload.get("name") or kind).strip() or kind
+            requests.append((kind, label))
+
+        for raw_kind in group_kinds or []:
+            kind = str(raw_kind or "").strip()
+            if not kind or kind in seen_kinds:
+                continue
+            seen_kinds.add(kind)
+            requests.append((kind, kind))
+
+        return requests
+
+    def _resolve_unique_group_column_name(self, columns: Sequence[object], preferred: str) -> str:
+        base = str(preferred or "Group").strip() or "Group"
+        existing = {str(col) for col in columns}
+        if base not in existing:
+            return base
+        idx = 2
+        while True:
+            candidate = f"{base} ({idx})"
+            if candidate not in existing:
+                return candidate
+            idx += 1
+
+    def _group_labels_for_kind(
+        self,
+        timestamps: pd.Series,
+        *,
+        group_kind: str,
+        start: Optional[pd.Timestamp],
+        end: Optional[pd.Timestamp],
+    ) -> pd.Series:
+        result = pd.Series(pd.NA, index=timestamps.index, dtype=object)
+        kind = str(group_kind or "").strip()
+        if not kind:
+            return result
+
+        try:
+            labels_df = self.db.list_group_labels(kind=kind)
+        except Exception:
+            return result
+        if labels_df is None or labels_df.empty:
+            return result
+        if "group_id" not in labels_df.columns or "label" not in labels_df.columns:
+            return result
+
+        group_ids = [
+            int(gid)
+            for gid in labels_df["group_id"].tolist()
+            if gid is not None and not pd.isna(gid)
+        ]
+        if not group_ids:
+            return self._group_labels_from_csv_kind(
+                timestamps,
+                group_kind=kind,
+                start=start,
+                end=end,
+            )
+
+        try:
+            end_inclusive = (
+                pd.Timestamp(end) + pd.Timedelta(seconds=1)
+                if end is not None
+                else None
+            )
+            group_points = self.db.group_points(group_ids, start=start, end=end_inclusive)
+        except Exception:
+            return self._group_labels_from_csv_kind(
+                timestamps,
+                group_kind=kind,
+                start=start,
+                end=end,
+            )
+        if group_points is None or group_points.empty:
+            return self._group_labels_from_csv_kind(
+                timestamps,
+                group_kind=kind,
+                start=start,
+                end=end,
+            )
+        required = {"start_ts", "end_ts", "group_id"}
+        if not required.issubset(set(group_points.columns)):
+            return result
+
+        gp = group_points.copy()
+        label_map = dict(
+            zip(
+                labels_df["group_id"].tolist(),
+                labels_df["label"].tolist(),
+            )
+        )
+        gp["group_label"] = gp["group_id"].map(label_map)
+        gp["start_ts"] = ensure_series_naive(pd.to_datetime(gp["start_ts"], errors="coerce"))
+        gp["end_ts"] = ensure_series_naive(pd.to_datetime(gp["end_ts"], errors="coerce"))
+        gp = gp.dropna(subset=["start_ts", "end_ts", "group_label"])
+        gp = gp[gp["end_ts"] >= gp["start_ts"]]
+        if gp.empty:
+            return result
+
+        gp = gp.sort_values(["start_ts", "end_ts"]).reset_index(drop=True)
+        starts = gp["start_ts"].to_numpy(dtype="datetime64[ns]")
+        ends = gp["end_ts"].to_numpy(dtype="datetime64[ns]")
+        labels = gp["group_label"].astype(str).to_numpy(dtype=object)
+
+        ts = ensure_series_naive(pd.to_datetime(timestamps, errors="coerce"))
+        values = ts.to_numpy(dtype="datetime64[ns]")
+        idx = np.searchsorted(starts, values, side="right") - 1
+        assigned: list[object] = [pd.NA] * len(ts)
+        for i, range_idx in enumerate(idx):
+            if range_idx < 0:
+                continue
+            value_ts = values[i]
+            if np.isnat(value_ts):
+                continue
+            end_ts = ends[range_idx]
+            if np.isnat(end_ts):
+                continue
+            if value_ts <= end_ts:
+                assigned[i] = labels[range_idx]
+
+        resolved = pd.Series(assigned, index=timestamps.index, dtype=object)
+        if resolved.isna().any():
+            csv_labels = self._group_labels_from_csv_kind(
+                timestamps,
+                group_kind=kind,
+                start=start,
+                end=end,
+            )
+            if csv_labels is not None:
+                missing_mask = resolved.isna()
+                resolved.loc[missing_mask] = csv_labels.loc[missing_mask]
+        return resolved
+
+    def _group_labels_from_csv_kind(
+        self,
+        timestamps: pd.Series,
+        *,
+        group_kind: str,
+        start: Optional[pd.Timestamp],
+        end: Optional[pd.Timestamp],
+    ) -> Optional[pd.Series]:
+        query_csv_groups = getattr(self.db, "query_csv_group_points_by_feature", None)
+        list_features = getattr(self.db, "list_features", None)
+        if not callable(query_csv_groups) or not callable(list_features):
+            return None
+
+        kind = str(group_kind or "").strip()
+        if not kind:
+            return None
+
+        filters = getattr(self, "_filters", None)
+        systems = list(getattr(filters, "systems", []) or [])
+        datasets = list(getattr(filters, "datasets", []) or [])
+        import_ids = list(getattr(filters, "import_ids", []) or [])
+
+        try:
+            features_df = list_features(
+                systems=systems or None,
+                datasets=datasets or None,
+                import_ids=import_ids or None,
+            )
+        except Exception:
+            try:
+                features_df = list_features()
+            except Exception:
+                return None
+        if features_df is None or features_df.empty:
+            return None
+        if "feature_id" not in features_df.columns:
+            return None
+
+        wanted = kind.casefold()
+        candidate_ids: list[int] = []
+        for _, row in features_df.iterrows():
+            name = str(row.get("name") or "").strip()
+            notes = str(row.get("notes") or "").strip()
+            if name.casefold() != wanted and notes.casefold() != wanted:
+                continue
+            try:
+                candidate_ids.append(int(row.get("feature_id")))
+            except Exception:
+                continue
+        if not candidate_ids:
+            return None
+
+        end_inclusive = (
+            pd.Timestamp(end) + pd.Timedelta(seconds=1)
+            if end is not None
+            else None
+        )
+        label_frames: list[pd.DataFrame] = []
+        for fid in candidate_ids:
+            try:
+                labels_df = query_csv_groups(
+                    feature_id=int(fid),
+                    group_kind=kind,
+                    start=start,
+                    end=end_inclusive,
+                )
+            except Exception:
+                continue
+            if labels_df is None or labels_df.empty:
+                continue
+            if "t" not in labels_df.columns or "v" not in labels_df.columns:
+                continue
+            piece = labels_df.loc[:, ["t", "v"]].copy()
+            piece["t"] = ensure_series_naive(pd.to_datetime(piece["t"], errors="coerce"))
+            piece["v"] = piece["v"].astype("string").str.strip()
+            piece = piece.dropna(subset=["t", "v"])
+            piece = piece[piece["v"] != ""]
+            if not piece.empty:
+                label_frames.append(piece)
+        if not label_frames:
+            return None
+
+        labels = pd.concat(label_frames, ignore_index=True)
+        labels = labels.sort_values("t").drop_duplicates(subset=["t"], keep="last")
+        label_map = pd.Series(labels["v"].to_numpy(), index=labels["t"]).to_dict()
+        ts = ensure_series_naive(pd.to_datetime(timestamps, errors="coerce"))
+        return pd.Series(ts.map(label_map).to_numpy(), index=timestamps.index, dtype=object)
     
     def _bin_times_for_groups(self, gp: pd.DataFrame, cadence_secs: Optional[int]) -> set[pd.Timestamp]:
         """

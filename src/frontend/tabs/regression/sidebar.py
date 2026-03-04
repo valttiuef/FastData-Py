@@ -472,6 +472,28 @@ class RegressionSidebar(SidebarWidget):
             test_strategy = "random"
             stratify_bins = self.stratify_bins.value()
 
+        group_column_payloads: list[dict[str, object]] = []
+        seen_group_kinds: set[str] = set()
+
+        def _append_group_payload(payload: Optional[dict]) -> None:
+            if not isinstance(payload, dict):
+                return
+            kind = str(payload.get("group_kind") or "").strip()
+            if not kind or kind in seen_group_kinds:
+                return
+            seen_group_kinds.add(kind)
+            label = str(payload.get("label") or payload.get("name") or kind).strip() or kind
+            group_column_payloads.append({"group_kind": kind, "label": label})
+
+        _append_group_payload(stratify_payload)
+        if str(cv_strategy).strip().lower() == "group_kfold" and cv_group_kind:
+            _append_group_payload(
+                {
+                    "group_kind": str(cv_group_kind),
+                    "label": str(self.cv_group_combo.currentText() or cv_group_kind),
+                }
+            )
+
         selector_settings = self.data_selector.get_settings()
         all_payloads: list[dict] = []
         seen_ids: set[int] = set()
@@ -596,6 +618,7 @@ class RegressionSidebar(SidebarWidget):
 
         started = self.data_selector.fetch_base_dataframe_for_features_async(
             all_payloads,
+            group_payloads=group_column_payloads,
             on_result=_on_fetch_result,
             on_error=_on_fetch_error,
             owner=self,
