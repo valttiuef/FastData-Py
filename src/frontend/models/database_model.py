@@ -1010,16 +1010,32 @@ class DatabaseModel(QObject):
             return ""
         return " ".join(str(value).strip().split()).lower()
 
-    def groups_df(self, kind: Optional[str] = None) -> pd.DataFrame:
+    def groups_df(self, kind: Optional[str] = None, *, respect_selection: bool = True) -> pd.DataFrame:
         """
         Return available groups (optionally for a specific kind).
         Columns: [group_id, kind, label]
         """
         db = self._ensure_database()
         try:
-            return db.list_group_labels(kind)
+            groups = db.list_group_labels(kind)
         except Exception:
             return pd.DataFrame(columns=["group_id", "kind", "label"])
+        if groups is None or groups.empty:
+            return pd.DataFrame(columns=["group_id", "kind", "label"])
+
+        if not bool(respect_selection):
+            return groups
+        selected_ids = sorted(int(fid) for fid in (self._selected_feature_ids or set()) if fid is not None)
+        if not selected_ids:
+            return groups
+        try:
+            allowed_kinds = set(db.group_kinds_for_feature_ids(selected_ids))
+        except Exception:
+            allowed_kinds = set()
+        if not allowed_kinds:
+            return pd.DataFrame(columns=["group_id", "kind", "label"])
+        kinds = groups.get("kind", pd.Series(dtype=object)).astype(str).str.strip()
+        return groups.loc[kinds.isin(allowed_kinds)].reset_index(drop=True)
 
     def remove_group_by_id(self, group_id: int) -> dict[str, Any]:
         """Delete one group label and all related group points."""
@@ -1051,6 +1067,15 @@ class DatabaseModel(QObject):
 
             db.group_points_repo.delete_by_ids(con, [gid])
             con.execute("DELETE FROM group_labels WHERE id = ?", [gid])
+            remaining_same_kind = int(
+                (con.execute(
+                    "SELECT COUNT(*) FROM group_labels WHERE kind = ?;",
+                    [kind_text],
+                ).fetchone() or [0])[0]
+                or 0
+            )
+            if remaining_same_kind <= 0:
+                db.group_value_aliases_repo.delete_by_kinds(con, [kind_text])
 
         self._emit_in_main_thread(self.features_list_changed)
         self._emit_in_main_thread(self.groups_changed)
@@ -1060,6 +1085,293 @@ class DatabaseModel(QObject):
             "label": label_text,
             "group_labels_deleted": 1,
             "group_points_deleted": points_deleted,
+        }
+
+    @staticmethod
+    def _group_value_label(value: object) -> str:
+        if value is None:
+            return ""
+        if pd.isna(value):
+            return ""
+        try:
+            as_float = float(value)
+            if pd.isna(as_float):
+                return ""
+            if as_float.is_integer():
+                return str(int(as_float))
+            return f"{as_float:g}"
+        except Exception:
+            return str(value).strip()
+
+    def _group_source_dataframe(
+        self,
+        *,
+        feature_id: int,
+        group_kind: Optional[str] = None,
+    ) -> pd.DataFrame:
+        db = self._ensure_database()
+        raw_frame = db.query_raw(feature_ids=[int(feature_id)], csv_value_mode="text")
+        mapped_csv_frame = db.query_csv_group_points_by_feature(
+            feature_id=int(feature_id),
+            group_kind=str(group_kind).strip() if group_kind else None,
+        )
+        if raw_frame is None or raw_frame.empty:
+            return mapped_csv_frame if mapped_csv_frame is not None else pd.DataFrame()
+        if mapped_csv_frame is None or mapped_csv_frame.empty:
+            return raw_frame
+        return pd.concat([raw_frame, mapped_csv_frame], ignore_index=True, sort=False)
+
+    def _prepare_group_points_frame(self, *, frame: pd.DataFrame) -> pd.DataFrame:
+        db = self._ensure_database()
+        work = frame.copy()
+        work["ts"] = pd.to_datetime(work.get("t"), errors="coerce")
+
+        import_ids = pd.to_numeric(work.get("import_id"), errors="coerce")
+        work["import_id"] = import_ids.where(import_ids.notna(), pd.NA)
+        work["import_id"] = work["import_id"].astype("Int64")
+        work["dataset_id"] = pd.NA
+
+        if work["import_id"].notna().any():
+            import_map = db.con.execute(
+                "SELECT id AS import_id, dataset_id FROM imports"
+            ).df()
+            if import_map is not None and not import_map.empty:
+                import_map["import_id"] = pd.to_numeric(import_map["import_id"], errors="coerce").astype("Int64")
+                import_map["dataset_id"] = pd.to_numeric(import_map["dataset_id"], errors="coerce").astype("Int64")
+                work = work.merge(import_map, on="import_id", how="left", suffixes=("", "_imp"))
+                work["dataset_id"] = pd.to_numeric(work.get("dataset_id_imp"), errors="coerce")
+                work = work.drop(columns=["dataset_id_imp"], errors="ignore")
+
+        missing_ids = work["dataset_id"].isna()
+        dataset_col = "dataset" if "dataset" in work.columns else ("Dataset" if "Dataset" in work.columns else None)
+        if missing_ids.any() and dataset_col and "system" in work.columns:
+            dataset_map = db.con.execute(
+                """
+                SELECT
+                    ds.id AS dataset_id,
+                    ds.name AS dataset,
+                    sy.name AS system
+                FROM datasets ds
+                JOIN systems sy ON sy.id = ds.system_id
+                """
+            ).df()
+            if dataset_map is not None and not dataset_map.empty:
+                mapped = work.loc[missing_ids, ["system", dataset_col]].rename(
+                    columns={dataset_col: "dataset"}
+                ).merge(
+                    dataset_map,
+                    on=["system", "dataset"],
+                    how="left",
+                )
+                work.loc[missing_ids, "dataset_id"] = pd.to_numeric(mapped.get("dataset_id"), errors="coerce").to_numpy()
+
+        work["label"] = work.get("label", pd.Series(dtype="string")).astype(str).str.strip()
+        work = work[work["label"] != ""].copy()
+        work = work.dropna(subset=["ts", "dataset_id"])
+        if work.empty:
+            raise ValueError("No valid measurement values found for conversion.")
+        work["dataset_id"] = pd.to_numeric(work["dataset_id"], errors="coerce").astype("Int64")
+        work = work.dropna(subset=["dataset_id"]).copy()
+        work["dataset_id"] = work["dataset_id"].astype(int)
+        if work.empty:
+            raise ValueError("No valid measurement values found for conversion.")
+        return work.sort_values(["dataset_id", "ts"]).reset_index(drop=True)
+
+    @staticmethod
+    def _build_group_points_df(frame: pd.DataFrame, *, save_as_timeframes: bool) -> pd.DataFrame:
+        points = frame[["ts", "dataset_id", "label"]].copy()
+        if points.empty:
+            raise ValueError("No valid measurement values found for conversion.")
+
+        if save_as_timeframes:
+            range_rows: list[dict[str, object]] = []
+            for dataset_id, part in points.groupby("dataset_id", sort=True):
+                current_label: Optional[str] = None
+                start_ts: Optional[pd.Timestamp] = None
+                end_ts: Optional[pd.Timestamp] = None
+                for row in part.itertuples(index=False):
+                    label = str(getattr(row, "label", "") or "").strip()
+                    ts = pd.Timestamp(getattr(row, "ts"))
+                    if current_label is None:
+                        current_label = label
+                        start_ts = ts
+                        end_ts = ts
+                        continue
+                    if label == current_label:
+                        end_ts = ts
+                        continue
+                    range_rows.append(
+                        {
+                            "start_ts": start_ts,
+                            "end_ts": end_ts,
+                            "dataset_id": int(dataset_id),
+                            "label": current_label,
+                        }
+                    )
+                    current_label = label
+                    start_ts = ts
+                    end_ts = ts
+                if current_label is not None:
+                    range_rows.append(
+                        {
+                            "start_ts": start_ts,
+                            "end_ts": end_ts,
+                            "dataset_id": int(dataset_id),
+                            "label": current_label,
+                        }
+                    )
+            return pd.DataFrame(
+                range_rows,
+                columns=["start_ts", "end_ts", "dataset_id", "label"],
+            )
+
+        points_df = points.rename(columns={"ts": "start_ts"}).copy()
+        points_df["end_ts"] = points_df["start_ts"]
+        return points_df[["start_ts", "end_ts", "dataset_id", "label"]]
+
+    @staticmethod
+    def _group_value_aliases_frame(frame: pd.DataFrame) -> pd.DataFrame:
+        if frame is None or frame.empty:
+            return pd.DataFrame(columns=["raw_value_norm", "label", "label_norm"])
+        raw_col = "value_label" if "value_label" in frame.columns else "v"
+        if raw_col not in frame.columns or "label" not in frame.columns:
+            return pd.DataFrame(columns=["raw_value_norm", "label", "label_norm"])
+        aliases = pd.DataFrame(
+            {
+                "raw_value_norm": frame[raw_col].astype(str).str.strip().str.lower(),
+                "label": frame["label"].astype(str).str.strip(),
+            }
+        )
+        aliases["label_norm"] = aliases["label"].astype(str).str.strip().str.lower()
+        aliases = aliases[
+            (aliases["raw_value_norm"] != "")
+            & (aliases["label"] != "")
+            & (aliases["label_norm"] != "")
+        ].drop_duplicates(subset=["raw_value_norm"], keep="last")
+        if aliases.empty:
+            return pd.DataFrame(columns=["raw_value_norm", "label", "label_norm"])
+        return aliases[["raw_value_norm", "label", "label_norm"]]
+
+    # @ai(gpt-5, codex-cli, implementation, 2026-03-04)
+    def convert_feature_values_to_group(
+        self,
+        *,
+        feature_id: int,
+        group_kind: str,
+        save_as_timeframes: bool = True,
+        link_only_as_group_label: bool = False,
+        value_name_map: Optional[Mapping[str, str]] = None,
+    ) -> dict[str, Any]:
+        fid = int(feature_id)
+        kind = str(group_kind or "").strip()
+        if not kind:
+            raise ValueError("Group feature name cannot be empty.")
+        rename_map: dict[str, str] = {}
+        for key, value in (value_name_map or {}).items():
+            src = str(key or "").strip()
+            dst = str(value or "").strip()
+            if src and dst:
+                rename_map[src] = dst
+
+        db = self._ensure_database()
+        feature_row = db.con.execute(
+            "SELECT source, unit, type FROM features WHERE id = ? LIMIT 1;",
+            [fid],
+        ).fetchone()
+        feature_source = str((feature_row or ["", "", ""])[0] or "").strip()
+        feature_unit = str((feature_row or ["", "", ""])[1] or "").strip()
+        feature_type = str((feature_row or ["", "", ""])[2] or "").strip()
+        if bool(link_only_as_group_label):
+            frame = self._group_source_dataframe(feature_id=fid, group_kind=kind)
+            if frame is None or frame.empty or "v" not in frame.columns:
+                raise ValueError("No values found for the selected feature.")
+            frame = frame.copy()
+            frame["value_label"] = frame["v"].map(self._group_value_label)
+            frame = frame[frame["value_label"].astype(str).str.strip() != ""].copy()
+            if frame.empty:
+                raise ValueError("No valid values found for group labels.")
+            frame["label"] = frame["value_label"].map(lambda text: rename_map.get(str(text), str(text)))
+            frame["label"] = frame["label"].astype(str).str.strip()
+            frame = frame[frame["label"] != ""].copy()
+            if frame.empty:
+                raise ValueError("All converted labels were empty.")
+            labels = sorted(frame["label"].drop_duplicates().tolist())
+            label_summary = self.upsert_group_labels(
+                kind=kind,
+                labels=labels,
+                replace_kind=True,
+            )
+            aliases_df = self._group_value_aliases_frame(frame)
+            db.replace_group_value_aliases(
+                kind=kind,
+                feature_id=fid,
+                aliases_df=aliases_df,
+                source=feature_source,
+                unit=feature_unit,
+                type=feature_type or "group",
+            )
+            csv_group_links = int(db.mark_csv_feature_group_kind(feature_id=fid, group_kind=kind) or 0)
+            if csv_group_links <= 0:
+                raise ValueError("Selected feature has no CSV import column mapping to link.")
+            with db.write_transaction() as con:
+                db.features_repo.update_feature(con, fid, type="group")
+            self.notify_features_changed(
+                updated_features=[(fid, {"type": "group"})],
+            )
+            return {
+                "feature_id": fid,
+                "group_kind": kind,
+                "group_labels": int(label_summary.get("group_labels", 0)),
+                "group_points": 0,
+                "csv_group_links": csv_group_links,
+                "link_only_as_group_label": True,
+            }
+
+        frame = self._group_source_dataframe(feature_id=fid, group_kind=kind)
+        if frame is None or frame.empty:
+            raise ValueError("No measurements found for the selected feature.")
+        if "t" not in frame.columns or "v" not in frame.columns:
+            raise ValueError("No valid measurement values found for conversion.")
+
+        frame = frame.copy()
+        frame["value_label"] = frame["v"].map(self._group_value_label)
+        frame["label"] = frame["value_label"].map(lambda text: rename_map.get(str(text), str(text)))
+        frame["label"] = frame["label"].astype(str).str.strip()
+        frame = frame[frame["label"] != ""].copy()
+        if frame.empty:
+            raise ValueError("All converted labels were empty.")
+        prepared = self._prepare_group_points_frame(frame=frame)
+        labels_df = pd.DataFrame({"label": sorted(prepared["label"].drop_duplicates().tolist())})
+        points_df = self._build_group_points_df(prepared, save_as_timeframes=bool(save_as_timeframes))
+        aliases_df = self._group_value_aliases_frame(prepared)
+
+        summary = self.insert_group_labels_and_points(
+            kind=kind,
+            labels_df=labels_df,
+            points_df=points_df,
+            replace_kind=True,
+        )
+        db.replace_group_value_aliases(
+            kind=kind,
+            feature_id=fid,
+            aliases_df=aliases_df,
+            source=feature_source,
+            unit=feature_unit,
+            type=feature_type or "group",
+        )
+        csv_group_links = int(db.mark_csv_feature_group_kind(feature_id=fid, group_kind=kind) or 0)
+        with db.write_transaction() as con:
+            db.features_repo.update_feature(con, fid, type="group")
+        self.notify_features_changed(
+            updated_features=[(fid, {"type": "group"})],
+        )
+        return {
+            "feature_id": fid,
+            "group_kind": kind,
+            "group_labels": int(summary.get("group_labels", 0)),
+            "group_points": int(summary.get("group_points", 0)),
+            "csv_group_links": csv_group_links,
+            "link_only_as_group_label": False,
         }
 
     def insert_group_labels_and_points(

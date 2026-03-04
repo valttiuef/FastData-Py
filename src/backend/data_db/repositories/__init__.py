@@ -8,6 +8,7 @@ from .csv_feature_columns import CsvFeatureColumnsRepository
 from .csv_group_columns import CsvGroupColumnsRepository
 from .measurements import MeasurementsRepository
 from .group_labels import GroupLabelsRepository
+from .group_value_aliases import GroupValueAliasesRepository
 from .group_points import GroupPointsRepository
 from .transactions import TransactionsRepository
 from .admin import AdminRepository
@@ -23,6 +24,7 @@ __all__ = [
     "CsvGroupColumnsRepository",
     "MeasurementsRepository",
     "GroupLabelsRepository",
+    "GroupValueAliasesRepository",
     "GroupPointsRepository",
     "TransactionsRepository",
     "AdminRepository",

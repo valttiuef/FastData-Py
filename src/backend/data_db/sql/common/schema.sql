@@ -178,6 +178,23 @@ CREATE TABLE IF NOT EXISTS csv_group_columns(
 );
 
 -- =========================
+-- GROUP VALUE ALIASES
+-- Maps raw linked values to custom group labels per group kind.
+-- Used by CSV-linked group filtering when labels differ from raw values.
+-- =========================
+CREATE TABLE IF NOT EXISTS group_value_aliases(
+  kind TEXT NOT NULL,
+  feature_id INTEGER NOT NULL,
+  raw_value_norm TEXT NOT NULL,
+  label TEXT NOT NULL,
+  label_norm TEXT NOT NULL,
+  source TEXT,
+  unit TEXT,
+  type TEXT,
+  PRIMARY KEY(kind, feature_id, raw_value_norm)
+);
+
+-- =========================
 -- FEATURE SCOPE MAPS (precomputed presence for fast filtering)
 -- =========================
 CREATE TABLE IF NOT EXISTS feature_dataset_map(

@@ -10,6 +10,13 @@ QLabel, QCheckBox, QRadioButton {
     background: transparent;
 }
 
+QWidget#importFieldWithHelp,
+QWidget#importOptionalRowField,
+QWidget#importCollapsibleGroup,
+QWidget#importExcelBasicContainer {
+    background: transparent;
+}
+
 /* ---------- Checkboxes / Radio ---------- */
 QCheckBox::indicator,
 QRadioButton::indicator,

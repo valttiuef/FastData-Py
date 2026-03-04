@@ -9,6 +9,7 @@ from __future__ import annotations
 # --- @ai END ---
 from typing import List, Optional
 
+import pandas as pd
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QAbstractItemView, QInputDialog, QLabel, QLineEdit, QMessageBox, QWidget
 from ...localization import tr
@@ -170,6 +171,7 @@ class SelectionsTab(TabWidget):
         self._table_model.set_features(df)
         self._table_model.apply_selection(self._current_payload, select_all_by_default=self._select_all_default)
         self._reapply_table_sort()
+        self._refresh_group_filters_for_enabled_group_features()
         if self._pending_toast_action == "reload_features":
             self._pending_toast_action = None
             try:
@@ -261,6 +263,7 @@ class SelectionsTab(TabWidget):
         target_id = record.get("id") if record else None
         self._select_setting_in_list(target_id)
         self._apply_active_selection_payload(payload)
+        self._refresh_group_filters_for_enabled_group_features()
         if self._pending_toast_action == "activate_setting":
             self._pending_toast_action = None
             try:
@@ -591,10 +594,53 @@ class SelectionsTab(TabWidget):
                 keys.add(self._table_model.COLUMN_DEFINITIONS[col][0])
             except Exception:
                 continue
+        if keys.intersection({"selected", "type"}):
+            self._refresh_group_filters_for_enabled_group_features()
         if not keys.intersection({"filter_min", "filter_max", "filter_global"}):
             return
         # Do not apply value filters immediately; wait for selection settings save/activate.
         return
+
+    def _is_group_feature_row(self, row: int) -> bool:
+        payload = self._table_model.row_payload(row)
+        if not payload:
+            return False
+        feature_type = str(payload.get("type") or "").strip().casefold()
+        if feature_type == "group":
+            return True
+        feature_id = payload.get("feature_id")
+        if feature_id in (None, ""):
+            return False
+        try:
+            fid = int(feature_id)
+        except Exception:
+            return False
+        try:
+            db = self._database_model.database()
+            kinds = db.group_kinds_for_feature_ids([fid])
+            return bool(kinds)
+        except Exception:
+            return False
+
+    def _refresh_group_filters_for_enabled_group_features(self) -> None:
+        fw = self.sidebar.filters_widget
+        if fw is None:
+            return
+        try:
+            selected_ids, _filters = self._table_model.selection_state()
+            db = self._database_model.database()
+            all_groups = self._database_model.groups_df(respect_selection=False)
+            if not selected_ids:
+                fw.set_groups(pd.DataFrame(columns=["group_id", "kind", "label"]))
+                return
+            enabled_kinds = set(db.group_kinds_for_feature_ids(selected_ids))
+            if not enabled_kinds:
+                fw.set_groups(pd.DataFrame(columns=["group_id", "kind", "label"]))
+                return
+            kinds = all_groups.get("kind", pd.Series(dtype=object)).astype(str).str.strip()
+            fw.set_groups(all_groups.loc[kinds.isin(enabled_kinds)].reset_index(drop=True))
+        except Exception:
+            logger.warning("Exception in _refresh_group_filters_for_enabled_group_features", exc_info=True)
 
     def _on_load_setting(self) -> None:
         record = self.sidebar.current_setting() or {}
@@ -646,6 +692,16 @@ class SelectionsTab(TabWidget):
             logger.warning("Exception in _log_error", exc_info=True)
 
     def _on_convert_selected_feature_to_group(self, row: int) -> None:
+        if self._is_group_feature_row(int(row)):
+            try:
+                toast_info(
+                    tr("Selected feature is already a group feature."),
+                    title=tr("Selections"),
+                    tab_key="selections",
+                )
+            except Exception:
+                logger.warning("Exception in _on_convert_selected_feature_to_group", exc_info=True)
+            return
         payload = self._table_model.row_payload(row)
         if not payload:
             return
@@ -742,23 +798,31 @@ class SelectionsTab(TabWidget):
             set_selected_cells.triggered.connect(lambda _: self._set_value_for_selected_cells())
             menu.addSeparator()
         rows = self._selected_rows()
+        group_rows = [row for row in rows if self._is_group_feature_row(row)]
+        non_group_rows = [row for row in rows if row not in group_rows]
         if rows:
-            enable_selected = menu.addAction(tr("Enable selected features"))
+            if group_rows and not non_group_rows:
+                enable_selected = menu.addAction(tr("Enable selected group features"))
+                disable_selected = menu.addAction(tr("Disable selected group features"))
+                remove_selected = menu.addAction(tr("Remove selected group features"))
+            else:
+                enable_selected = menu.addAction(tr("Enable selected features"))
+                disable_selected = menu.addAction(tr("Disable selected features"))
+                remove_selected = menu.addAction(tr("Remove selected features"))
             enable_selected.triggered.connect(
                 lambda _, r=list(rows): self._table_model.set_rows_selected(r, True)
             )
-            disable_selected = menu.addAction(tr("Disable selected features"))
             disable_selected.triggered.connect(
                 lambda _, r=list(rows): self._table_model.set_rows_selected(r, False)
             )
-            remove_selected = menu.addAction(tr("Remove selected features"))
             remove_selected.triggered.connect(lambda _: self._on_remove_feature())
         single_row = self._single_selected_row()
         if single_row is not None:
             feature_id = self._table_model.feature_id_for_row(single_row)
             if feature_id is not None:
-                menu.addSeparator()
-                convert_action = menu.addAction(tr("Convert feature values to groups…"))
-                convert_action.triggered.connect(
-                    lambda _, row=int(single_row): self._on_convert_selected_feature_to_group(row)
-                )
+                if not self._is_group_feature_row(int(single_row)):
+                    menu.addSeparator()
+                    convert_action = menu.addAction(tr("Convert feature values to groups…"))
+                    convert_action.triggered.connect(
+                        lambda _, row=int(single_row): self._on_convert_selected_feature_to_group(row)
+                    )

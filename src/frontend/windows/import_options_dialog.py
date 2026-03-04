@@ -388,6 +388,7 @@ class _OptionalRowField(QWidget):
     """
     def __init__(self, parent=None, minimum: int = 0, maximum: int = 99, value: Optional[int] = None):
         super().__init__(parent)
+        self.setObjectName("importOptionalRowField")
         lay = QHBoxLayout(self); lay.setContentsMargins(0, 0, 0, 0)
 
         self.spin = QSpinBox(self)
@@ -420,6 +421,7 @@ def _make_collapsible_group(title: str, inner: QWidget) -> QWidget:
            <inner widget>
     """
     container = QWidget()
+    container.setObjectName("importCollapsibleGroup")
     v = QVBoxLayout(container)
     v.setContentsMargins(0, 0, 0, 0)
     v.setSpacing(4)
@@ -573,6 +575,7 @@ class ImportOptionsDialog(QDialog):
 
         # Excel basic bits (only visible for Excel)
         self.excel_basic_container = QWidget()
+        self.excel_basic_container.setObjectName("importExcelBasicContainer")
         excel_basic_form = QFormLayout(self.excel_basic_container)
         excel_basic_form.setContentsMargins(0, 0, 0, 0)
 
@@ -850,6 +853,7 @@ class ImportOptionsDialog(QDialog):
         if info is None:
             return widget
         container = QWidget(widget.parent())
+        container.setObjectName("importFieldWithHelp")
         layout = QHBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)

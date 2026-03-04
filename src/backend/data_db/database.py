@@ -29,6 +29,7 @@ from .repositories import (
     FeaturesRepository,
     FeatureScopesRepository,
     GroupLabelsRepository,
+    GroupValueAliasesRepository,
     GroupPointsRepository,
     ImportsRepository,
     DatasetsRepository,
@@ -131,6 +132,7 @@ class Database:
         self.imports_repo = ImportsRepository()
         self.measurements_repo = MeasurementsRepository()
         self.group_labels_repo = GroupLabelsRepository()
+        self.group_value_aliases_repo = GroupValueAliasesRepository()
         self.group_points_repo = GroupPointsRepository()
         self.feature_tags_repo = FeatureTagsRepository()
         self.csv_feature_columns_repo = CsvFeatureColumnsRepository()
@@ -1643,6 +1645,27 @@ class Database:
                         notes=changes.get("notes"),
                         lag_seconds=changes.get("lag_seconds"),
                     )
+                    if any(key in changes for key in ("source", "unit", "type")):
+                        source_value = changes.get("source")
+                        unit_value = changes.get("unit")
+                        type_value = changes.get("type")
+                        updates: list[str] = []
+                        params: list[object] = []
+                        if source_value is not None:
+                            updates.append("source = ?")
+                            params.append(str(source_value or ""))
+                        if unit_value is not None:
+                            updates.append("unit = ?")
+                            params.append(str(unit_value or ""))
+                        if type_value is not None:
+                            updates.append("type = ?")
+                            params.append(str(type_value or ""))
+                        if updates:
+                            params.append(int(feature_id))
+                            con.execute(
+                                f"UPDATE group_value_aliases SET {', '.join(updates)} WHERE feature_id = ?;",
+                                params,
+                            )
                 if tag_update is not None:
                     self.feature_tags_repo.replace_feature_tags(con, int(feature_id), tag_update)
         return inserted
@@ -1652,12 +1675,68 @@ class Database:
         if not ids:
             return
         with self.write_transaction() as con:
+            ph = ",".join(["?"] * len(ids))
+            linked_kinds: set[str] = set()
+            try:
+                rows = con.execute(
+                    f"""
+                    SELECT DISTINCT group_kind
+                    FROM csv_group_columns
+                    WHERE feature_id IN ({ph}) AND group_kind IS NOT NULL AND trim(group_kind) <> ''
+                    """,
+                    ids,
+                ).fetchall()
+                linked_kinds.update(str(row[0]).strip() for row in rows if row and str(row[0] or "").strip())
+            except Exception:
+                self.log.warning("Failed to collect CSV group kinds while deleting features.", exc_info=True)
+            try:
+                linked_kinds.update(self.group_value_aliases_repo.list_kinds_by_feature_ids(con, feature_ids=ids))
+            except Exception:
+                self.log.warning("Failed to collect alias group kinds while deleting features.", exc_info=True)
+
             self.feature_tags_repo.delete_by_feature_ids(con, ids)
             self.measurements_repo.delete_by_feature_ids(con, ids)
             self.csv_feature_columns_repo.delete_by_feature_ids(con, ids)
             self.csv_group_columns_repo.delete_by_feature_ids(con, ids)
+            self.group_value_aliases_repo.delete_by_feature_ids(con, ids)
             self.feature_scopes_repo.delete_by_feature_ids(con, ids)
             self.features_repo.delete_by_ids(con, ids)
+
+            if linked_kinds:
+                orphan_kinds: list[str] = []
+                for kind in sorted(linked_kinds):
+                    csv_left = int(
+                        (con.execute(
+                            "SELECT COUNT(*) FROM csv_group_columns WHERE group_kind = ?;",
+                            [kind],
+                        ).fetchone() or [0])[0]
+                        or 0
+                    )
+                    alias_left = int(
+                        (con.execute(
+                            "SELECT COUNT(*) FROM group_value_aliases WHERE kind = ?;",
+                            [kind],
+                        ).fetchone() or [0])[0]
+                        or 0
+                    )
+                    if csv_left <= 0 and alias_left <= 0:
+                        orphan_kinds.append(kind)
+                if orphan_kinds:
+                    phk = ",".join(["?"] * len(orphan_kinds))
+                    group_rows = con.execute(
+                        f"""
+                        SELECT id
+                        FROM group_labels
+                        WHERE kind IN ({phk})
+                        """,
+                        orphan_kinds,
+                    ).fetchall()
+                    orphan_group_ids = [int(row[0]) for row in group_rows if row and row[0] is not None]
+                    if orphan_group_ids:
+                        self.group_points_repo.delete_by_ids(con, orphan_group_ids)
+                        phg = ",".join(["?"] * len(orphan_group_ids))
+                        con.execute(f"DELETE FROM group_labels WHERE id IN ({phg});", orphan_group_ids)
+                    self.group_value_aliases_repo.delete_by_kinds(con, orphan_kinds)
 
     def mark_csv_feature_group_kind(self, *, feature_id: int, group_kind: str) -> int:
         # @ai(gpt-5, codex-cli, implementation, 2026-03-03)
@@ -1703,6 +1782,50 @@ class Database:
                 limit=limit,
                 value_mode="text",
             )
+
+    # @ai(gpt-5, codex-cli, implementation, 2026-03-04)
+    def replace_group_value_aliases(
+        self,
+        *,
+        kind: str,
+        feature_id: int,
+        aliases_df: pd.DataFrame,
+        source: str = "",
+        unit: str = "",
+        type: str = "",
+    ) -> int:
+        kind_text = str(kind or "").strip()
+        if not kind_text:
+            return 0
+        with self.write_transaction() as con:
+            return self.group_value_aliases_repo.replace_feature_kind_aliases(
+                con,
+                kind=kind_text,
+                feature_id=int(feature_id),
+                aliases_df=aliases_df,
+                source=str(source or ""),
+                unit=str(unit or ""),
+                type=str(type or ""),
+            )
+
+    def group_kinds_for_feature_ids(self, feature_ids: Sequence[int]) -> list[str]:
+        ids = [int(fid) for fid in (feature_ids or []) if fid is not None]
+        if not ids:
+            return []
+        with self.connection() as con:
+            ph = ",".join(["?"] * len(ids))
+            kinds: set[str] = set()
+            rows_csv = con.execute(
+                f"""
+                SELECT DISTINCT group_kind
+                FROM csv_group_columns
+                WHERE feature_id IN ({ph}) AND group_kind IS NOT NULL AND trim(group_kind) <> ''
+                """,
+                ids,
+            ).fetchall()
+            kinds.update(str(row[0]).strip() for row in rows_csv if row and str(row[0] or "").strip())
+            kinds.update(self.group_value_aliases_repo.list_kinds_by_feature_ids(con, feature_ids=ids))
+            return sorted(kinds)
 
     def feature_matrix(
         self,
@@ -1935,6 +2058,7 @@ class Database:
                 group_ids_list,
             ).df()
             labels_by_kind: dict[str, list[str]] = {}
+            selected_labels_by_kind: dict[str, set[str]] = {}
             if labels_df is not None and not labels_df.empty:
                 for row in labels_df.itertuples(index=False):
                     kind = str(getattr(row, "kind", "") or "").strip()
@@ -1942,7 +2066,37 @@ class Database:
                     if not kind or not label:
                         continue
                     labels_by_kind.setdefault(kind, [])
-                    labels_by_kind[kind].append(label.lower())
+                    selected_labels_by_kind.setdefault(kind, set())
+                    label_norm = label.lower()
+                    labels_by_kind[kind].append(label_norm)
+                    selected_labels_by_kind[kind].add(label_norm)
+            if selected_labels_by_kind:
+                alias_df = self.group_value_aliases_repo.list_by_kinds(
+                    con,
+                    kinds=sorted(selected_labels_by_kind.keys()),
+                )
+                if alias_df is not None and not alias_df.empty:
+                    for row in alias_df.itertuples(index=False):
+                        kind = str(getattr(row, "kind", "") or "").strip()
+                        raw_value_norm = str(getattr(row, "raw_value_norm", "") or "").strip().lower()
+                        label_norm = str(getattr(row, "label_norm", "") or "").strip().lower()
+                        if not kind or not raw_value_norm or not label_norm:
+                            continue
+                        selected = selected_labels_by_kind.get(kind)
+                        if not selected or label_norm not in selected:
+                            continue
+                        labels_by_kind.setdefault(kind, [])
+                        labels_by_kind[kind].append(raw_value_norm)
+            for kind_key, values in list(labels_by_kind.items()):
+                deduped: list[str] = []
+                seen: set[str] = set()
+                for value in values:
+                    norm = str(value or "").strip().lower()
+                    if not norm or norm in seen:
+                        continue
+                    seen.add(norm)
+                    deduped.append(norm)
+                labels_by_kind[kind_key] = deduped
             if labels_by_kind:
                 kinds = sorted(labels_by_kind.keys())
                 phk = ",".join(["?"] * len(kinds))
