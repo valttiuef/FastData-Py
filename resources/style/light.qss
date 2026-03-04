@@ -259,6 +259,40 @@ QToolButton#chartResetButton:pressed {
     background-color: #cccccc;
 }
 
+QPushButton#infoButton,
+QToolButton#infoButton {
+    min-width: 16px;
+    max-width: 16px;
+    min-height: 16px;
+    max-height: 16px;
+    padding: 0px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: #666666;
+    font-weight: 600;
+}
+
+QPushButton#infoButton:hover,
+QToolButton#infoButton:hover {
+    background: rgba(0, 0, 0, 0.08);
+    color: #4f4f4f;
+    border-color: rgba(0, 0, 0, 0.12);
+}
+
+QPushButton#infoButton:pressed,
+QToolButton#infoButton:pressed {
+    background: rgba(0, 0, 0, 0.14);
+    color: #3a3a3a;
+}
+
+QPushButton#infoButton:disabled,
+QToolButton#infoButton:disabled {
+    background: transparent;
+    color: #9a9a9a;
+    border-color: transparent;
+}
+
 /* ---------- ProgressBar ---------- */
 QProgressBar {
     background: #e8e8e8;

@@ -59,16 +59,8 @@ class InfoButton(QPushButton):
         self._help_viewmodel = help_viewmodel
         self._popup: Optional[HelpPopup] = None
 
-        self.setStyleSheet("""
-        QPushButton {
-            padding: 0px;
-            margin: 0px;
-            border: none;
-            background: transparent;
-        }
-        """)
-
-        self.setFixedSize(14, 14)
+        self.setObjectName("infoButton")
+        self.setFixedSize(16, 16)
         
         self.setFlat(True)
         self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))

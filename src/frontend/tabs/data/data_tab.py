@@ -135,9 +135,11 @@ class DataTab(TabWidget):
         info_row.addWidget(self.data_info, 1)
 
         self.features_info_button = QPushButton("ℹ", right)
+        self.features_info_button.setObjectName("infoButton")
         self.features_info_button.setToolTip(tr("Show selected feature details"))
-        self.features_info_button.setFixedSize(20, 20)
+        self.features_info_button.setFixedSize(16, 16)
         self.features_info_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.features_info_button.setFlat(True)
         self.features_info_button.clicked.connect(self._show_features_info_dialog)
         self.features_info_button.setEnabled(False)
         info_row.addWidget(self.features_info_button)
