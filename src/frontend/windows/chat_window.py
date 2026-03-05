@@ -9,7 +9,7 @@ from collections.abc import Callable
 from typing import Optional
 
 from PySide6.QtCore import QEvent, QTimer, Qt, Signal, QSize
-from PySide6.QtGui import QCloseEvent, QShowEvent, QColor, QPalette, QFontMetrics
+from PySide6.QtGui import QCloseEvent, QShowEvent, QColor, QFontMetrics
 from PySide6.QtWidgets import (
 
     QAbstractItemView,
@@ -38,6 +38,7 @@ from ..models.log_model import LogEvent
 from ..models.settings_model import SettingsModel
 from ..viewmodels.log_view_model import LogViewModel
 from ..viewmodels.help_viewmodel import HelpViewModel, get_help_viewmodel
+from ..style.styles import muted_icon_color
 from ..utils import toast_error, toast_success, toast_warn
 from ..widgets.collapsible_section import CollapsibleSection
 from ..widgets.help_widgets import InfoButton
@@ -117,15 +118,7 @@ class ChatWindow(QWidget):
         self._refresh_models_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self._refresh_models_button.setFixedSize(20, 20)
         self._refresh_models_button.setIconSize(QSize(14, 14))
-        try:
-            refresh_icon = qta.icon("fa5s.sync-alt")
-        except Exception:
-            try:
-                refresh_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DialogResetButton)
-            except Exception:
-                refresh_icon = None
-        if refresh_icon:
-            self._refresh_models_button.setIcon(refresh_icon)
+        self._set_refresh_models_button_icon()
         self._refresh_models_button.setToolTip(tr("Refresh available models"))
         self._refresh_models_button.clicked.connect(self._on_refresh_models_clicked)
         settings_layout.addLayout(grid)
@@ -298,6 +291,19 @@ class ChatWindow(QWidget):
             self._relayout_chat_items()
         return super().eventFilter(watched, event)
 
+    # @ai(gpt-5.2-codex, codex-cli, refactor, 2026-03-05)
+    def changeEvent(self, event: QEvent) -> None:
+        super().changeEvent(event)
+        if event.type() in {
+            QEvent.Type.PaletteChange,
+            QEvent.Type.ApplicationPaletteChange,
+            QEvent.Type.StyleChange,
+        }:
+            if hasattr(self, "_refresh_models_button"):
+                self._set_refresh_models_button_icon()
+            if hasattr(self, "_chat_list"):
+                self._refresh_chat_bubble_icons()
+
     def closeEvent(self, event: QCloseEvent) -> None:
         # Behave like "close to hide" so it can be reopened from the menu.
         self.closed.emit()
@@ -306,6 +312,8 @@ class ChatWindow(QWidget):
 
     def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)
+        self._set_refresh_models_button_icon()
+        self._refresh_chat_bubble_icons()
         if self._chat_list.count() > 0:
             QTimer.singleShot(0, self._relayout_chat_items)
             QTimer.singleShot(50, self._relayout_chat_items)
@@ -908,6 +916,23 @@ class ChatWindow(QWidget):
         finally:
             self._chat_list.setUpdatesEnabled(True)
 
+    def _refresh_chat_bubble_icons(self) -> None:
+        for idx in range(self._chat_list.count()):
+            item = self._chat_list.item(idx)
+            widget = self._chat_list.itemWidget(item)
+            if isinstance(widget, _ChatBubbleWidget):
+                widget.refresh_copy_button_icon()
+
+    def _set_refresh_models_button_icon(self) -> None:
+        try:
+            color = muted_icon_color(self._refresh_models_button.palette())
+            self._refresh_models_button.setIcon(qta.icon("fa5s.sync-alt", color=color))
+        except Exception:
+            try:
+                self._refresh_models_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogResetButton))
+            except Exception:
+                pass
+
     @staticmethod
     def _format_plain_text(text: str) -> str:
         escaped = html.escape(text)
@@ -1227,8 +1252,19 @@ class _ChatBubbleWidget(QWidget):
             return
         doc = self._rich_view.document()
         doc.setTextWidth(self._rich_view.viewport().width())
+        doc.adjustSize()
         height = int(doc.size().height() + 2)
         self._rich_view.setFixedHeight(max(22, height))
+        self._bubble.adjustSize()
+
+    def _reflow_thinking_view_height(self) -> None:
+        if self._thinking_view is None:
+            return
+        doc = self._thinking_view.document()
+        doc.setTextWidth(self._thinking_view.viewport().width())
+        doc.adjustSize()
+        height = int(doc.size().height() + 2)
+        self._thinking_view.setFixedHeight(max(34, height))
         self._bubble.adjustSize()
 
     def _copy_to_clipboard(self) -> None:
@@ -1253,13 +1289,31 @@ class _ChatBubbleWidget(QWidget):
             elif role == "user":
                 color = QColor(248, 248, 248)
             else:
-                window_color = self._copy_button.palette().color(QPalette.ColorRole.Window)
-                # Match the info-button tone instead of pure black/white.
-                is_dark = (0.2126 * window_color.redF() + 0.7152 * window_color.greenF() + 0.0722 * window_color.blueF()) < 0.5
-                color = QColor("#a8a8a8" if is_dark else "#2f2f2f")
-            self._copy_button.setIcon(qta.icon("fa5s.copy", color=color))
+                color = muted_icon_color(self._copy_button.palette())
+            disabled = color.darker(130)
+            for icon_name in ("fa5s.copy", "fa5.copy", "mdi.content-copy"):
+                try:
+                    icon = qta.icon(
+                        icon_name,
+                        color=color,
+                        color_active=color,
+                        color_selected=color,
+                        color_disabled=disabled,
+                    )
+                    if icon is not None and not icon.isNull():
+                        self._copy_button.setIcon(icon)
+                        return
+                except Exception:
+                    continue
         except Exception:
+            pass
+        try:
             self._copy_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon))
+        except Exception:
+            pass
+
+    def refresh_copy_button_icon(self) -> None:
+        self._set_copy_button_icon(self._role)
 
     def set_available_width(self, width: int) -> None:
         self._available_width = max(240, width)
@@ -1272,6 +1326,7 @@ class _ChatBubbleWidget(QWidget):
             self._reflow_rich_view_height()
             if self._thinking_view is not None:
                 self._thinking_view.setFixedWidth(max(120, bubble_max - 24))
+                self._reflow_thinking_view_height()
         if self._text_label is not None:
             self._text_label.setMaximumWidth(max(120, bubble_max - 24))
             self._text_label.adjustSize()
@@ -1343,10 +1398,7 @@ class _ChatBubbleWidget(QWidget):
                 thinking_doc = f"<html><head><meta charset='utf-8'></head><body>{thinking_html}</body></html>"
                 self._thinking_view.setHtml(thinking_doc)
                 self._thinking_view.setVisible(thinking_expanded and bool(thinking.strip()))
-                doc = self._thinking_view.document()
-                doc.setTextWidth(self._rich_view.viewport().width())
-                height = int(doc.size().height() + 2)
-                self._thinking_view.setFixedHeight(max(34, height))
+                self._reflow_thinking_view_height()
             self._bubble.adjustSize()
             return
 

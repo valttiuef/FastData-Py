@@ -7,7 +7,7 @@ from typing import Iterable, List
 import pandas as pd
 
 from PySide6.QtCore import Qt, Signal, QRectF, QPointF, QTimer, QSize
-from PySide6.QtGui import QPen, QBrush, QColor, QCursor, QPalette
+from PySide6.QtGui import QPen, QBrush, QColor, QCursor
 from PySide6.QtCharts import QBarSet
 from PySide6.QtWidgets import (
     QApplication,
@@ -21,6 +21,7 @@ import qtawesome as qta
 
 from ..style.chart_theme import style_legend
 from ..style.group_colors import group_color_cycle
+from ..style.styles import muted_icon_color
 from core.datetime_utils import drop_timezone_preserving_wall
 from . import MAX_FEATURES_SHOWN_LEGEND
 from .group_chart import GroupBarChart
@@ -164,7 +165,7 @@ class MonthlyBarChart(GroupBarChart):
         if button is None:
             return
         try:
-            color = self.palette().color(QPalette.ColorRole.ButtonText)
+            color = muted_icon_color(self.palette())
             button.setIcon(qta.icon("fa5s.home", color=color))
         except Exception:
             button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirHomeIcon))
