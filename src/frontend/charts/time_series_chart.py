@@ -26,7 +26,6 @@ from ..style.chart_theme import (
     style_legend,
     is_dark_color,
 )
-from ..style.styles import muted_icon_color
 
 import logging
 logger = logging.getLogger(__name__)
@@ -222,7 +221,7 @@ class TimeSeriesChart(QFrame):
         if button is None:
             return
         try:
-            color = muted_icon_color(self.palette())
+            color = self.palette().color(QPalette.ColorRole.ButtonText)
             button.setIcon(qta.icon("fa5s.home", color=color))
         except Exception:
             button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirHomeIcon))

@@ -493,7 +493,7 @@ QWidget#chatWindow QToolButton#chatBubbleCopyButton {
 
 QWidget#chatWindow QToolButton#chatBubbleCopyButton[role="assistant"] {
     background: rgba(0, 0, 0, 0.14);
-    color: #4f4f4f;
+    color: #2a2a2a;
 }
 
 QWidget#chatWindow QToolButton#chatBubbleCopyButton[role="error"] {
