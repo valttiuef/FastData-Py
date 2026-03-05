@@ -2395,6 +2395,7 @@ Ask the built-in assistant and keep a record of conversations.
 <p>The chat window lets you send questions to the assistant and keeps a history in the log database.</p>
 <ul>
   <li>Chat messages are saved automatically with the log database.</li>
+  <li>Use the stop button next to <b>Send</b> to cancel an in-progress streamed reply.</li>
   <li>Each chat session can be deleted separately without removing other log entries.</li>
   <li>Resetting the log database clears chat history too.</li>
 </ul>

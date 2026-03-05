@@ -9,7 +9,7 @@ from collections.abc import Callable
 from typing import Optional
 
 from PySide6.QtCore import QEvent, QTimer, Qt, Signal, QSize
-from PySide6.QtGui import QCloseEvent, QShowEvent, QColor, QFontMetrics
+from PySide6.QtGui import QCloseEvent, QShowEvent, QPalette, QFontMetrics
 from PySide6.QtWidgets import (
 
     QAbstractItemView,
@@ -51,8 +51,10 @@ class _ChatMessage:
     content: str
     thinking: str = ""
     thinking_active: bool = False
+    thinking_spinner_phase: int = 0
     thinking_expanded: bool = False
     turn_id: str = ""
+    stopped_by_user: bool = False
 
 
 class ChatWindow(QWidget):
@@ -87,11 +89,13 @@ class ChatWindow(QWidget):
         self._suppress_next_llm_log: Optional[str] = None
         self._suppress_next_llm_error_log: Optional[str] = None
         self._pending_stream_append: list[str] = []
+        self._stop_requested_by_user = False
+        self._response_spinner_phase = 0
         self._render_timer = QTimer(self)
         self._render_timer.setSingleShot(True)
         self._render_timer.timeout.connect(self._flush_stream_updates)
         self._thinking_spinner_timer = QTimer(self)
-        self._thinking_spinner_timer.setInterval(220)
+        self._thinking_spinner_timer.setInterval(620)
         self._thinking_spinner_timer.timeout.connect(self._refresh_thinking_spinners)
 
         self.setObjectName("chatWindow")
@@ -241,6 +245,17 @@ class ChatWindow(QWidget):
         self._send_button = QPushButton(tr("Send"), self)
         self._send_button.clicked.connect(self._send_message)
         input_layout.addWidget(self._send_button)
+        self._stop_button = QToolButton(self)
+        self._stop_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self._stop_button.setAutoRaise(True)
+        self._stop_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._stop_button.setFixedSize(24, 24)
+        self._stop_button.setIconSize(QSize(14, 14))
+        self._set_stop_button_icon()
+        self._stop_button.setToolTip(tr("Stop response"))
+        self._stop_button.clicked.connect(self._stop_streaming_response)
+        self._stop_button.setEnabled(False)
+        input_layout.addWidget(self._stop_button)
 
         layout.addWidget(input_row)
 
@@ -285,6 +300,7 @@ class ChatWindow(QWidget):
         self._delete_chat_button.setText(tr("Delete Chat"))
         self._input.setPlaceholderText(tr("Ask anything…"))
         self._send_button.setText(tr("Send"))
+        self._stop_button.setToolTip(tr("Stop response"))
 
     def eventFilter(self, watched: object, event: QEvent) -> bool:
         if watched is self._chat_list.viewport() and event.type() == QEvent.Type.Resize:
@@ -301,6 +317,8 @@ class ChatWindow(QWidget):
         }:
             if hasattr(self, "_refresh_models_button"):
                 self._set_refresh_models_button_icon()
+            if hasattr(self, "_stop_button"):
+                self._set_stop_button_icon()
             if hasattr(self, "_chat_list"):
                 self._refresh_chat_bubble_icons()
 
@@ -313,6 +331,7 @@ class ChatWindow(QWidget):
     def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)
         self._set_refresh_models_button_icon()
+        self._set_stop_button_icon()
         self._refresh_chat_bubble_icons()
         if self._chat_list.count() > 0:
             QTimer.singleShot(0, self._relayout_chat_items)
@@ -510,6 +529,7 @@ class ChatWindow(QWidget):
         text = self._input.text().strip()
         if not text:
             return
+        self._stop_requested_by_user = False
 
         provider = self._provider_selector.currentData(Qt.ItemDataRole.UserRole)
         self._log_view_model.set_provider(provider)
@@ -537,11 +557,28 @@ class ChatWindow(QWidget):
         self._log_view_model.ask_llm(text, session_id=self._log_view_model.current_session_id)
         self._input.clear()
 
+    # @ai(gpt-5.2-codex, codex-cli, feature, 2026-03-05)
+    def _stop_streaming_response(self) -> None:
+        if self._send_button.isEnabled():
+            return
+        self._stop_requested_by_user = True
+        self._log_view_model.cancel_llm()
+        self._mark_stream_stopped_by_user()
+        self._render_timer.stop()
+        self._pending_stream_append.clear()
+        self._streaming_index = None
+        self._saw_llm_log_for_stream = False
+        self._response_spinner_phase = 0
+        self._thinking_spinner_timer.stop()
+        self._set_llm_busy(False)
+
     # ------------------------------------------------------------------
     def _on_llm_response_started(self) -> None:
+        self._stop_requested_by_user = False
+        self._response_spinner_phase = 0
         self._saw_llm_log_for_stream = False
         self._streaming_index = len(self._messages)
-        self._append_message("assistant", "…")
+        self._append_message("assistant", self._response_spinner_text())
         self._thinking_spinner_timer.start()
 
     def _on_llm_thinking_started(self) -> None:
@@ -549,8 +586,8 @@ class ChatWindow(QWidget):
             return
         msg = self._messages[self._streaming_index]
         msg.thinking = ""
-        # Only show active thinking UI after we receive real thinking tokens.
-        msg.thinking_active = False
+        msg.thinking_active = True
+        msg.thinking_spinner_phase = 0
         self._update_message_item(self._streaming_index)
         self._refresh_thinking_spinner_state()
 
@@ -568,6 +605,7 @@ class ChatWindow(QWidget):
             return
         msg = self._messages[self._streaming_index]
         msg.thinking_active = False
+        msg.thinking_spinner_phase = 0
         self._update_message_item(self._streaming_index)
         self._refresh_thinking_spinner_state()
 
@@ -585,7 +623,7 @@ class ChatWindow(QWidget):
         if idx < 0 or idx >= len(self._messages):
             return
         content = self._messages[idx].content
-        if content.strip() == "…":
+        if self._is_loading_placeholder(content):
             content = ""
         content += "".join(self._pending_stream_append)
         self._pending_stream_append.clear()
@@ -593,26 +631,41 @@ class ChatWindow(QWidget):
         self._update_message_item(idx)
 
     def _on_llm_response_finished(self, text: str) -> None:
+        stopped_by_user = self._stop_requested_by_user
         self._flush_stream_updates()
         if self._streaming_index is not None and 0 <= self._streaming_index < len(self._messages):
-            self._messages[self._streaming_index].content = text or ""
+            msg = self._messages[self._streaming_index]
+            if stopped_by_user:
+                msg.content = text or msg.content or ""
+                if self._is_loading_placeholder(msg.content):
+                    msg.content = ""
+                msg.stopped_by_user = True
+            else:
+                msg.content = text or ""
+                msg.stopped_by_user = False
             if not self._saw_llm_log_for_stream:
                 self._suppress_next_llm_log = (text or "").strip()
             self._update_message_item(self._streaming_index)
         self._streaming_index = None
         self._saw_llm_log_for_stream = False
         self._pending_stream_append.clear()
+        self._stop_requested_by_user = False
         self._set_llm_busy(False)
         self._refresh_thinking_spinner_state()
 
     def _on_llm_error(self, message: str) -> None:
+        stopped_by_user = self._stop_requested_by_user
+        if stopped_by_user:
+            self._mark_stream_stopped_by_user()
         if self._streaming_index is not None and 0 <= self._streaming_index < len(self._messages):
             self._messages[self._streaming_index].thinking_active = False
+            self._messages[self._streaming_index].thinking_spinner_phase = 0
         self._streaming_index = None
         self._saw_llm_log_for_stream = False
         self._pending_stream_append.clear()
+        self._stop_requested_by_user = False
         self._set_llm_busy(False)
-        if message:
+        if message and not stopped_by_user:
             if self._is_duplicate_tail_message("error", message):
                 return
             self._append_message("error", message)
@@ -770,13 +823,16 @@ class ChatWindow(QWidget):
         for idx, msg in enumerate(self._messages):
             if not msg.thinking_active:
                 continue
+            msg.thinking_spinner_phase = (msg.thinking_spinner_phase + 1) % 3
             has_active = True
             self._update_message_item(idx)
+        if self._animate_streaming_placeholder():
+            has_active = True
         if not has_active:
             self._thinking_spinner_timer.stop()
 
     def _refresh_thinking_spinner_state(self) -> None:
-        if any(msg.thinking_active for msg in self._messages):
+        if any(msg.thinking_active for msg in self._messages) or self._is_streaming_placeholder_animation_active():
             if not self._thinking_spinner_timer.isActive():
                 self._thinking_spinner_timer.start()
         else:
@@ -784,6 +840,7 @@ class ChatWindow(QWidget):
 
     def _set_llm_busy(self, value: bool) -> None:
         self._send_button.setDisabled(value)
+        self._stop_button.setEnabled(value)
         self._provider_selector.setDisabled(value)
         self._model_input.setDisabled(value)
         self._refresh_models_button.setDisabled(value)
@@ -853,6 +910,8 @@ class ChatWindow(QWidget):
             thinking=msg.thinking,
             thinking_expanded=msg.thinking_expanded,
             thinking_active=msg.thinking_active,
+            thinking_spinner_phase=msg.thinking_spinner_phase,
+            stopped_by_user=msg.stopped_by_user,
             on_toggle_thinking=lambda _checked=False, index=idx: self._toggle_thinking(index),
         )
         widget.adjustSize()
@@ -888,6 +947,8 @@ class ChatWindow(QWidget):
                 thinking=msg.thinking,
                 thinking_expanded=msg.thinking_expanded,
                 thinking_active=msg.thinking_active,
+                thinking_spinner_phase=msg.thinking_spinner_phase,
+                stopped_by_user=msg.stopped_by_user,
                 on_toggle_thinking=lambda _checked=False, index=idx: self._toggle_thinking(index),
             )
             widget.adjustSize()
@@ -932,6 +993,71 @@ class ChatWindow(QWidget):
                 self._refresh_models_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogResetButton))
             except Exception:
                 pass
+
+    def _set_stop_button_icon(self) -> None:
+        try:
+            window_color = self._stop_button.palette().color(QPalette.ColorRole.Window)
+            is_dark = (0.2126 * window_color.redF() + 0.7152 * window_color.greenF() + 0.0722 * window_color.blueF()) < 0.5
+            if is_dark:
+                color = "#b8b8b8"
+                disabled = "#686868"
+            else:
+                color = "#444444"
+                disabled = "#b0b0b0"
+            self._stop_button.setIcon(
+                qta.icon(
+                    "fa5s.stop",
+                    color=color,
+                    color_active=color,
+                    color_selected=color,
+                    color_disabled=disabled,
+                )
+            )
+        except Exception:
+            try:
+                self._stop_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserStop))
+            except Exception:
+                pass
+
+    def _mark_stream_stopped_by_user(self) -> None:
+        self._flush_stream_updates()
+        if self._streaming_index is None or not (0 <= self._streaming_index < len(self._messages)):
+            return
+        msg = self._messages[self._streaming_index]
+        if self._is_loading_placeholder(msg.content):
+            msg.content = ""
+        msg.thinking_active = False
+        msg.thinking_spinner_phase = 0
+        msg.stopped_by_user = True
+        self._update_message_item(self._streaming_index)
+        self._thinking_spinner_timer.stop()
+
+    def _response_spinner_text(self) -> str:
+        dots = "." * (self._response_spinner_phase + 1)
+        return f"{dots}{' ' * max(0, 3 - len(dots))}"
+
+    @staticmethod
+    def _is_loading_placeholder(text: str) -> bool:
+        normalized = (text or "").strip()
+        return normalized in {"…", ".", "..", "..."}
+
+    def _is_streaming_placeholder_animation_active(self) -> bool:
+        if self._streaming_index is None or not (0 <= self._streaming_index < len(self._messages)):
+            return False
+        msg = self._messages[self._streaming_index]
+        content = (msg.content or "").strip()
+        return not content or self._is_loading_placeholder(content)
+
+    def _animate_streaming_placeholder(self) -> bool:
+        if not self._is_streaming_placeholder_animation_active():
+            return False
+        if self._streaming_index is None or not (0 <= self._streaming_index < len(self._messages)):
+            return False
+        self._response_spinner_phase = (self._response_spinner_phase + 1) % 3
+        msg = self._messages[self._streaming_index]
+        msg.content = self._response_spinner_text()
+        self._update_message_item(self._streaming_index)
+        return True
 
     @staticmethod
     def _format_plain_text(text: str) -> str:
@@ -1158,7 +1284,6 @@ class _ChatBubbleWidget(QWidget):
         self._raw_content = ""
         self._thinking_toggle_button: Optional[QToolButton] = None
         self._thinking_view: Optional[QTextBrowser] = None
-        self._thinking_spinner_phase: int = 0
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -1263,8 +1388,11 @@ class _ChatBubbleWidget(QWidget):
         doc = self._thinking_view.document()
         doc.setTextWidth(self._thinking_view.viewport().width())
         doc.adjustSize()
-        height = int(doc.size().height() + 2)
-        self._thinking_view.setFixedHeight(max(34, height))
+        # Use document layout size + margins/padding buffer to avoid clipping the last streamed row.
+        doc_height = float(doc.documentLayout().documentSize().height())
+        margins = self._thinking_view.contentsMargins()
+        height = int(doc_height + margins.top() + margins.bottom() + 12)
+        self._thinking_view.setFixedHeight(max(38, height))
         self._bubble.adjustSize()
 
     def _copy_to_clipboard(self) -> None:
@@ -1284,33 +1412,10 @@ class _ChatBubbleWidget(QWidget):
     # @ai(gpt-5.2-codex, codex-cli, refactor, 2026-03-05)
     def _set_copy_button_icon(self, role: str) -> None:
         try:
-            if role == "error":
-                color = QColor(240, 98, 146)
-            elif role == "user":
-                color = QColor(248, 248, 248)
-            else:
-                color = muted_icon_color(self._copy_button.palette())
-            disabled = color.darker(130)
-            for icon_name in ("fa5s.copy", "fa5.copy", "mdi.content-copy"):
-                try:
-                    icon = qta.icon(
-                        icon_name,
-                        color=color,
-                        color_active=color,
-                        color_selected=color,
-                        color_disabled=disabled,
-                    )
-                    if icon is not None and not icon.isNull():
-                        self._copy_button.setIcon(icon)
-                        return
-                except Exception:
-                    continue
+            color = muted_icon_color(self._copy_button.palette())
+            self._copy_button.setIcon(qta.icon("fa5s.copy", color=color))
         except Exception:
-            pass
-        try:
             self._copy_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon))
-        except Exception:
-            pass
 
     def refresh_copy_button_icon(self) -> None:
         self._set_copy_button_icon(self._role)
@@ -1341,6 +1446,8 @@ class _ChatBubbleWidget(QWidget):
         thinking: str = "",
         thinking_expanded: bool = False,
         thinking_active: bool = False,
+        thinking_spinner_phase: int = 0,
+        stopped_by_user: bool = False,
         on_toggle_thinking: Optional[Callable[[], None]] = None,
     ) -> None:
         self._role = role
@@ -1363,15 +1470,14 @@ class _ChatBubbleWidget(QWidget):
             has_thoughts = bool(thinking.strip())
             label = tr("Thoughts")
             if thinking_active:
-                self._thinking_spinner_phase = (self._thinking_spinner_phase + 1) % 3
-                dots = "." * (self._thinking_spinner_phase + 1)
+                phase = thinking_spinner_phase % 3
+                dots = "." * (phase + 1)
                 dots = f"{dots}{' ' * max(0, 3 - len(dots))}"
                 label = f"{tr('Thinking')}{dots}"
-            else:
-                self._thinking_spinner_phase = 0
             self._thinking_toggle_button.setText(label)
-            self._thinking_toggle_button.setVisible(thinking_active or has_thoughts)
-            self._thinking_toggle_button.setEnabled(thinking_active or has_thoughts)
+            # Only show the toggle once there is actual thought content to view.
+            self._thinking_toggle_button.setVisible(has_thoughts)
+            self._thinking_toggle_button.setEnabled(has_thoughts)
 
             if thinking_active:
                 self._thinking_toggle_button.setToolTip(tr("Model is thinking"))
@@ -1382,6 +1488,8 @@ class _ChatBubbleWidget(QWidget):
 
         if self._rich_view is not None:
             html_body = assistant_formatter(content)
+            if stopped_by_user:
+                html_body = f"{html_body}<p><small><em>{html.escape(tr('Stopped by user.'))}</em></small></p>"
             html_doc = f"<html><head><meta charset='utf-8'></head><body>{html_body}</body></html>"
             self._rich_view.setHtml(html_doc)
             self._reflow_rich_view_height()
@@ -1394,7 +1502,10 @@ class _ChatBubbleWidget(QWidget):
                     if thinking_index > rich_index >= 0:
                         layout.removeWidget(self._thinking_view)
                         layout.insertWidget(rich_index, self._thinking_view)
-                thinking_html = assistant_formatter(thinking.strip()) if thinking.strip() else ""
+                if thinking.strip():
+                    thinking_html = assistant_formatter(thinking.strip())
+                else:
+                    thinking_html = ""
                 thinking_doc = f"<html><head><meta charset='utf-8'></head><body>{thinking_html}</body></html>"
                 self._thinking_view.setHtml(thinking_doc)
                 self._thinking_view.setVisible(thinking_expanded and bool(thinking.strip()))

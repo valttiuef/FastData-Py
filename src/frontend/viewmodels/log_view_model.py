@@ -46,7 +46,7 @@ class LogViewModel(QObject):
         self._model_name: Optional[str] = None
         self._provider: str = "openai"
         self._thinking_mode: str = "standard"
-        self.current_session_id: Optional[int] = ensure_default_chat_session()
+        self.current_session_id: Optional[int] = self._resolve_initial_session_id()
         self._pending_turn_id: Optional[str] = None
         self._pending_thinking_text: str = ""
 
@@ -57,6 +57,12 @@ class LogViewModel(QObject):
         self.llm_model.token_received.connect(self.llm_token_received)
         self.llm_model.response_finished.connect(self._on_llm_finished)
         self.llm_model.error.connect(self._on_llm_error)
+
+    def _resolve_initial_session_id(self) -> int:
+        sessions = list_chat_sessions()
+        if sessions:
+            return int(sessions[0]["id"])
+        return ensure_default_chat_session()
 
     def set_api_key(self, value: Optional[str]) -> None:
         self._api_key = value or None
