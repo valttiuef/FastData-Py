@@ -11,7 +11,7 @@ from typing import Optional, Sequence, TYPE_CHECKING
 
 import pandas as pd
 
-from PySide6.QtCore import Qt, QTimer, QSize
+from PySide6.QtCore import Qt, QTimer, QSize, QEvent
 from PySide6.QtWidgets import (
 
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout,
@@ -28,6 +28,7 @@ from frontend.models.database_model import DatabaseModel
 from ..widgets.fast_table import FastTable
 from ..widgets.help_widgets import InfoButton
 from ..viewmodels.help_viewmodel import HelpViewModel, get_help_viewmodel
+from ..style.styles import muted_icon_color
 from ..threading.runner import run_in_thread
 from ..threading.utils import run_in_main_thread
 
@@ -507,18 +508,10 @@ class ImportOptionsDialog(QDialog):
         # Small icon-only refresh button (refresh preview using current settings)
         self._refresh_btn = QToolButton(self)
         self._refresh_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-        try:
-            icon = qta.icon("fa5s.sync-alt")
-        except Exception:
-            try:
-                icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DialogResetButton)
-            except Exception:
-                icon = None
-        if icon:
-            self._refresh_btn.setIcon(icon)
         self._refresh_btn.setAutoRaise(True)
         self._refresh_btn.setFixedSize(20, 20)
         self._refresh_btn.setIconSize(QSize(14, 14))
+        self._set_refresh_button_icon()
         self._refresh_btn.setToolTip(tr("Refresh preview (use current settings)"))
         # Clicking refresh should refresh preview but skip guessing
         self._refresh_btn.clicked.connect(lambda: self._request_preview_refresh(guess=False))
@@ -749,7 +742,27 @@ class ImportOptionsDialog(QDialog):
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
+        self._set_refresh_button_icon()
         self._schedule_startup_tasks()
+
+    def changeEvent(self, event: QEvent) -> None:
+        super().changeEvent(event)
+        if event.type() in {
+            QEvent.Type.PaletteChange,
+            QEvent.Type.ApplicationPaletteChange,
+            QEvent.Type.StyleChange,
+        }:
+            self._set_refresh_button_icon()
+
+    def _set_refresh_button_icon(self) -> None:
+        try:
+            color = muted_icon_color(self._refresh_btn.palette())
+            self._refresh_btn.setIcon(qta.icon("fa5s.sync-alt", color=color))
+        except Exception:
+            try:
+                self._refresh_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogResetButton))
+            except Exception:
+                pass
 
     def _schedule_startup_tasks(self) -> None:
         if self._startup_tasks_scheduled:

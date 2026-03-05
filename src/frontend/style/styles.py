@@ -130,6 +130,26 @@ def _qcolor(value: str) -> QColor:
     return color
 
 
+# @ai(gpt-5.2-codex, codex-cli, refactor, 2026-03-05)
+def muted_icon_color(
+    palette: QPalette,
+    *,
+    text_role: QPalette.ColorRole = QPalette.ColorRole.ButtonText,
+    surface_role: QPalette.ColorRole = QPalette.ColorRole.Button,
+    text_weight: float = 0.72,
+) -> QColor:
+    """Return a theme-aware muted icon tone by blending text and surface palette roles."""
+    text = palette.color(text_role)
+    surface = palette.color(surface_role)
+    weight = max(0.0, min(1.0, text_weight))
+    inv = 1.0 - weight
+    return QColor(
+        int(round(text.red() * weight + surface.red() * inv)),
+        int(round(text.green() * weight + surface.green() * inv)),
+        int(round(text.blue() * weight + surface.blue() * inv)),
+    )
+
+
 def _build_palette(theme_colors: dict[str, str]) -> QPalette:
     palette = QPalette()
 
