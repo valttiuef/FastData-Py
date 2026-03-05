@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QTextEdit,
+    QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
@@ -186,9 +186,11 @@ class HelpPopup(AskAiDialog):
         self._title_label.setWordWrap(True)
         content_layout.addWidget(self._title_label)
 
-        # Body text editor (supports HTML and is editable)
-        self._body_editor = QTextEdit()
+        # Body browser (supports clickable links in help HTML)
+        self._body_editor = QTextBrowser()
         self._body_editor.setFrameStyle(QFrame.Shape.NoFrame)
+        self._body_editor.setReadOnly(True)
+        self._body_editor.setOpenExternalLinks(True)
         content_layout.addWidget(self._body_editor, stretch=1)
 
         super().__init__(

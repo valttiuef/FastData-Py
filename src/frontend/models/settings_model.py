@@ -52,6 +52,7 @@ class SettingsModel(QObject):
             if model_value:
                 self._llm_models[provider] = model_value
         self._openai_api_key = self._settings_manager.get_openai_api_key()
+        self._llm_thinking_mode = self._settings_manager.get_llm_thinking_mode()
         self._language = self._settings_manager.get_language()
 
     # ------------------------------------------------------------------
@@ -192,6 +193,22 @@ class SettingsModel(QObject):
 
     def default_llm_model(self, provider: str) -> str:
         return self._settings_manager.default_llm_model(provider)
+
+
+    # @ai(gpt-5.2-codex, codex-cli, feature, 2026-03-05)
+    @property
+    def llm_thinking_mode(self) -> str:
+        return self._llm_thinking_mode or "standard"
+
+    # @ai(gpt-5.2-codex, codex-cli, feature, 2026-03-05)
+    def set_llm_thinking_mode(self, mode: str) -> None:
+        normalized = (mode or "standard").strip().lower()
+        if normalized not in {"off", "standard", "high"}:
+            normalized = "standard"
+        if normalized == self._llm_thinking_mode:
+            return
+        self._llm_thinking_mode = normalized
+        self._settings_manager.set_llm_thinking_mode(normalized)
 
 
     @property

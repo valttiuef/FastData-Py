@@ -1,4 +1,15 @@
 entries:
+  chat.sessions:
+    title: "Chat sessions"
+    short: "Create, switch, and delete independent chat histories."
+    body: |
+      <p>Chat history is stored per session.</p>
+      <ul>
+        <li><b>New Chat</b> creates a separate empty session.</li>
+        <li><b>Delete Chat</b> removes only the currently selected session.</li>
+        <li>Other sessions and their history remain available in the session selector.</li>
+      </ul>
+
   chat.overview:
     title: "Overview"
     short: "Ask the built-in assistant and keep a record of conversations."
@@ -6,16 +17,6 @@ entries:
       <p>The chat window lets you send questions to the assistant and keeps a history in the log database.</p>
       <ul>
         <li>Chat messages are saved automatically with the log database.</li>
-        <li>Clearing chat history removes conversations but keeps other log entries.</li>
+        <li>Each chat session can be deleted separately without removing other log entries.</li>
         <li>Resetting the log database clears chat history too.</li>
-      </ul>
-
-  chat.clear_history:
-    title: "Clear history"
-    short: "Remove chat transcripts without deleting logs."
-    body: |
-      <p>Use the chat window to clear the current chat history.</p>
-      <ul>
-        <li>This only removes chat messages; other logs remain.</li>
-        <li>Resetting the log database clears both logs and chats.</li>
       </ul>

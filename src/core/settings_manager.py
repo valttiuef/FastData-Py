@@ -121,6 +121,19 @@ class SettingsManager:
     def set_llm_model(self, model: str, provider: str) -> None:
         self.settings.setValue(self._model_key(provider), model)
 
+    # @ai(gpt-5.2-codex, codex-cli, feature, 2026-03-05)
+    def get_llm_thinking_mode(self) -> str:
+        value = self.settings.value("llm_thinking_mode", "standard")
+        mode = str(value or "standard").lower()
+        return mode if mode in {"off", "standard", "high"} else "standard"
+
+    # @ai(gpt-5.2-codex, codex-cli, feature, 2026-03-05)
+    def set_llm_thinking_mode(self, mode: str) -> None:
+        normalized = str(mode or "standard").lower()
+        if normalized not in {"off", "standard", "high"}:
+            normalized = "standard"
+        self.settings.setValue("llm_thinking_mode", normalized)
+
     @staticmethod
     def default_llm_model(provider: str) -> str:
         return "gpt-4o-mini" if provider == "openai" else "llama3.2"

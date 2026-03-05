@@ -123,3 +123,46 @@ class TestOllamaProviderErrorHandling:
         assert any(pattern in error_message for pattern in expected_patterns), (
             f"Error message '{error_message}' did not contain any expected pattern"
         )
+
+
+class TestOllamaModelListing:
+    """Tests for Ollama model listing response formats."""
+
+    def test_list_models_parses_object_response(self):
+        """Ollama list() can return typed objects instead of dictionaries."""
+        provider = OllamaProvider()
+
+        class _Model:
+            def __init__(self, model: str):
+                self.model = model
+
+        class _ListResponse:
+            def __init__(self):
+                self.models = [_Model("llama3.2"), _Model("mistral")]
+
+        fake_client = MagicMock()
+        fake_client.list.return_value = _ListResponse()
+        fake_ollama = MagicMock()
+        fake_ollama.Client.return_value = fake_client
+
+        with patch("backend.services.llm.ollama_provider.OLLAMA_AVAILABLE", True), patch(
+            "backend.services.llm.ollama_provider._ensure_ollama_running"
+        ), patch("backend.services.llm.ollama_provider.ollama", fake_ollama):
+            models = provider.list_models()
+
+        assert models == ["llama3.2", "mistral"]
+
+    def test_list_models_parses_dict_response(self):
+        """Legacy dict-style list() responses are still supported."""
+        provider = OllamaProvider()
+        fake_client = MagicMock()
+        fake_client.list.return_value = {"models": [{"name": "llama3.2"}, {"model": "mistral"}]}
+        fake_ollama = MagicMock()
+        fake_ollama.Client.return_value = fake_client
+
+        with patch("backend.services.llm.ollama_provider.OLLAMA_AVAILABLE", True), patch(
+            "backend.services.llm.ollama_provider._ensure_ollama_running"
+        ), patch("backend.services.llm.ollama_provider.ollama", fake_ollama):
+            models = provider.list_models()
+
+        assert models == ["llama3.2", "mistral"]

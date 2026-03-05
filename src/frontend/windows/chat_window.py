@@ -1,5 +1,6 @@
 
 from __future__ import annotations
+from datetime import datetime
 import html
 import json
 import re
@@ -8,7 +9,7 @@ from collections.abc import Callable
 from typing import Optional
 
 from PySide6.QtCore import QEvent, QTimer, Qt, Signal, QSize
-from PySide6.QtGui import QCloseEvent, QShowEvent, QColor, QPalette
+from PySide6.QtGui import QCloseEvent, QShowEvent, QColor, QPalette, QFontMetrics
 from PySide6.QtWidgets import (
 
     QAbstractItemView,
@@ -37,6 +38,7 @@ from ..models.log_model import LogEvent
 from ..models.settings_model import SettingsModel
 from ..viewmodels.log_view_model import LogViewModel
 from ..viewmodels.help_viewmodel import HelpViewModel, get_help_viewmodel
+from ..utils import toast_error, toast_success, toast_warn
 from ..widgets.collapsible_section import CollapsibleSection
 from ..widgets.help_widgets import InfoButton
 
@@ -46,6 +48,10 @@ from ..widgets.help_widgets import InfoButton
 class _ChatMessage:
     role: str  # "user" | "assistant" | "error"
     content: str
+    thinking: str = ""
+    thinking_active: bool = False
+    thinking_expanded: bool = False
+    turn_id: str = ""
 
 
 class ChatWindow(QWidget):
@@ -71,6 +77,8 @@ class ChatWindow(QWidget):
                 resolved_help = None
         self._help_viewmodel = resolved_help
         self._stored_api_key: Optional[str] = None
+        self._restoring_llm_settings = False
+        self._pending_openai_key_test = False
 
         self._messages: list[_ChatMessage] = []
         self._streaming_index: Optional[int] = None
@@ -81,6 +89,9 @@ class ChatWindow(QWidget):
         self._render_timer = QTimer(self)
         self._render_timer.setSingleShot(True)
         self._render_timer.timeout.connect(self._flush_stream_updates)
+        self._thinking_spinner_timer = QTimer(self)
+        self._thinking_spinner_timer.setInterval(220)
+        self._thinking_spinner_timer.timeout.connect(self._refresh_thinking_spinners)
 
         self.setObjectName("chatWindow")
         self.setWindowTitle(tr("Chat"))
@@ -100,6 +111,23 @@ class ChatWindow(QWidget):
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(6)
+        self._refresh_models_button = QToolButton(self)
+        self._refresh_models_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self._refresh_models_button.setAutoRaise(True)
+        self._refresh_models_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._refresh_models_button.setFixedSize(20, 20)
+        self._refresh_models_button.setIconSize(QSize(14, 14))
+        try:
+            refresh_icon = qta.icon("fa5s.sync-alt")
+        except Exception:
+            try:
+                refresh_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DialogResetButton)
+            except Exception:
+                refresh_icon = None
+        if refresh_icon:
+            self._refresh_models_button.setIcon(refresh_icon)
+        self._refresh_models_button.setToolTip(tr("Refresh available models"))
+        self._refresh_models_button.clicked.connect(self._on_refresh_models_clicked)
         settings_layout.addLayout(grid)
 
         self._provider_label = QLabel(tr("LLM Provider:"), self)
@@ -111,11 +139,38 @@ class ChatWindow(QWidget):
         grid.addWidget(self._with_info(self._provider_selector, "chat.settings.provider"), 0, 1)
 
         self._model_label = QLabel(tr("Model name:"), self)
-        self._model_input = QLineEdit(self)
-        self._model_input.setPlaceholderText(tr("Model identifier (e.g. gpt-4o-mini, llama3.2)"))
-        self._model_input.editingFinished.connect(self._persist_model_choice)
+        self._model_input = QComboBox(self)
+        self._model_input.setEditable(True)
+        self._model_input.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self._model_input.lineEdit().setPlaceholderText(tr("Model identifier (e.g. gpt-4o-mini, llama3.2)"))
+        self._model_input.lineEdit().editingFinished.connect(self._persist_model_choice)
+        self._model_input.activated.connect(lambda *_: self._persist_model_choice())
         grid.addWidget(self._model_label, 1, 0)
-        grid.addWidget(self._with_info(self._model_input, "chat.settings.model_name"), 1, 1)
+        model_row = QWidget(self)
+        model_row_layout = QHBoxLayout(model_row)
+        model_row_layout.setContentsMargins(0, 0, 0, 0)
+        model_row_layout.setSpacing(6)
+        model_size_policy = self._model_input.sizePolicy()
+        model_size_policy.setHorizontalPolicy(QSizePolicy.Policy.Expanding)
+        self._model_input.setSizePolicy(model_size_policy)
+        model_row_layout.addWidget(self._model_input, 1)
+        model_row_layout.addWidget(self._refresh_models_button, 0, Qt.AlignmentFlag.AlignVCenter)
+        if self._help_viewmodel is not None:
+            model_row_layout.addWidget(
+                InfoButton("chat.settings.model_name", self._help_viewmodel, parent=model_row),
+                0,
+                Qt.AlignmentFlag.AlignRight,
+            )
+        grid.addWidget(model_row, 1, 1)
+
+        self._thinking_label = QLabel(tr("Thinking mode:"), self)
+        self._thinking_selector = QComboBox(self)
+        self._thinking_selector.addItem(tr("Off"), "off")
+        self._thinking_selector.addItem(tr("Standard"), "standard")
+        self._thinking_selector.addItem(tr("High"), "high")
+        self._thinking_selector.currentIndexChanged.connect(self._on_thinking_mode_changed)
+        grid.addWidget(self._thinking_label, 2, 0)
+        grid.addWidget(self._with_info(self._thinking_selector, "chat.settings.thinking_mode"), 2, 1)
 
         self._api_label = QLabel(tr("API Key:"), self)
         self._api_key_row = QWidget(self)
@@ -127,30 +182,45 @@ class ChatWindow(QWidget):
         self._api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
         self._api_key_input.editingFinished.connect(self._persist_api_key)
         api_layout.addWidget(self._api_key_input, stretch=1)
+        self._test_api_key_button = QPushButton(tr("Test"), self)
+        self._test_api_key_button.setToolTip(tr("Test and save API key"))
+        self._test_api_key_button.clicked.connect(self._test_openai_api_key)
+        api_layout.addWidget(self._test_api_key_button)
         self._clear_api_key_button = QPushButton(tr("Clear"), self)
         self._clear_api_key_button.setToolTip(tr("Clear stored API key"))
         self._clear_api_key_button.clicked.connect(self._confirm_clear_api_key)
         api_layout.addWidget(self._clear_api_key_button)
         self._api_key_row_container = self._with_info(self._api_key_row, "chat.settings.api_key")
-        grid.addWidget(self._api_label, 2, 0)
-        grid.addWidget(self._api_key_row_container, 2, 1)
+        grid.addWidget(self._api_label, 3, 0)
+        grid.addWidget(self._api_key_row_container, 3, 1)
 
-        labels = [self._provider_label, self._model_label, self._api_label]
+        labels = [self._provider_label, self._model_label, self._thinking_label, self._api_label]
         max_width = max(label.sizeHint().width() for label in labels)
         grid.setColumnMinimumWidth(0, max_width)
         for label in labels:
             label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
-        clear_row = QHBoxLayout()
-        clear_row.setContentsMargins(0, 0, 0, 0)
-        clear_row.setSpacing(6)
-        clear_row.addStretch(1)
-        self._clear_chats_button = QPushButton(tr("Clear chats"), self)
-        self._clear_chats_button.clicked.connect(self._confirm_clear_chats)
-        clear_row.addWidget(self._clear_chats_button)
-        settings_layout.addLayout(clear_row)
-
         layout.addWidget(self._settings_section)
+
+        session_row = QHBoxLayout()
+        session_row.setContentsMargins(0, 0, 0, 0)
+        session_row.setSpacing(8)
+        self._session_selector = QComboBox(self)
+        self._session_selector.currentIndexChanged.connect(self._on_session_changed)
+        session_row.addWidget(self._session_selector, stretch=1)
+        self._new_chat_button = QPushButton(tr("New Chat"), self)
+        self._new_chat_button.clicked.connect(self._on_new_session)
+        session_row.addWidget(self._new_chat_button)
+        self._delete_chat_button = QPushButton(tr("Delete Chat"), self)
+        self._delete_chat_button.clicked.connect(self._confirm_delete_session)
+        session_row.addWidget(self._delete_chat_button)
+        if self._help_viewmodel is not None:
+            session_row.addWidget(
+                InfoButton("chat.sessions", self._help_viewmodel, parent=self),
+                0,
+                Qt.AlignmentFlag.AlignRight,
+            )
+        layout.addLayout(session_row)
 
         self._chat_list = QListWidget(self)
         self._chat_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -183,14 +253,21 @@ class ChatWindow(QWidget):
 
         self._log_view_model.log_model.entry_added.connect(self._on_log_entry_added)
         self._log_view_model.log_model.cleared.connect(self._on_log_cleared)
+        self._log_view_model.sessions_refreshed.connect(self._render_sessions)
+        self._log_view_model.session_messages_loaded.connect(self._load_session_messages)
 
         self._log_view_model.llm_response_started.connect(self._on_llm_response_started)
+        self._log_view_model.llm_thinking_started.connect(self._on_llm_thinking_started)
+        self._log_view_model.llm_thinking_token_received.connect(self._on_llm_thinking_token_received)
+        self._log_view_model.llm_thinking_finished.connect(self._on_llm_thinking_finished)
         self._log_view_model.llm_token_received.connect(self._on_llm_token_received)
         self._log_view_model.llm_response_finished.connect(self._on_llm_response_finished)
         self._log_view_model.llm_error.connect(self._on_llm_error)
+        self._log_view_model.llm_models_refreshed.connect(self._on_provider_models_refreshed)
+        self._log_view_model.llm_models_refresh_failed.connect(self._on_provider_models_refresh_failed)
 
         self._restore_llm_settings()
-        self._rebuild_from_log()
+        self._log_view_model.refresh_sessions_list()
 
     def retranslate_ui(self) -> None:
         self.setWindowTitle(tr("Chat"))
@@ -199,12 +276,20 @@ class ChatWindow(QWidget):
         self._provider_selector.setItemText(0, tr("ChatGPT (OpenAI)"))
         self._provider_selector.setItemText(1, tr("Ollama (Local)"))
         self._model_label.setText(tr("Model name:"))
-        self._model_input.setPlaceholderText(tr("Model identifier (e.g. gpt-4o-mini, llama3.2)"))
+        self._model_input.lineEdit().setPlaceholderText(tr("Model identifier (e.g. gpt-4o-mini, llama3.2)"))
+        self._thinking_label.setText(tr("Thinking mode:"))
+        self._thinking_selector.setItemText(0, tr("Off"))
+        self._thinking_selector.setItemText(1, tr("Standard"))
+        self._thinking_selector.setItemText(2, tr("High"))
+        self._refresh_models_button.setToolTip(tr("Refresh available models"))
         self._api_label.setText(tr("API Key:"))
         self._api_key_input.setPlaceholderText(tr("OpenAI API key"))
+        self._test_api_key_button.setText(tr("Test"))
+        self._test_api_key_button.setToolTip(tr("Test and save API key"))
         self._clear_api_key_button.setText(tr("Clear"))
         self._clear_api_key_button.setToolTip(tr("Clear stored API key"))
-        self._clear_chats_button.setText(tr("Clear chats"))
+        self._new_chat_button.setText(tr("New Chat"))
+        self._delete_chat_button.setText(tr("Delete Chat"))
         self._input.setPlaceholderText(tr("Ask anything…"))
         self._send_button.setText(tr("Send"))
 
@@ -243,27 +328,100 @@ class ChatWindow(QWidget):
 
     # ------------------------------------------------------------------
     def _restore_llm_settings(self) -> None:
+        self._restoring_llm_settings = True
         provider = self._settings_model.llm_provider or "openai"
-        provider_index = self._provider_selector.findData(provider)
-        if provider_index >= 0:
-            self._provider_selector.setCurrentIndex(provider_index)
+        try:
+            self._provider_selector.blockSignals(True)
+            provider_index = self._provider_selector.findData(provider)
+            if provider_index >= 0:
+                self._provider_selector.setCurrentIndex(provider_index)
+            else:
+                self._provider_selector.setCurrentIndex(0)
+            self._provider_selector.blockSignals(False)
+
+            self._stored_api_key = self._settings_model.openai_api_key or None
+            self._api_key_input.setText(self._stored_api_key or "")
+
+            model = self._settings_model.llm_model(provider)
+            self._set_model_value(model)
+
+            thinking_mode = self._settings_model.llm_thinking_mode
+            think_index = self._thinking_selector.findData(thinking_mode)
+            self._thinking_selector.setCurrentIndex(think_index if think_index >= 0 else 1)
+
+            self._log_view_model.set_provider(provider)
+            self._log_view_model.set_api_key(self._stored_api_key)
+            self._log_view_model.set_model_name(model or None)
+            self._log_view_model.set_thinking_mode(self._thinking_selector.currentData(Qt.ItemDataRole.UserRole) or "standard")
+            self._on_provider_changed(self._provider_selector.currentIndex())
+        finally:
+            self._provider_selector.blockSignals(False)
+            self._restoring_llm_settings = False
+
+    def _set_model_value(self, value: str) -> None:
+        text = (value or "").strip()
+        index = self._model_input.findText(text)
+        if index >= 0:
+            self._model_input.setCurrentIndex(index)
         else:
-            self._provider_selector.setCurrentIndex(0)
+            self._model_input.setEditText(text)
 
-        self._stored_api_key = self._settings_model.openai_api_key or None
-        self._api_key_input.setText(self._stored_api_key or "")
+    def _refresh_provider_models(self, *, notify_missing_key: bool = True) -> None:
+        provider = str(self._provider_selector.currentData(Qt.ItemDataRole.UserRole) or "openai")
+        api_key = None
+        if provider == "openai":
+            api_key = self._resolve_openai_api_key(persist=True)
+            if not api_key:
+                if notify_missing_key:
+                    toast_warn(
+                        tr("OpenAI API key is required before fetching models."),
+                        title=tr("Chat"),
+                    )
+                return
+        self._log_view_model.refresh_provider_models(provider, api_key=api_key)
 
-        model = self._settings_model.llm_model(provider)
-        self._model_input.setText(model)
+    def _on_refresh_models_clicked(self) -> None:
+        self._refresh_provider_models(notify_missing_key=True)
 
-        self._log_view_model.set_provider(provider)
-        self._log_view_model.set_api_key(self._stored_api_key)
-        self._log_view_model.set_model_name(model or None)
-        self._on_provider_changed(self._provider_selector.currentIndex())
+    def _on_provider_models_refreshed(self, provider: str, models: list[str]) -> None:
+        if provider == "openai" and self._pending_openai_key_test:
+            self._pending_openai_key_test = False
+            toast_success(tr("OpenAI API key is valid."), title=tr("Chat"))
+        current_provider = str(self._provider_selector.currentData(Qt.ItemDataRole.UserRole) or "")
+        if provider != current_provider:
+            return
+        if not models:
+            return
+        current_text = self._model_input.currentText().strip()
+        self._model_input.blockSignals(True)
+        try:
+            self._model_input.clear()
+            self._model_input.addItems(models)
+            if current_text:
+                self._set_model_value(current_text)
+            else:
+                self._set_model_value(models[0])
+        finally:
+            self._model_input.blockSignals(False)
+
+    def _on_provider_models_refresh_failed(self, provider: str, message: str) -> None:
+        if provider == "openai" and self._pending_openai_key_test:
+            self._pending_openai_key_test = False
+        current_provider = str(self._provider_selector.currentData(Qt.ItemDataRole.UserRole) or "")
+        if provider != current_provider:
+            return
+        if message:
+            toast_error(message, title=tr("Chat"))
+
+    # @ai(gpt-5.2-codex, codex-cli, feature, 2026-03-05)
+    def _on_thinking_mode_changed(self, _index: int) -> None:
+        mode = str(self._thinking_selector.currentData(Qt.ItemDataRole.UserRole) or "standard")
+        self._settings_model.set_llm_thinking_mode(mode)
+        self._log_view_model.set_thinking_mode(mode)
 
     def _persist_model_choice(self) -> None:
         provider = self._provider_selector.currentData(Qt.ItemDataRole.UserRole)
-        model_name = self._model_input.text().strip()
+        model_name = self._model_input.currentText().strip()
         if not model_name:
             self._log_view_model.set_model_name(None)
             return
@@ -274,9 +432,20 @@ class ChatWindow(QWidget):
         value = self._api_key_input.text().strip()
         if not value:
             return
-        self._stored_api_key = value
-        self._settings_model.set_openai_api_key(value)
-        self._log_view_model.set_api_key(value)
+        self._save_openai_api_key(value)
+        if self._provider_selector.currentData(Qt.ItemDataRole.UserRole) == "openai":
+            self._refresh_provider_models()
+
+    def _test_openai_api_key(self) -> None:
+        api_key = self._resolve_openai_api_key(persist=True)
+        if not api_key:
+            toast_warn(
+                tr("OpenAI API key is required before testing."),
+                title=tr("Chat"),
+            )
+            return
+        self._pending_openai_key_test = True
+        self._log_view_model.refresh_provider_models("openai", api_key=api_key)
 
     def _confirm_clear_api_key(self) -> None:
         reply = QMessageBox.question(
@@ -292,18 +461,7 @@ class ChatWindow(QWidget):
         self._stored_api_key = None
         self._settings_model.set_openai_api_key("")
         self._log_view_model.set_api_key(None)
-
-    def _confirm_clear_chats(self) -> None:
-        reply = QMessageBox.question(
-            self,
-            tr("Clear chat history"),
-            tr("This will clear all chat history from the current database. This cannot be undone. Continue?"),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if reply != QMessageBox.StandardButton.Yes:
-            return
-        self._log_view_model.clear_chat_history()
+        self._pending_openai_key_test = False
 
     def _on_provider_changed(self, _index: int) -> None:
         provider = self._provider_selector.currentData(Qt.ItemDataRole.UserRole)
@@ -315,12 +473,19 @@ class ChatWindow(QWidget):
         self._log_view_model.set_provider(provider)
 
         if is_openai:
-            self._model_input.setPlaceholderText(tr("OpenAI model (gpt-4o-mini, gpt-4o, gpt-3.5-turbo)"))
+            self._model_input.lineEdit().setPlaceholderText(tr("OpenAI model (gpt-4o-mini, gpt-4o, gpt-3.5-turbo)"))
         else:
-            self._model_input.setPlaceholderText(tr("Local model (llama3.2, mistral, codellama)"))
+            self._model_input.lineEdit().setPlaceholderText(tr("Local model (llama3.2, mistral, codellama)"))
 
         default_model = self._settings_model.llm_model(provider)
-        self._model_input.setText(default_model)
+        self._model_input.blockSignals(True)
+        try:
+            self._model_input.clear()
+            if default_model:
+                self._model_input.addItem(default_model)
+        finally:
+            self._model_input.blockSignals(False)
+        self._set_model_value(default_model)
         self._log_view_model.set_model_name(default_model or None)
 
         if is_openai:
@@ -330,6 +495,8 @@ class ChatWindow(QWidget):
         else:
             self._log_view_model.set_api_key(None)
 
+        self._refresh_provider_models(notify_missing_key=False)
+
     # ------------------------------------------------------------------
     def _send_message(self) -> None:
         text = self._input.text().strip()
@@ -338,23 +505,28 @@ class ChatWindow(QWidget):
 
         provider = self._provider_selector.currentData(Qt.ItemDataRole.UserRole)
         self._log_view_model.set_provider(provider)
+        self._log_view_model.set_thinking_mode(str(self._thinking_selector.currentData(Qt.ItemDataRole.UserRole) or "standard"))
 
-        model_name = self._model_input.text().strip() or self._settings_model.llm_model(provider)
+        model_name = self._model_input.currentText().strip() or self._settings_model.llm_model(provider)
         self._log_view_model.set_model_name(model_name or None)
         if model_name:
             self._settings_model.set_llm_model(model_name, provider)
 
         api_key = self._api_key_input.text().strip() or self._stored_api_key or None
-        self._stored_api_key = api_key
         if provider == "openai":
-            if api_key:
-                self._settings_model.set_openai_api_key(api_key)
+            api_key = self._resolve_openai_api_key(persist=True)
+            if not api_key:
+                toast_warn(
+                    tr("OpenAI API key is required before sending a message."),
+                    title=tr("Chat"),
+                )
+                return
             self._log_view_model.set_api_key(api_key)
         else:
             self._log_view_model.set_api_key(None)
 
         self._set_llm_busy(True)
-        self._log_view_model.ask_llm(text)
+        self._log_view_model.ask_llm(text, session_id=self._log_view_model.current_session_id)
         self._input.clear()
 
     # ------------------------------------------------------------------
@@ -362,6 +534,34 @@ class ChatWindow(QWidget):
         self._saw_llm_log_for_stream = False
         self._streaming_index = len(self._messages)
         self._append_message("assistant", "…")
+        self._thinking_spinner_timer.start()
+
+    def _on_llm_thinking_started(self) -> None:
+        if self._streaming_index is None or self._streaming_index >= len(self._messages):
+            return
+        msg = self._messages[self._streaming_index]
+        msg.thinking = ""
+        # Only show active thinking UI after we receive real thinking tokens.
+        msg.thinking_active = False
+        self._update_message_item(self._streaming_index)
+        self._refresh_thinking_spinner_state()
+
+    def _on_llm_thinking_token_received(self, token: str) -> None:
+        if self._streaming_index is None or self._streaming_index >= len(self._messages):
+            return
+        msg = self._messages[self._streaming_index]
+        msg.thinking += token
+        msg.thinking_active = True
+        self._update_message_item(self._streaming_index)
+        self._refresh_thinking_spinner_state()
+
+    def _on_llm_thinking_finished(self, _text: str) -> None:
+        if self._streaming_index is None or self._streaming_index >= len(self._messages):
+            return
+        msg = self._messages[self._streaming_index]
+        msg.thinking_active = False
+        self._update_message_item(self._streaming_index)
+        self._refresh_thinking_spinner_state()
 
     def _on_llm_token_received(self, token: str) -> None:
         if self._streaming_index is None:
@@ -395,8 +595,11 @@ class ChatWindow(QWidget):
         self._saw_llm_log_for_stream = False
         self._pending_stream_append.clear()
         self._set_llm_busy(False)
+        self._refresh_thinking_spinner_state()
 
     def _on_llm_error(self, message: str) -> None:
+        if self._streaming_index is not None and 0 <= self._streaming_index < len(self._messages):
+            self._messages[self._streaming_index].thinking_active = False
         self._streaming_index = None
         self._saw_llm_log_for_stream = False
         self._pending_stream_append.clear()
@@ -406,14 +609,88 @@ class ChatWindow(QWidget):
                 return
             self._append_message("error", message)
             self._suppress_next_llm_error_log = message.strip()
+        self._refresh_thinking_spinner_state()
+
+    # ------------------------------------------------------------------
+    def _render_sessions(self, sessions: list[dict]) -> None:
+        current_id = self._log_view_model.current_session_id
+        self._session_selector.blockSignals(True)
+        self._session_selector.clear()
+        for row in sessions:
+            title = row.get("title") or tr("Chat")
+            updated = row.get("updated_at") or 0.0
+            try:
+                stamp = datetime.fromtimestamp(float(updated)).strftime("%Y-%m-%d %H:%M")
+            except Exception:
+                stamp = "-"
+            label = f"{title} ({stamp})"
+            self._session_selector.addItem(label, int(row.get("id")))
+        if self._session_selector.count() > 0:
+            target = current_id if current_id is not None else self._session_selector.itemData(0)
+            index = self._session_selector.findData(target)
+            if index < 0:
+                index = 0
+            self._session_selector.setCurrentIndex(index)
+            session_id = int(self._session_selector.currentData(Qt.ItemDataRole.UserRole))
+            self._log_view_model.select_session(session_id)
+        self._session_selector.blockSignals(False)
+
+    def _load_session_messages(self, messages: list[dict]) -> None:
+        self._messages = [
+            _ChatMessage(
+                role=str(m.get("role") or "assistant"),
+                content=str(m.get("content") or ""),
+                thinking=str(m.get("thinking") or ""),
+            )
+            for m in messages
+        ]
+        self._rebuild_chat_list()
+
+    def _on_session_changed(self, _index: int) -> None:
+        session_id = self._session_selector.currentData(Qt.ItemDataRole.UserRole)
+        if session_id is None:
+            return
+        self._log_view_model.select_session(int(session_id))
+
+    def _on_new_session(self) -> None:
+        self._log_view_model.new_session()
+        self._log_view_model.log_message(tr("New chat started"), origin="status")
+
+    def _confirm_delete_session(self) -> None:
+        reply = QMessageBox.question(
+            self,
+            tr("Delete chat"),
+            tr("Delete the current chat session? This cannot be undone. Continue?"),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        self._log_view_model.delete_current_session()
 
     # ------------------------------------------------------------------
     def _on_log_cleared(self) -> None:
-        self._rebuild_from_log()
+        self._log_view_model.refresh_sessions_list()
 
     def _on_log_entry_added(self, event: LogEvent) -> None:
+        if event.origin in {"chat", "llm"} and event.session_id is not None:
+            if self._log_view_model.current_session_id is not None and int(event.session_id) != int(self._log_view_model.current_session_id):
+                return
+        if event.origin == "llm_thinking":
+            turn_id = str(event.turn_id or "")
+            if not turn_id:
+                return
+            for idx in range(len(self._messages) - 1, -1, -1):
+                msg = self._messages[idx]
+                if msg.turn_id == turn_id and msg.role in {"assistant", "error"}:
+                    msg.thinking = event.message
+                    msg.thinking_active = False
+                    self._update_message_item(idx)
+                    return
+            return
+
         if event.origin == "chat":
-            self._append_message("user", event.message)
+            self._append_message("user", event.message, turn_id=str(event.turn_id or ""))
             return
 
         if event.origin != "llm":
@@ -426,7 +703,7 @@ class ChatWindow(QWidget):
                 return
             if self._is_duplicate_tail_message("error", event.message):
                 return
-            self._append_message("error", event.message)
+            self._append_message("error", event.message, turn_id=str(event.turn_id or ""))
             return
 
         if self._suppress_next_llm_log and message == self._suppress_next_llm_log:
@@ -439,7 +716,7 @@ class ChatWindow(QWidget):
             self._update_message_item(self._streaming_index)
             return
 
-        self._append_message("assistant", event.message)
+        self._append_message("assistant", event.message, turn_id=str(event.turn_id or ""))
 
     def _rebuild_from_log(self) -> None:
         self._messages = []
@@ -451,15 +728,21 @@ class ChatWindow(QWidget):
 
         for entry in self._log_view_model.log_model.entries():
             if entry.origin == "chat":
-                self._messages.append(_ChatMessage(role="user", content=entry.message))
+                self._messages.append(_ChatMessage(role="user", content=entry.message, turn_id=str(entry.turn_id or "")))
             elif entry.origin == "llm":
                 role = "error" if entry.level >= 40 else "assistant"
-                self._messages.append(_ChatMessage(role=role, content=entry.message))
+                self._messages.append(_ChatMessage(role=role, content=entry.message, turn_id=str(entry.turn_id or "")))
+            elif entry.origin == "llm_thinking":
+                turn_id = str(entry.turn_id or "")
+                for msg in reversed(self._messages):
+                    if msg.turn_id == turn_id and msg.role in {"assistant", "error"}:
+                        msg.thinking = entry.message
+                        break
 
         self._rebuild_chat_list()
 
-    def _append_message(self, role: str, content: str) -> None:
-        self._messages.append(_ChatMessage(role=role, content=content))
+    def _append_message(self, role: str, content: str, *, turn_id: str = "") -> None:
+        self._messages.append(_ChatMessage(role=role, content=content, turn_id=turn_id))
         self._append_message_item(len(self._messages) - 1)
 
     def _is_duplicate_tail_message(self, role: str, content: str) -> bool:
@@ -468,13 +751,57 @@ class ChatWindow(QWidget):
         tail = self._messages[-1]
         return tail.role == role and tail.content.strip() == (content or "").strip()
 
+    def _toggle_thinking(self, idx: int) -> None:
+        if idx < 0 or idx >= len(self._messages):
+            return
+        self._messages[idx].thinking_expanded = not self._messages[idx].thinking_expanded
+        self._update_message_item(idx)
+
+    def _refresh_thinking_spinners(self) -> None:
+        has_active = False
+        for idx, msg in enumerate(self._messages):
+            if not msg.thinking_active:
+                continue
+            has_active = True
+            self._update_message_item(idx)
+        if not has_active:
+            self._thinking_spinner_timer.stop()
+
+    def _refresh_thinking_spinner_state(self) -> None:
+        if any(msg.thinking_active for msg in self._messages):
+            if not self._thinking_spinner_timer.isActive():
+                self._thinking_spinner_timer.start()
+        else:
+            self._thinking_spinner_timer.stop()
+
     def _set_llm_busy(self, value: bool) -> None:
         self._send_button.setDisabled(value)
         self._provider_selector.setDisabled(value)
         self._model_input.setDisabled(value)
+        self._refresh_models_button.setDisabled(value)
         self._api_key_input.setDisabled(value)
+        self._test_api_key_button.setDisabled(value)
         self._clear_api_key_button.setDisabled(value)
-        self._clear_chats_button.setDisabled(value)
+        self._new_chat_button.setDisabled(value)
+        self._delete_chat_button.setDisabled(value)
+        self._session_selector.setDisabled(value)
+        self._thinking_selector.setDisabled(value)
+
+    def _save_openai_api_key(self, value: str) -> None:
+        key = (value or "").strip()
+        if not key:
+            return
+        self._stored_api_key = key
+        self._settings_model.set_openai_api_key(key)
+        self._log_view_model.set_api_key(key)
+
+    def _resolve_openai_api_key(self, *, persist: bool = False) -> Optional[str]:
+        value = self._api_key_input.text().strip() or self._stored_api_key or ""
+        if not value:
+            return None
+        if persist:
+            self._save_openai_api_key(value)
+        return value
 
     # ------------------------------------------------------------------
     def _chat_is_at_bottom(self) -> bool:
@@ -511,7 +838,15 @@ class ChatWindow(QWidget):
             parent=self._chat_list,
         )
         widget.set_available_width(available_width)
-        widget.set_message(msg.role, msg.content, self._format_assistant_content)
+        widget.set_message(
+            msg.role,
+            msg.content,
+            self._format_assistant_content,
+            thinking=msg.thinking,
+            thinking_expanded=msg.thinking_expanded,
+            thinking_active=msg.thinking_active,
+            on_toggle_thinking=lambda _checked=False, index=idx: self._toggle_thinking(index),
+        )
         widget.adjustSize()
 
         self._chat_list.setItemWidget(item, widget)
@@ -538,7 +873,15 @@ class ChatWindow(QWidget):
         try:
             widget.set_available_width(self._chat_list.viewport().width())
             msg = self._messages[idx]
-            widget.set_message(msg.role, msg.content, self._format_assistant_content)
+            widget.set_message(
+                msg.role,
+                msg.content,
+                self._format_assistant_content,
+                thinking=msg.thinking,
+                thinking_expanded=msg.thinking_expanded,
+                thinking_active=msg.thinking_active,
+                on_toggle_thinking=lambda _checked=False, index=idx: self._toggle_thinking(index),
+            )
             widget.adjustSize()
             item.setSizeHint(widget.sizeHint())
             self._chat_list.doItemsLayout()
@@ -788,6 +1131,9 @@ class _ChatBubbleWidget(QWidget):
         self._content_css = content_css
         self._available_width = 800
         self._raw_content = ""
+        self._thinking_toggle_button: Optional[QToolButton] = None
+        self._thinking_view: Optional[QTextBrowser] = None
+        self._thinking_spinner_phase: int = 0
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -818,6 +1164,17 @@ class _ChatBubbleWidget(QWidget):
         self._copy_button.setIconSize(self._copy_button.size() - QSize(6, 6))
         self._copy_button.clicked.connect(self._copy_to_clipboard)
         self._set_copy_button_icon(role)
+        if role == "assistant":
+            self._thinking_toggle_button = QToolButton(header)
+            self._thinking_toggle_button.setObjectName("chatThinkingToggleButton")
+            self._thinking_toggle_button.setAutoRaise(True)
+            self._thinking_toggle_button.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._thinking_toggle_button.setToolTip(tr("Show model thinking"))
+            self._thinking_toggle_button.setFixedHeight(24)
+            metrics = QFontMetrics(self._thinking_toggle_button.font())
+            # Keep width stable so "..." spinner does not shift the layout.
+            self._thinking_toggle_button.setFixedWidth(max(74, metrics.horizontalAdvance(f"{tr('Thinking')}...") + 14))
+            header_layout.addWidget(self._thinking_toggle_button, 0, Qt.AlignmentFlag.AlignRight)
         header_layout.addWidget(self._copy_button, 0, Qt.AlignmentFlag.AlignRight)
         bubble_layout.addWidget(header)
 
@@ -825,6 +1182,19 @@ class _ChatBubbleWidget(QWidget):
         self._rich_view: Optional[QTextBrowser] = None
 
         if role == "assistant":
+            thinking_view = QTextBrowser(self._bubble)
+            thinking_view.setObjectName("chatBubbleThinkingView")
+            thinking_view.setOpenExternalLinks(True)
+            thinking_view.setReadOnly(True)
+            thinking_view.setFrameStyle(QFrame.Shape.NoFrame)
+            thinking_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            thinking_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            thinking_view.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+            thinking_view.document().setDefaultStyleSheet(content_css)
+            thinking_view.setVisible(False)
+            self._thinking_view = thinking_view
+            bubble_layout.addWidget(thinking_view)
+
             view = QTextBrowser(self._bubble)
             view.setObjectName("chatBubbleRichView")
             view.setOpenExternalLinks(True)
@@ -864,20 +1234,29 @@ class _ChatBubbleWidget(QWidget):
     def _copy_to_clipboard(self) -> None:
         clipboard = QApplication.clipboard()
         if self._rich_view is not None:
-            clipboard.setText(self._rich_view.document().toPlainText())
+            text = self._rich_view.document().toPlainText()
+            if self._thinking_view is not None and self._thinking_view.isVisible():
+                thinking_text = self._thinking_view.document().toPlainText().strip()
+                if thinking_text:
+                    text = f"{text}\n\n--- Thinking ---\n{thinking_text}".strip()
+            clipboard.setText(text)
         elif self._text_label is not None:
             clipboard.setText(self._text_label.text())
         else:
             clipboard.setText(self._raw_content)
 
+    # @ai(gpt-5.2-codex, codex-cli, refactor, 2026-03-05)
     def _set_copy_button_icon(self, role: str) -> None:
         try:
-            color = self._copy_button.palette().color(QPalette.ColorRole.ButtonText)
-            if not color.isValid():
-                if role == "error":
-                    color = QColor(240, 98, 146)
-                else:
-                    color = QColor(235, 235, 235)
+            if role == "error":
+                color = QColor(240, 98, 146)
+            elif role == "user":
+                color = QColor(248, 248, 248)
+            else:
+                window_color = self._copy_button.palette().color(QPalette.ColorRole.Window)
+                # Match the info-button tone instead of pure black/white.
+                is_dark = (0.2126 * window_color.redF() + 0.7152 * window_color.greenF() + 0.0722 * window_color.blueF()) < 0.5
+                color = QColor("#a8a8a8" if is_dark else "#2f2f2f")
             self._copy_button.setIcon(qta.icon("fa5s.copy", color=color))
         except Exception:
             self._copy_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon))
@@ -891,11 +1270,24 @@ class _ChatBubbleWidget(QWidget):
             # 24 = left+right bubble layout margins.
             self._rich_view.setFixedWidth(max(120, bubble_max - 24))
             self._reflow_rich_view_height()
+            if self._thinking_view is not None:
+                self._thinking_view.setFixedWidth(max(120, bubble_max - 24))
         if self._text_label is not None:
             self._text_label.setMaximumWidth(max(120, bubble_max - 24))
             self._text_label.adjustSize()
 
-    def set_message(self, role: str, content: str, assistant_formatter: Callable[[str], str]) -> None:
+    # @ai(gpt-5.2-codex, codex-cli, refactor, 2026-03-05)
+    def set_message(
+        self,
+        role: str,
+        content: str,
+        assistant_formatter: Callable[[str], str],
+        *,
+        thinking: str = "",
+        thinking_expanded: bool = False,
+        thinking_active: bool = False,
+        on_toggle_thinking: Optional[Callable[[], None]] = None,
+    ) -> None:
         self._role = role
         self._raw_content = content
         self._bubble.setProperty("role", role)
@@ -906,11 +1298,55 @@ class _ChatBubbleWidget(QWidget):
         self._copy_button.style().polish(self._copy_button)
         self._set_copy_button_icon(role)
 
+        if self._thinking_toggle_button is not None:
+            try:
+                self._thinking_toggle_button.clicked.disconnect()
+            except Exception:
+                pass
+            if on_toggle_thinking is not None:
+                self._thinking_toggle_button.clicked.connect(on_toggle_thinking)
+            has_thoughts = bool(thinking.strip())
+            label = tr("Thoughts")
+            if thinking_active:
+                self._thinking_spinner_phase = (self._thinking_spinner_phase + 1) % 3
+                dots = "." * (self._thinking_spinner_phase + 1)
+                dots = f"{dots}{' ' * max(0, 3 - len(dots))}"
+                label = f"{tr('Thinking')}{dots}"
+            else:
+                self._thinking_spinner_phase = 0
+            self._thinking_toggle_button.setText(label)
+            self._thinking_toggle_button.setVisible(thinking_active or has_thoughts)
+            self._thinking_toggle_button.setEnabled(thinking_active or has_thoughts)
+
+            if thinking_active:
+                self._thinking_toggle_button.setToolTip(tr("Model is thinking"))
+            elif has_thoughts:
+                self._thinking_toggle_button.setToolTip(tr("Show model thoughts"))
+            else:
+                self._thinking_toggle_button.setToolTip(tr("Show model thoughts"))
+
         if self._rich_view is not None:
             html_body = assistant_formatter(content)
             html_doc = f"<html><head><meta charset='utf-8'></head><body>{html_body}</body></html>"
             self._rich_view.setHtml(html_doc)
             self._reflow_rich_view_height()
+            if self._thinking_view is not None:
+                # Ensure thoughts always render above the assistant message.
+                layout = self._bubble.layout()
+                if layout is not None:
+                    thinking_index = layout.indexOf(self._thinking_view)
+                    rich_index = layout.indexOf(self._rich_view)
+                    if thinking_index > rich_index >= 0:
+                        layout.removeWidget(self._thinking_view)
+                        layout.insertWidget(rich_index, self._thinking_view)
+                thinking_html = assistant_formatter(thinking.strip()) if thinking.strip() else ""
+                thinking_doc = f"<html><head><meta charset='utf-8'></head><body>{thinking_html}</body></html>"
+                self._thinking_view.setHtml(thinking_doc)
+                self._thinking_view.setVisible(thinking_expanded and bool(thinking.strip()))
+                doc = self._thinking_view.document()
+                doc.setTextWidth(self._rich_view.viewport().width())
+                height = int(doc.size().height() + 2)
+                self._thinking_view.setFixedHeight(max(34, height))
             self._bubble.adjustSize()
             return
 

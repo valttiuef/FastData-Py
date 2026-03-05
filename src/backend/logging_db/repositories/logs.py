@@ -17,13 +17,15 @@ class LogsRepository:
         origin: str,
         message: str,
         formatted: str,
+        session_id: Optional[int] = None,
+        turn_id: Optional[str] = None,
     ) -> int:
         cur = con.execute(
             """
-            INSERT INTO logs (created_at, level, logger_name, origin, message, formatted)
-            VALUES (?, ?, ?, ?, ?, ?);
+            INSERT INTO logs (created_at, level, logger_name, origin, message, formatted, session_id, turn_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?);
             """,
-            (created_at, level, logger_name, origin, message, formatted),
+            (created_at, level, logger_name, origin, message, formatted, session_id, turn_id),
         )
         log_id = int(cur.lastrowid)
         con.execute(
@@ -81,6 +83,20 @@ class LogsRepository:
             base += " WHERE " + " AND ".join(clauses)
         base += " ORDER BY l.created_at ASC"
         rows = con.execute(base, tuple(params)).fetchall()
+        return [dict(row) for row in rows]
+
+
+
+    def fetch_session_messages(self, con: sqlite3.Connection, session_id: int) -> List[Dict[str, Any]]:
+        rows = con.execute(
+            """
+            SELECT id, created_at, level, logger_name, origin, message, formatted, session_id, turn_id
+            FROM logs
+            WHERE session_id = ? AND origin IN ('chat', 'llm', 'llm_thinking')
+            ORDER BY created_at ASC, id ASC
+            """,
+            (int(session_id),),
+        ).fetchall()
         return [dict(row) for row in rows]
 
     def delete_all(self, con: sqlite3.Connection) -> None:

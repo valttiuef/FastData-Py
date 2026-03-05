@@ -29,6 +29,8 @@ class LogEvent:
     created: float
     origin: str
     formatted: str
+    session_id: Optional[int] = None
+    turn_id: Optional[str] = None
 
 
 Listener = Callable[[LogEvent], None]
@@ -72,7 +74,15 @@ class LogService(logging.Handler):
         self._notify(event)
 
     # ------------------------------------------------------------------
-    def log_text(self, message: str, *, level: int = logging.INFO, origin: str = "app") -> None:
+    def log_text(
+        self,
+        message: str,
+        *,
+        level: int = logging.INFO,
+        origin: str = "app",
+        session_id: Optional[int] = None,
+        turn_id: Optional[str] = None,
+    ) -> None:
         """Record a free-form message (for chat/stdout mirroring)."""
 
         created = time.time()
@@ -97,6 +107,8 @@ class LogService(logging.Handler):
             created=created,
             origin=origin,
             formatted=self._formatter.format(record),
+            session_id=session_id,
+            turn_id=turn_id,
         )
         self._persist_event(event)
         self._notify(event)
@@ -158,6 +170,8 @@ class LogService(logging.Handler):
                 created=float(row.get("created_at", 0.0)),
                 origin=row.get("origin", "logging"),
                 formatted=row.get("formatted", row.get("message", "")),
+                session_id=row.get("session_id"),
+                turn_id=row.get("turn_id"),
             )
             events.append(event)
         return events
@@ -239,6 +253,8 @@ class LogService(logging.Handler):
                 origin=event.origin,
                 message=event.message,
                 formatted=event.formatted,
+                session_id=event.session_id,
+                turn_id=event.turn_id,
             )
             if int(event.level) >= int(logging.WARNING):
                 append_text_log(warning_log_path(), event.formatted)

@@ -4,6 +4,7 @@ import sqlite3
 import threading
 from pathlib import Path
 
+from .repositories.chat_sessions import ChatSessionsRepository
 from .repositories.logs import LogsRepository
 import logging
 
@@ -27,6 +28,7 @@ class LoggingDatabase:
             self._con.execute("PRAGMA journal_mode=WAL;")
             self._con.execute("PRAGMA foreign_keys=ON;")
         self.logs_repo = LogsRepository()
+        self.chat_sessions_repo = ChatSessionsRepository()
         self._load_schema()
 
     @property
@@ -85,6 +87,17 @@ class LoggingDatabase:
                     """
                 )
                 self._con.commit()
+            self._ensure_logs_chat_columns()
+
+    def _ensure_logs_chat_columns(self) -> None:
+        columns = {row[1] for row in self._con.execute("PRAGMA table_info(logs)").fetchall()}
+        if "session_id" not in columns:
+            self._con.execute("ALTER TABLE logs ADD COLUMN session_id INTEGER")
+        if "turn_id" not in columns:
+            self._con.execute("ALTER TABLE logs ADD COLUMN turn_id TEXT")
+        self._con.execute("CREATE INDEX IF NOT EXISTS idx_logs_session_id ON logs(session_id)")
+        self._con.execute("CREATE INDEX IF NOT EXISTS idx_logs_session_turn ON logs(session_id, turn_id)")
+        self._con.commit()
 
 
 __all__ = ["LoggingDatabase"]

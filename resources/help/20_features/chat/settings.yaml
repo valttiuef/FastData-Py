@@ -29,7 +29,20 @@ entries:
         <li><a href="https://platform.openai.com/docs/models">OpenAI model catalog</a></li>
         <li><a href="https://ollama.com/library">Ollama model library</a></li>
       </ul>
+      <p>Use the refresh icon next to Model name to fetch available models for the selected provider.</p>
       <p>You can click <b>Ask from AI</b> below for help choosing a model.</p>
+
+  chat.settings.thinking_mode:
+    title: "Thinking mode"
+    short: "Control how much intermediate reasoning the model exposes in chat."
+    body: |
+      <p>Choose how much model reasoning is shown in the assistant reply card.</p>
+      <ul>
+        <li><b>Off</b>: hides reasoning output and focuses on final answers.</li>
+        <li><b>Standard</b>: balanced reasoning visibility for normal use.</li>
+        <li><b>High</b>: requests more extensive reasoning when the provider supports it.</li>
+      </ul>
+      <p>Provider behavior varies by model. If a model ignores this setting, chat still works and returns normal replies.</p>
 
   chat.settings.api_key:
     title: "OpenAI API key"
@@ -38,4 +51,5 @@ entries:
       <p>This key is only required for the ChatGPT (OpenAI) provider.</p>
       <p>Create or manage keys at <a href="https://platform.openai.com/api-keys">OpenAI API keys</a>.</p>
       <p>If you do not have a key yet, sign in and generate one, then paste it here.</p>
+      <p>Use <b>Test</b> to save the key and verify it by fetching the available OpenAI models.</p>
       <p>Use <b>Ask from AI</b> below if you want step-by-step guidance.</p>

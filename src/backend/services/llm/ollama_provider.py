@@ -1,30 +1,13 @@
-
 from __future__ import annotations
-import threading
-from typing import Iterator, Optional, Sequence
-
-from .types import ChatMessage
-
-# Try to import the official ollama library
-try:
-    import ollama
-    from ollama import ResponseError
-
-    OLLAMA_AVAILABLE = True
-except ImportError:
-    OLLAMA_AVAILABLE = False
-    ollama = None  # type: ignore[assignment]
-    ResponseError = Exception  # type: ignore[misc, assignment]
 
 import shutil
 import subprocess
 import sys
-import time
 import threading
-from typing import Iterator, Optional, Sequence
+import time
+from typing import Callable, Iterator, Optional, Sequence
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
-from urllib.error import URLError
 
 from .types import ChatMessage
 
@@ -40,7 +23,6 @@ except ImportError:
 
 
 def _http_ok(url: str, timeout: float = 0.25) -> bool:
-    """Return True if an HTTP endpoint responds (any 2xx/3xx/4xx is 'up' for our purpose)."""
     try:
         req = Request(url, method="GET")
         with urlopen(req, timeout=timeout) as resp:
@@ -51,20 +33,13 @@ def _http_ok(url: str, timeout: float = 0.25) -> bool:
 
 
 def _ensure_ollama_running(host: str, wait_s: float = 3.0) -> None:
-    """
-    Ensure Ollama server is running for the given host.
-    If not reachable, try to start it via `ollama serve`.
-    """
     parsed = urlparse(host)
     if parsed.scheme not in ("http", "https"):
         raise RuntimeError(f"Invalid Ollama host URL: {host!r}")
 
-    # A simple endpoint that exists on the Ollama server:
-    # /api/tags returns known models; good for "is it alive?"
     health_url = host.rstrip("/") + "/api/tags"
-
     if _http_ok(health_url):
-        return  # already running
+        return
 
     ollama_exe = shutil.which("ollama")
     if not ollama_exe:
@@ -73,26 +48,18 @@ def _ensure_ollama_running(host: str, wait_s: float = 3.0) -> None:
             "Install Ollama and/or add it to PATH, or configure a service to start it automatically."
         )
 
-    # Start detached so your app doesn't hang waiting on it.
-    # On Windows, use creation flags; on Unix, start a new session.
-    kwargs: dict = {}
+    kwargs: dict = {
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+    }
     if sys.platform.startswith("win"):
         kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS  # type: ignore[attr-defined]
-        kwargs["stdin"] = subprocess.DEVNULL
-        kwargs["stdout"] = subprocess.DEVNULL
-        kwargs["stderr"] = subprocess.DEVNULL
     else:
         kwargs["start_new_session"] = True
-        kwargs["stdin"] = subprocess.DEVNULL
-        kwargs["stdout"] = subprocess.DEVNULL
-        kwargs["stderr"] = subprocess.DEVNULL
 
-    # Note: `ollama serve` listens on the default address.
-    # If you need a non-default host/port, you typically configure env vars (OLLAMA_HOST)
-    # before launching, or run via system service configuration.
     subprocess.Popen([ollama_exe, "serve"], **kwargs)
 
-    # Wait briefly for it to come up
     deadline = time.time() + wait_s
     while time.time() < deadline:
         if _http_ok(health_url, timeout=0.3):
@@ -103,6 +70,7 @@ def _ensure_ollama_running(host: str, wait_s: float = 3.0) -> None:
         f"Tried to start Ollama with `ollama serve` but could not reach it at {host} "
         f"within {wait_s:.1f}s."
     )
+
 
 class OllamaProvider:
     """LLM provider that connects to a local Ollama instance using the official library."""
@@ -126,14 +94,9 @@ class OllamaProvider:
         model: Optional[str] = None,
         stop_event: Optional[threading.Event] = None,
         temperature: float = 0.6,
+        on_thinking_token: Optional[Callable[[str], None]] = None,
+        thinking_mode: str = "standard",
     ) -> Iterator[str]:
-        """Stream chat completions from a local Ollama instance.
-
-        Uses the official ollama Python library for efficient streaming.
-
-        Raises:
-            RuntimeError: If Ollama library is not installed, not running, or returns an error.
-        """
         if not OLLAMA_AVAILABLE:
             raise RuntimeError(
                 "The 'ollama' Python package is not installed. "
@@ -141,30 +104,62 @@ class OllamaProvider:
             )
 
         chosen_model = model or self._default_model
+        in_think_block = False
 
         try:
-            # NEW: auto-start if not running
             _ensure_ollama_running(self._host)
-
-            # Create a client with the specified host
             client = ollama.Client(host=self._host)
-
-            # Use streaming for immediate token-by-token response
+            mode = (thinking_mode or "standard").strip().lower()
+            options = {"temperature": temperature}
+            if mode == "off":
+                options["think"] = False
+            elif mode in {"standard", "high"}:
+                options["think"] = True
             stream = client.chat(
                 model=chosen_model,
                 messages=[{"role": m["role"], "content": m["content"]} for m in messages],
                 stream=True,
-                options={"temperature": temperature},
+                options=options,
             )
 
             for chunk in stream:
                 if stop_event is not None and stop_event.is_set():
                     break
-                content = chunk.get("message", {}).get("content", "")
+
+                message = chunk.get("message", {})
+                thinking = message.get("thinking")
+                if mode != "off" and thinking and on_thinking_token is not None:
+                    on_thinking_token(str(thinking))
+
+                content = str(message.get("content", "") or "")
                 if not content:
                     continue
-                # Yield the entire chunk content at once for faster streaming
-                yield content
+
+                # Some reasoning models stream <think>...</think> in content.
+                while content:
+                    if in_think_block:
+                        end_idx = content.find("</think>")
+                        if end_idx >= 0:
+                            part = content[:end_idx]
+                            if mode != "off" and part and on_thinking_token is not None:
+                                on_thinking_token(part)
+                            content = content[end_idx + len("</think>"):]
+                            in_think_block = False
+                        else:
+                            if mode != "off" and on_thinking_token is not None:
+                                on_thinking_token(content)
+                            content = ""
+                    else:
+                        start_idx = content.find("<think>")
+                        if start_idx < 0:
+                            yield content
+                            content = ""
+                        else:
+                            before = content[:start_idx]
+                            if before:
+                                yield before
+                            content = content[start_idx + len("<think>"):]
+                            in_think_block = True
 
         except ResponseError as e:
             raise RuntimeError(f"Ollama error: {e}") from e
@@ -176,3 +171,33 @@ class OllamaProvider:
                     f"Please ensure Ollama is running. Error: {error_msg}"
                 ) from e
             raise RuntimeError(f"Ollama error: {error_msg}") from e
+
+    # @ai(gpt-5.2-codex, codex-cli, feature, 2026-03-05)
+    def list_models(self, **_kwargs) -> Sequence[str]:
+        if not OLLAMA_AVAILABLE:
+            raise RuntimeError(
+                "The 'ollama' Python package is not installed. "
+                "Please install it with: pip install ollama"
+            )
+
+        try:
+            _ensure_ollama_running(self._host)
+            client = ollama.Client(host=self._host)
+            data = client.list()
+            if isinstance(data, dict):
+                models = data.get("models", [])
+            else:
+                models = getattr(data, "models", []) or []
+
+            names: list[str] = []
+            for item in models:
+                if isinstance(item, dict):
+                    value = item.get("name") or item.get("model")
+                else:
+                    value = getattr(item, "name", None) or getattr(item, "model", None)
+                text = str(value or "").strip()
+                if text:
+                    names.append(text)
+            return names
+        except Exception as exc:
+            raise RuntimeError(f"Failed to fetch Ollama models: {exc}") from exc

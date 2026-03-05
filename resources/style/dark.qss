@@ -474,6 +474,34 @@ QWidget#chatWindow QTextBrowser#chatBubbleRichView {
     border: none;
 }
 
+QWidget#chatWindow QToolButton#chatThinkingToggleButton {
+    min-height: 24px;
+    max-height: 24px;
+    padding: 1px 8px;
+    margin-right: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.08);
+    color: #cfcfcf;
+    font-size: 11px;
+    font-weight: 600;
+    text-align: left;
+}
+
+QWidget#chatWindow QToolButton#chatThinkingToggleButton:hover {
+    background: rgba(255, 255, 255, 0.14);
+    border-color: rgba(255, 255, 255, 0.24);
+}
+
+QWidget#chatWindow QTextBrowser#chatBubbleThinkingView {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.13);
+    border-radius: 8px;
+    margin-top: 0px;
+    margin-bottom: 6px;
+    padding: 4px 6px;
+}
+
 QWidget#chatWindow QToolButton#chatBubbleCopyButton {
     padding: 0px;
     border: none;

@@ -1794,21 +1794,22 @@ and one or more independent variables (features).</p>
 
 <h3>Chat</h3>
 <h4 id="features-chat-overview">Overview</h4>
+<h5>Chat sessions</h5>
+<p>Create, switch, and delete independent chat histories.</p>
+<p>Chat history is stored per session.</p>
+<ul>
+  <li><b>New Chat</b> creates a separate empty session.</li>
+  <li><b>Delete Chat</b> removes only the currently selected session.</li>
+  <li>Other sessions and their history remain available in the session selector.</li>
+</ul>
+
 <h5>Overview</h5>
 <p>Ask the built-in assistant and keep a record of conversations.</p>
 <p>The chat window lets you send questions to the assistant and keeps a history in the log database.</p>
 <ul>
   <li>Chat messages are saved automatically with the log database.</li>
-  <li>Clearing chat history removes conversations but keeps other log entries.</li>
+  <li>Each chat session can be deleted separately without removing other log entries.</li>
   <li>Resetting the log database clears chat history too.</li>
-</ul>
-
-<h5>Clear history</h5>
-<p>Remove chat transcripts without deleting logs.</p>
-<p>Use the chat window to clear the current chat history.</p>
-<ul>
-  <li>This only removes chat messages; other logs remain.</li>
-  <li>Resetting the log database clears both logs and chats.</li>
 </ul>
 
 <h4 id="features-chat-settings">Settings</h4>
@@ -1838,13 +1839,25 @@ and one or more independent variables (features).</p>
   <li><a href="https://platform.openai.com/docs/models">OpenAI model catalog</a></li>
   <li><a href="https://ollama.com/library">Ollama model library</a></li>
 </ul>
+<p>Use the refresh icon next to Model name to fetch available models for the selected provider.</p>
 <p>You can click <b>Ask from AI</b> below for help choosing a model.</p>
+
+<h5>Thinking mode</h5>
+<p>Control how much intermediate reasoning the model exposes in chat.</p>
+<p>Choose how much model reasoning is shown in the assistant reply card.</p>
+<ul>
+  <li><b>Off</b>: hides reasoning output and focuses on final answers.</li>
+  <li><b>Standard</b>: balanced reasoning visibility for normal use.</li>
+  <li><b>High</b>: requests more extensive reasoning when the provider supports it.</li>
+</ul>
+<p>Provider behavior varies by model. If a model ignores this setting, chat still works and returns normal replies.</p>
 
 <h5>OpenAI API key</h5>
 <p>Add your OpenAI key for ChatGPT/OpenAI access.</p>
 <p>This key is only required for the ChatGPT (OpenAI) provider.</p>
 <p>Create or manage keys at <a href="https://platform.openai.com/api-keys">OpenAI API keys</a>.</p>
 <p>If you do not have a key yet, sign in and generate one, then paste it here.</p>
+<p>Use <b>Test</b> to save the key and verify it by fetching the available OpenAI models.</p>
 <p>Use <b>Ask from AI</b> below if you want step-by-step guidance.</p>
 
 </main>

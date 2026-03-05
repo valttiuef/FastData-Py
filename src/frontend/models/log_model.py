@@ -96,11 +96,13 @@ class LogModel(QObject):
         *,
         level: int = logging.INFO,
         origin: str = "ui",
+        session_id: Optional[int] = None,
+        turn_id: Optional[str] = None,
     ) -> None:
         """Forward a log message to the backend service."""
 
         try:
-            self._service.log_text(message, level=level, origin=origin)
+            self._service.log_text(message, level=level, origin=origin, session_id=session_id, turn_id=turn_id)
         except Exception:
             # The service should always be available, but logging must never crash
             logger.warning("Exception in log_text", exc_info=True)

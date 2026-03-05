@@ -109,6 +109,8 @@ def save_log_record(
     origin: str,
     message: str,
     formatted: str,
+    session_id: Optional[int] = None,
+    turn_id: Optional[str] = None,
 ) -> int:
     """Persist a log entry in SQLite and return its row id."""
     db = get_log_database()
@@ -121,6 +123,8 @@ def save_log_record(
             origin=origin,
             message=message,
             formatted=formatted,
+            session_id=session_id,
+            turn_id=turn_id,
         )
 
 
@@ -150,20 +154,86 @@ def delete_log_records_by_origin(origins: Iterable[str]) -> None:
         db.logs_repo.delete_by_origin(db.connection, origins)
 
 
+def ensure_default_chat_session() -> int:
+    db = get_log_database()
+    with db.lock:
+        existing = db.chat_sessions_repo.get_default(db.connection)
+        if existing is not None:
+            return int(existing["id"])
+        return db.chat_sessions_repo.create(db.connection, title="Chat", is_default=True)
+
+
+def create_chat_session(title: Optional[str] = None) -> int:
+    db = get_log_database()
+    with db.lock:
+        return db.chat_sessions_repo.create(db.connection, title=title, is_default=False)
+
+
+def list_chat_sessions() -> List[Dict[str, Any]]:
+    db = get_log_database()
+    with db.lock:
+        return db.chat_sessions_repo.list(db.connection)
+
+
+def get_chat_session(session_id: int) -> Optional[Dict[str, Any]]:
+    db = get_log_database()
+    with db.lock:
+        return db.chat_sessions_repo.get(db.connection, session_id)
+
+
+def rename_chat_session(session_id: int, title: str) -> None:
+    db = get_log_database()
+    with db.lock:
+        db.chat_sessions_repo.rename(db.connection, session_id, title)
+
+
+def delete_chat_session(session_id: int) -> None:
+    db = get_log_database()
+    with db.lock:
+        db.chat_sessions_repo.delete(db.connection, session_id)
+
+
+def fetch_chat_session_messages(session_id: int) -> List[Dict[str, Any]]:
+    db = get_log_database()
+    with db.lock:
+        return db.logs_repo.fetch_session_messages(db.connection, session_id)
+
+
+def touch_chat_session(session_id: int) -> None:
+    db = get_log_database()
+    with db.lock:
+        db.chat_sessions_repo.touch(db.connection, session_id)
+
+
+def set_chat_session_summary(session_id: int, summary: str) -> None:
+    db = get_log_database()
+    with db.lock:
+        db.chat_sessions_repo.set_summary(db.connection, session_id, summary)
+
+
 __all__ = [
     "append_text_log",
     "crash_log_path",
+    "create_chat_session",
     "create_log_database",
     "default_log_directory",
     "default_log_db_path",
+    "delete_chat_session",
     "delete_log_database",
     "delete_log_records_by_origin",
+    "ensure_default_chat_session",
     "error_log_path",
     "fetch_all_log_records",
+    "fetch_chat_session_messages",
     "fetch_log_records",
+    "get_chat_session",
     "get_log_database",
+    "list_chat_sessions",
     "load_log_database",
+    "rename_chat_session",
     "save_log_record",
+    "set_chat_session_summary",
+    "touch_chat_session",
     "warning_log_path",
 ]
 
