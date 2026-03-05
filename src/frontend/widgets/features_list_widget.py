@@ -19,6 +19,28 @@ from ..utils import toast_error
 logger = logging.getLogger(__name__)
 
 
+def _is_selector_visible_feature_type(type_value: object) -> bool:
+    """
+    Keep DataSelector feature lists focused on numeric/measured features.
+    Hide text/group pseudo-features (including wrapped variants like
+    "group (...)" and "text (...)"), which are managed in Selections tab.
+    """
+    text = str(type_value or "").strip()
+    if not text:
+        return True
+    lowered = text.casefold()
+    while True:
+        if lowered in {"text", "group"}:
+            return False
+        if lowered.startswith("text (") and lowered.endswith(")"):
+            lowered = lowered[6:-1].strip().casefold()
+            continue
+        if lowered.startswith("group (") and lowered.endswith(")"):
+            lowered = lowered[7:-1].strip().casefold()
+            continue
+        return True
+
+
 class FeaturesListWidgetViewModel(QObject):
     """Keeps a features list in sync with a HybridPandasModel.
 
@@ -136,13 +158,23 @@ class FeaturesListWidgetViewModel(QObject):
                 columns=["feature_id", "name", "source", "unit", "type", "lag_seconds", "tags", "notes"],
             )
         if systems or datasets:
-            return model.features_for_systems_datasets(
+            df = model.features_for_systems_datasets(
                 systems=systems,
                 datasets=datasets,
                 import_ids=import_ids,
                 tags=tags,
             )
-        return model.features_df(import_ids=import_ids, tags=tags)
+        else:
+            df = model.features_df(import_ids=import_ids, tags=tags)
+
+        if df is None or df.empty or "type" not in df.columns:
+            return df
+        try:
+            mask = df["type"].map(_is_selector_visible_feature_type)
+            return df.loc[mask].reset_index(drop=True)
+        except Exception:
+            logger.warning("Exception while filtering selector-visible feature types", exc_info=True)
+            return df
 
 
 class FeaturesListWidget(QGroupBox):
@@ -203,7 +235,8 @@ class FeaturesListWidget(QGroupBox):
         # Selection debounce
         self._selection_emit_timer = QTimer(self)
         self._selection_emit_timer.setSingleShot(True)
-        self._selection_emit_timer.setInterval(0)
+        # Coalesce bursty row-selection updates (e.g. Ctrl+A on large feature lists).
+        self._selection_emit_timer.setInterval(60)
         self._selection_emit_timer.timeout.connect(self._emit_selection_changed)
 
         selection = self._table.selectionModel()
@@ -435,11 +468,21 @@ class FeaturesListWidget(QGroupBox):
     def _emit_selection_changed(self) -> None:
         if self._suppress_selection_emit:
             return
-        selection_ids = tuple(sorted(self.selected_feature_ids()))
+        payloads = self.selected_payloads()
+        ids: list[int] = []
+        for payload in payloads:
+            fid = payload.get("feature_id") if isinstance(payload, dict) else None
+            if fid is None:
+                continue
+            try:
+                ids.append(int(fid))
+            except Exception:
+                continue
+        selection_ids = tuple(sorted(ids))
         if selection_ids == self._last_selection_ids:
             return
         self._last_selection_ids = selection_ids
-        self.selection_changed.emit(self.selected_payloads())
+        self.selection_changed.emit(payloads)
 
 
 __all__ = ["FeaturesListWidget", "FeaturesListWidgetViewModel"]

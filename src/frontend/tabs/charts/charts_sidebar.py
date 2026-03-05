@@ -3,6 +3,7 @@ from __future__ import annotations
 from PySide6.QtWidgets import QAbstractItemView, QGroupBox, QPushButton, QSizePolicy, QVBoxLayout
 from ...localization import tr
 
+from ...charts import MAX_FEATURES_ANALYSIS
 from ...models.hybrid_pandas_model import FeatureSelection
 from ...utils import (
     clear_progress,
@@ -78,6 +79,8 @@ class ChartsSidebar(SidebarWidget):
             except Exception:
                 continue
             items.append((selection.display_name(), selection))
+            if len(items) >= MAX_FEATURES_ANALYSIS:
+                break
         return items
 
     def selected_correlation_feature(self) -> FeatureSelection | None:

@@ -497,7 +497,8 @@ class SomSidebar(SidebarWidget):
             name for payload in selected_payloads if (name := self._feature_display_name(payload))
         ]
 
-        def _on_fetch_result(data_frame) -> None:
+        def _on_fetch_result(frame_token: str) -> None:
+            data_frame = self.data_selector.resolve_dataframe_token(frame_token, consume=True)
             if data_frame is None or getattr(data_frame, "empty", True):
                 self.train_button.setEnabled(True)
                 set_status_text(tr("SOM data unavailable."))
@@ -528,7 +529,7 @@ class SomSidebar(SidebarWidget):
             set_status_text(tr("SOM data fetch failed: {error}").format(error=text))
             self._log(text, level=logging.ERROR)
 
-        started = self.data_selector.fetch_base_dataframe_async(
+        started = self.data_selector.fetch_base_dataframe_token_async(
             on_result=_on_fetch_result,
             on_error=_on_fetch_error,
             owner=self,

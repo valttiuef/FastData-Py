@@ -1248,7 +1248,7 @@ class SomTab(TabWidget):
         if self.sidebar is None:
             return pd.DataFrame(), []
 
-        payloads = self._selected_feature_payloads()
+        payloads = list(self._selected_feature_payloads()[: self._TIMELINE_OVERLAY_MAX_FEATURES])
         if not payloads:
             self._timeline_overlay_signature = None
             self._timeline_overlay_fetch_signature = None
@@ -1273,9 +1273,10 @@ class SomTab(TabWidget):
         if signature and signature != self._timeline_overlay_fetch_signature:
             self._timeline_overlay_fetch_signature = signature
 
-            def _on_result(df) -> None:
+            def _on_result(frame_token: str) -> None:
                 if signature != self._timeline_overlay_signature:
                     return
+                df = self.sidebar.data_selector.resolve_dataframe_token(frame_token, consume=True)
                 if df is None or df.empty:
                     self._timeline_overlay_cache_df = pd.DataFrame()
                     self._timeline_overlay_cache_cols = []
@@ -1325,7 +1326,8 @@ class SomTab(TabWidget):
                 self._timeline_overlay_cache_cols = []
                 self._update_timeline_views()
 
-            self.sidebar.data_selector.fetch_base_dataframe_async(
+            self.sidebar.data_selector.fetch_base_dataframe_for_features_token_async(
+                payloads,
                 on_result=_on_result,
                 on_error=_on_error,
                 owner=self,

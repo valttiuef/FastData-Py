@@ -14,8 +14,12 @@ from ...localization import tr
 
 logger = logging.getLogger(__name__)
 
-# Use the global cap from the shared charts package so it's consistent across all charts
-from frontend.charts import MAX_FEATURES_SHOWN_LEGEND, MonthlyBarChart, TimeSeriesChart
+# Use shared chart caps to keep visualization work bounded for large selections.
+from frontend.charts import (
+    MAX_FEATURES_SHOWN_LEGEND,
+    MonthlyBarChart,
+    TimeSeriesChart,
+)
 from frontend.utils.feature_details import (
     build_feature_label_list,
     format_feature_label,
@@ -37,6 +41,7 @@ class DataTab(TabWidget):
     Uses a shared HybridPandasModel instance that is passed in from the
     main window; no new models are created here.
     """
+    MAX_FEATURES_DETAILS_SUMMARY = 40
 
     def __init__(
         self,
@@ -465,9 +470,10 @@ class DataTab(TabWidget):
     def _build_filters(self) -> DataFilters | None:
         return self.sidebar.data_selector.build_data_filters()
 
-    def _build_chart_filters(self) -> DataFilters | None:
+    def _build_chart_filters(self, flt: DataFilters | None = None) -> DataFilters | None:
         """Build filters used for chart/cache work, capped to visible feature count."""
-        flt = self._build_filters()
+        if flt is None:
+            flt = self._build_filters()
         if flt is None:
             return None
         if len(flt.features) <= MAX_FEATURES_SHOWN_LEGEND:
@@ -581,8 +587,25 @@ class DataTab(TabWidget):
         if self._timestamps_match(flt.start, b0) and self._timestamps_match(flt.end, b1):
             return flt
         self._set_dt_controls_from_range(b0, b1)
-        refreshed = self._build_filters()
+        refreshed = self._build_chart_filters(self._build_filters())
         return refreshed if refreshed is not None else flt.clone_with_range(b0, b1)
+
+    @staticmethod
+    def _feature_payloads_from_filters(flt: DataFilters) -> list[dict]:
+        payloads: list[dict] = []
+        for feature in list(flt.features or []):
+            payloads.append(
+                {
+                    "feature_id": feature.feature_id,
+                    "notes": feature.label,
+                    "name": feature.base_name,
+                    "source": feature.source,
+                    "unit": feature.unit,
+                    "type": feature.type,
+                    "lag_seconds": feature.lag_seconds,
+                }
+            )
+        return payloads
 
     def _ensure_data_tab_cache_active(self) -> None:
         flt = self._build_chart_filters()
@@ -629,7 +652,8 @@ class DataTab(TabWidget):
             self._inflight_requirements_key = None
             self._owned_base_cache_key = None
             return
-        if not self._build_chart_filters():
+        chart_filters = self._build_chart_filters(flt)
+        if not chart_filters:
             self._clear_charts(tr("Select at least one feature to load."))
             self._update_features_info_button(None)
             self._last_requirements_key = None
@@ -638,19 +662,20 @@ class DataTab(TabWidget):
             self._owned_base_cache_key = None
             return
 
-        flt = self._apply_initial_timeframe_before_first_fetch(flt)
+        chart_filters = self._apply_initial_timeframe_before_first_fetch(chart_filters)
         requirements_key = self._requirements_key()
 
         request_id = self._next_reload_request_id()
         self._active_reload_request_id = request_id
         self._inflight_requirements_key = requirements_key
 
-        def _on_fetch_result(base_df) -> None:
+        def _on_fetch_result(frame_token: str) -> None:
             if request_id != self._active_reload_request_id:
                 return
             self._inflight_requirements_key = None
+            base_df = self.sidebar.data_selector.resolve_dataframe_token(frame_token, consume=True)
             self._apply_reload_result(
-                flt=flt,
+                flt=chart_filters,
                 requirements_key=requirements_key,
                 base_df=base_df,
             )
@@ -664,7 +689,13 @@ class DataTab(TabWidget):
             self._last_requirements_key = requirements_key
             self._last_reload_epoch = self._reload_epoch
 
-        started = self.sidebar.data_selector.fetch_base_dataframe_async(
+        started = self.sidebar.data_selector.fetch_base_dataframe_for_features_token_async(
+            self._feature_payloads_from_filters(chart_filters),
+            start=chart_filters.start,
+            end=chart_filters.end,
+            systems=chart_filters.systems,
+            datasets=chart_filters.datasets,
+            group_ids=chart_filters.group_ids,
             on_result=_on_fetch_result,
             on_error=_on_fetch_error,
             owner=self,
@@ -756,7 +787,7 @@ class DataTab(TabWidget):
 
         # Convert FeatureSelection objects to payloads for the dialog
         payloads = []
-        for feat_sel in flt.features:
+        for feat_sel in flt.features[: self.MAX_FEATURES_DETAILS_SUMMARY]:
             feature_name = feat_sel.base_name
             feature_type = feat_sel.type
             payloads.append({

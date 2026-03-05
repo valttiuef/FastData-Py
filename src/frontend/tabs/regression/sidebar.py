@@ -4,7 +4,7 @@ from html import escape
 import re
 from typing import Callable, Optional, TYPE_CHECKING
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtWidgets import (
 
 
@@ -95,6 +95,11 @@ class RegressionSidebar(SidebarWidget):
         self._syncing_stratify = False
         self._help_dataset_rows: Optional[int] = None
         self._help_dataset_signature: tuple | None = None
+        self._selected_input_payloads_cache: list[dict] = []
+        self._features_changed_timer = QTimer(self)
+        self._features_changed_timer.setSingleShot(True)
+        self._features_changed_timer.setInterval(120)
+        self._features_changed_timer.timeout.connect(self._notify_features_changed)
 
         controls_layout = self.content_layout()
 
@@ -283,6 +288,7 @@ class RegressionSidebar(SidebarWidget):
         except Exception:
             logger.warning("Exception in __init__", exc_info=True)
         self.refresh_feature_lists()
+        self._selected_input_payloads_cache = list(self.features_widget.selected_payloads())
 
     def _with_info(self, widget: QWidget, help_key: Optional[str]) -> QWidget:
         if self._help_viewmodel is None or not help_key:
@@ -390,7 +396,8 @@ class RegressionSidebar(SidebarWidget):
             return
         self._help_dataset_signature = signature
 
-        def _on_result(frame) -> None:
+        def _on_result(frame_token: str) -> None:
+            frame = self.data_selector.resolve_dataframe_token(frame_token, consume=True)
             rows = 0
             try:
                 rows = int(getattr(frame, "shape", (0, 0))[0]) if frame is not None else 0
@@ -401,7 +408,7 @@ class RegressionSidebar(SidebarWidget):
         def _on_error(_message: str) -> None:
             self._help_dataset_rows = None
 
-        started = self.data_selector.fetch_base_dataframe_for_features_async(
+        started = self.data_selector.fetch_base_dataframe_for_features_token_async(
             deduped,
             on_result=_on_result,
             on_error=_on_error,
@@ -561,8 +568,9 @@ class RegressionSidebar(SidebarWidget):
         except Exception:
             logger.warning("Exception in _on_run_clicked", exc_info=True)
 
-        def _on_fetch_result(data_frame) -> None:
+        def _on_fetch_result(frame_token: str) -> None:
             self.run_button.setEnabled(True)
+            data_frame = self.data_selector.resolve_dataframe_token(frame_token, consume=True)
             if data_frame is None or getattr(data_frame, "empty", True):
                 set_status_text("Regression data unavailable.")
                 try:
@@ -616,7 +624,7 @@ class RegressionSidebar(SidebarWidget):
             except Exception:
                 logger.warning("Exception in _on_run_clicked", exc_info=True)
 
-        started = self.data_selector.fetch_base_dataframe_for_features_async(
+        started = self.data_selector.fetch_base_dataframe_for_features_token_async(
             all_payloads,
             group_payloads=group_column_payloads,
             on_result=_on_fetch_result,
@@ -795,10 +803,11 @@ class RegressionSidebar(SidebarWidget):
     def _notify_features_changed(self) -> None:
         self._view_model.notify_features_changed()
 
-    def _on_features_selection_changed(self, *_args) -> None:
+    def _on_features_selection_changed(self, payloads: list[dict]) -> None:
         self._help_dataset_signature = None
         self._help_dataset_rows = None
-        self._notify_features_changed()
+        self._selected_input_payloads_cache = [dict(p) for p in (payloads or []) if isinstance(p, dict)]
+        self._features_changed_timer.start()
 
     def _on_target_selection_changed(self) -> None:
         previous_ids = list(self._selected_target_ids)
@@ -892,7 +901,7 @@ class RegressionSidebar(SidebarWidget):
         return self._payload_label(payload)
 
     def selected_input_payloads(self) -> list[dict]:
-        return self._selected_feature_payloads()
+        return [dict(p) for p in self._selected_input_payloads_cache]
 
     def selected_target_payloads(self) -> list[dict]:
         payloads: list[dict] = []

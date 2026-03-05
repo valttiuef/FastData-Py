@@ -2,6 +2,9 @@
 
 MAX_FEATURES_SHOWN = 2
 MAX_FEATURES_SHOWN_LEGEND = 5
+# Analysis/visualization cap for large feature selections. Training/data-fetch
+# flows may still request all selected features explicitly.
+MAX_FEATURES_ANALYSIS = 100
 
 # Time-series line-gap detection settings (global, easy to tune).
 # Set TIMESERIES_GAP_DETECTION_ENABLED=False to disable visual time-gap breaks.
@@ -22,6 +25,7 @@ from .group_chart import GroupBarChart
 __all__ = [
     "MAX_FEATURES_SHOWN",
     "MAX_FEATURES_SHOWN_LEGEND",
+    "MAX_FEATURES_ANALYSIS",
     "TIMESERIES_GAP_DETECTION_ENABLED",
     "TIMESERIES_GAP_REGULAR_MULTIPLIER",
     "TIMESERIES_GAP_IRREGULAR_MULTIPLIER",

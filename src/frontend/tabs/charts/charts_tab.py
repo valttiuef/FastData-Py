@@ -438,10 +438,11 @@ class ChartsTab(TabWidget):
         title = self._build_chart_title(feature_names)
         token = self._next_card_fetch_token(card)
 
-        def _on_result(frame) -> None:
+        def _on_result(frame_token: str) -> None:
             if self._card_fetch_tokens.get(card) != token:
                 return
             try:
+                frame = self.sidebar.data_selector.resolve_dataframe_token(frame_token, consume=True)
                 if chart_type == "monthly":
                     card.set_monthly_frame(frame, title)
                 elif chart_type == "time_series":
@@ -459,7 +460,7 @@ class ChartsTab(TabWidget):
                 return
             card.show_message(tr("Failed to load chart data: {error}").format(error=str(message)))
 
-        started = self.sidebar.data_selector.fetch_base_dataframe_for_features_async(
+        started = self.sidebar.data_selector.fetch_base_dataframe_for_features_token_async(
             feature_payloads,
             on_result=_on_result,
             on_error=_on_error,
@@ -521,9 +522,10 @@ class ChartsTab(TabWidget):
         token = self._next_card_fetch_token(card)
         feature_payloads = [self._feature_payload(feature) for feature in unique]
 
-        def _on_result(frame) -> None:
+        def _on_result(frame_token: str) -> None:
             if self._card_fetch_tokens.get(card) != token:
                 return
+            frame = self.sidebar.data_selector.resolve_dataframe_token(frame_token, consume=True)
             payload = self._build_correlation_payload_from_frame(
                 target=target,
                 candidates=unique,
@@ -543,7 +545,7 @@ class ChartsTab(TabWidget):
             card.show_message(tr("Unable to calculate correlations for this selection"))
             self._record_card_state(card, None)
 
-        started = self.sidebar.data_selector.fetch_base_dataframe_for_features_async(
+        started = self.sidebar.data_selector.fetch_base_dataframe_for_features_token_async(
             feature_payloads,
             on_result=_on_result,
             on_error=_on_error,
@@ -947,7 +949,8 @@ class ChartsTab(TabWidget):
             idx, card, selected_features, feature_payloads = fetch_requests[request_index]
             request_index += 1
 
-            def _on_result(frame) -> None:
+            def _on_result(frame_token: str) -> None:
+                frame = self.sidebar.data_selector.resolve_dataframe_token(frame_token, consume=True)
                 _process_frame(
                     idx=idx,
                     card=card,
@@ -959,7 +962,7 @@ class ChartsTab(TabWidget):
             def _on_error(_message: str) -> None:
                 _fetch_next()
 
-            started = self.sidebar.data_selector.fetch_base_dataframe_for_features_async(
+            started = self.sidebar.data_selector.fetch_base_dataframe_for_features_token_async(
                 feature_payloads,
                 on_result=_on_result,
                 on_error=_on_error,

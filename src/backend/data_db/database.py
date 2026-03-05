@@ -2518,61 +2518,109 @@ class Database:
         value_mode: str = "numeric",
         value_filters: Optional[Sequence[Mapping[str, object]]] = None,
     ) -> pd.DataFrame:
-        sql_from, params = self._csv_sql_from_and_params(
-            con=con,
-            mappings_df=mappings_df,
-            system=system,
-            dataset=dataset,
-            systems=systems,
-            datasets=datasets,
-            base_name=base_name,
-            source=source,
-            unit=unit,
-            type=type,
-            feature_ids=feature_ids,
-            import_ids=import_ids,
-            group_ids=group_ids,
-            start=start,
-            end=end,
-            value_mode=value_mode,
-            value_filters=value_filters,
-        )
-        if not sql_from:
+        # Avoid oversized UNION ALL SQL plans when many CSV features are selected.
+        # DuckDB can hit parser/stack limits on very long unions in one statement.
+        # @ai(gpt-5, codex, fix, 2026-03-04)
+        if mappings_df is not None:
+            mappings = mappings_df.copy()
+        else:
+            mappings = self.csv_feature_columns_repo.list_feature_mappings(
+                con,
+                system=system,
+                dataset=dataset,
+                systems=systems,
+                datasets=datasets,
+                base_name=base_name,
+                source=source,
+                unit=unit,
+                type=type,
+                feature_ids=feature_ids,
+                import_ids=import_ids,
+            )
+        if mappings is None or mappings.empty:
+            return pd.DataFrame()
+        mappings = mappings.reset_index(drop=True)
+
+        def _execute_for_mappings(chunk_mappings: pd.DataFrame) -> pd.DataFrame:
+            sql_from, params = self._csv_sql_from_and_params(
+                con=con,
+                mappings_df=chunk_mappings,
+                system=system,
+                dataset=dataset,
+                systems=systems,
+                datasets=datasets,
+                base_name=base_name,
+                source=source,
+                unit=unit,
+                type=type,
+                feature_ids=feature_ids,
+                import_ids=import_ids,
+                group_ids=group_ids,
+                start=start,
+                end=end,
+                value_mode=value_mode,
+                value_filters=value_filters,
+            )
+            if not sql_from:
+                return pd.DataFrame()
+
+            sql = f"""
+                SELECT
+                    m.ts AS t,
+                    f.id        AS feature_id,
+                    m.import_id AS import_id,
+                    CASE
+                        WHEN NULLIF(f.notes, '') IS NOT NULL THEN f.notes
+                        ELSE TRIM(BOTH '_' FROM CONCAT(
+                            COALESCE(f.name, ''),
+                            CASE WHEN COALESCE(f.source, '') <> '' THEN '_' || f.source ELSE '' END,
+                            CASE WHEN COALESCE(f.unit, '') <> '' THEN '_' || f.unit ELSE '' END,
+                            CASE WHEN COALESCE(f.type, '') <> '' THEN '_' || f.type ELSE '' END
+                        ))
+                    END AS feature_label,
+                    sy.name     AS system,
+                    ds.name     AS dataset,
+                    ds.name     AS Dataset,
+                    f.name      AS name,
+                    f.source    AS source,
+                    f.unit      AS unit,
+                    f.type      AS type,
+                    f.notes     AS notes,
+                    f.name      AS base_name,
+                    f.source    AS source,
+                    f.type      AS type,
+                    f.notes     AS label,
+                    m.value AS v
+                {sql_from}
+            """
+            return con.execute(sql, params).df()
+
+        batch_size = 200
+        if len(mappings) <= batch_size:
+            df = _execute_for_mappings(mappings)
+            if df is None or df.empty:
+                return pd.DataFrame()
+            df = df.sort_values("t", kind="stable")
+            if limit:
+                df = df.head(int(limit))
+            return df
+
+        frames: list[pd.DataFrame] = []
+        for start_idx in range(0, len(mappings), batch_size):
+            chunk = mappings.iloc[start_idx : start_idx + batch_size]
+            part = _execute_for_mappings(chunk)
+            if part is None or part.empty:
+                continue
+            frames.append(part)
+
+        if not frames:
             return pd.DataFrame()
 
-        sql = f"""
-            SELECT
-                m.ts AS t,
-                f.id        AS feature_id,
-                m.import_id AS import_id,
-                CASE
-                    WHEN NULLIF(f.notes, '') IS NOT NULL THEN f.notes
-                    ELSE TRIM(BOTH '_' FROM CONCAT(
-                        COALESCE(f.name, ''),
-                        CASE WHEN COALESCE(f.source, '') <> '' THEN '_' || f.source ELSE '' END,
-                        CASE WHEN COALESCE(f.unit, '') <> '' THEN '_' || f.unit ELSE '' END,
-                        CASE WHEN COALESCE(f.type, '') <> '' THEN '_' || f.type ELSE '' END
-                    ))
-                END AS feature_label,
-                sy.name     AS system,
-                ds.name     AS dataset,
-                ds.name     AS Dataset,
-                f.name      AS name,
-                f.source    AS source,
-                f.unit      AS unit,
-                f.type      AS type,
-                f.notes     AS notes,
-                f.name      AS base_name,
-                f.source    AS source,
-                f.type      AS type,
-                f.notes     AS label,
-                m.value AS v
-            {sql_from}
-            ORDER BY m.ts
-        """
+        combined = pd.concat(frames, ignore_index=True, sort=False)
+        combined = combined.sort_values("t", kind="stable")
         if limit:
-            sql += f" LIMIT {int(limit)}"
-        return con.execute(sql, params).df()
+            combined = combined.head(int(limit))
+        return combined
 
     def _query_csv_zoom(
         self,

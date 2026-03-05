@@ -226,7 +226,8 @@ class StatisticsSidebar(SidebarWidget):
         set_status_text(tr("Fetching statistics data..."))
         self._inform_user(tr("Fetching statistics data..."), level=logging.INFO)
 
-        def _on_fetch_result(data_frame) -> None:
+        def _on_fetch_result(frame_token: str) -> None:
+            data_frame = self.data_selector.resolve_dataframe_token(frame_token, consume=True)
             if data_frame is None or getattr(data_frame, "empty", True):
                 self._run_button.setEnabled(True)
                 message = tr("Failed to load data for selected inputs.")
@@ -264,7 +265,7 @@ class StatisticsSidebar(SidebarWidget):
             set_status_text(text)
             self._inform_user(text, level=logging.ERROR)
 
-        started = self.data_selector.fetch_base_dataframe_async(
+        started = self.data_selector.fetch_base_dataframe_token_async(
             preprocessing_override=stats_preprocessing,
             on_result=_on_fetch_result,
             on_error=_on_fetch_error,

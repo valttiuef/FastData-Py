@@ -284,7 +284,8 @@ class ForecastingSidebar(SidebarWidget):
         except Exception:
             logger.warning("Exception in _start_run", exc_info=True)
 
-        def _on_fetch_result(data_frame) -> None:
+        def _on_fetch_result(frame_token: str) -> None:
+            data_frame = self.data_selector.resolve_dataframe_token(frame_token, consume=True)
             if data_frame is None or getattr(data_frame, "empty", True):
                 self.run_button.setEnabled(True)
                 message = tr("Failed to load data for selected inputs.")
@@ -339,7 +340,7 @@ class ForecastingSidebar(SidebarWidget):
             isinstance(target_feature, dict) and target_feature not in features
         )
         if use_selector_selection:
-            started = self.data_selector.fetch_base_dataframe_async(
+            started = self.data_selector.fetch_base_dataframe_token_async(
                 on_result=_on_fetch_result,
                 on_error=_on_fetch_error,
                 owner=self,
@@ -349,7 +350,7 @@ class ForecastingSidebar(SidebarWidget):
         else:
             all_payloads = list(features)
             all_payloads.append(target_feature)
-            started = self.data_selector.fetch_base_dataframe_for_features_async(
+            started = self.data_selector.fetch_base_dataframe_for_features_token_async(
                 all_payloads,
                 on_result=_on_fetch_result,
                 on_error=_on_fetch_error,

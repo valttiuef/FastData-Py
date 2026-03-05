@@ -1,6 +1,6 @@
-from frontend.charts import MAX_FEATURES_SHOWN, MAX_FEATURES_SHOWN_LEGEND
+from frontend.charts import MAX_FEATURES_ANALYSIS, MAX_FEATURES_SHOWN, MAX_FEATURES_SHOWN_LEGEND
 
 from .charts_tab import ChartsTab
 
-__all__ = ["MAX_FEATURES_SHOWN", "MAX_FEATURES_SHOWN_LEGEND", "ChartsTab"]
+__all__ = ["MAX_FEATURES_SHOWN", "MAX_FEATURES_SHOWN_LEGEND", "MAX_FEATURES_ANALYSIS", "ChartsTab"]
 

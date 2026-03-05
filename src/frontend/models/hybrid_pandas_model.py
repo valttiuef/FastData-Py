@@ -1,7 +1,9 @@
 
 from __future__ import annotations
 from dataclasses import dataclass, field
+from collections import OrderedDict
 from typing import Optional, Tuple, List, Sequence, Dict, Any, Mapping
+import threading
 
 import pandas as pd
 import numpy as np
@@ -212,6 +214,10 @@ class HybridPandasModel(DatabaseModel):
         self._global_filter_feature_ids: set[int] = set()
         self._lag_min_seconds: int = 0
         self._lag_max_seconds: int = 0
+        self._frame_token_lock = threading.RLock()
+        self._frame_token_counter: int = 0
+        self._frame_token_limit: int = 24
+        self._frame_tokens: "OrderedDict[str, pd.DataFrame]" = OrderedDict()
 
         # heuristics
         self._small_threshold: int = 10000
@@ -517,6 +523,32 @@ class HybridPandasModel(DatabaseModel):
     def base_dataframe(self) -> pd.DataFrame:
         """Return a copy of the postprocessed, wide-span BASE cache."""
         return self._base_df.copy()
+
+    # @ai(gpt-5, codex, feature, 2026-03-05)
+    def store_dataframe_snapshot(self, frame: Optional[pd.DataFrame]) -> str:
+        """Store a dataframe snapshot and return a lightweight token handle."""
+        snapshot = frame.copy() if isinstance(frame, pd.DataFrame) else pd.DataFrame(columns=["t"])
+        with self._frame_token_lock:
+            self._frame_token_counter += 1
+            token = f"df:{self._frame_token_counter}"
+            self._frame_tokens[token] = snapshot
+            while len(self._frame_tokens) > self._frame_token_limit:
+                self._frame_tokens.popitem(last=False)
+        return token
+
+    # @ai(gpt-5, codex, feature, 2026-03-05)
+    def dataframe_from_token(self, token: Optional[str], *, consume: bool = False) -> pd.DataFrame:
+        """Resolve a previously stored dataframe token."""
+        if not token:
+            return pd.DataFrame(columns=["t"])
+        with self._frame_token_lock:
+            if consume:
+                frame = self._frame_tokens.pop(str(token), None)
+            else:
+                frame = self._frame_tokens.get(str(token))
+        if frame is None:
+            return pd.DataFrame(columns=["t"])
+        return frame.copy()
 
     # @ai(gpt-5, codex, feature, 2026-03-04)
     def append_group_columns(
@@ -1758,11 +1790,9 @@ class HybridPandasModel(DatabaseModel):
         rename_map = {key: name for key, name in col_map.items()}
         pivot = pivot.rename(columns=rename_map)
 
-        # Ensure all expected columns exist and are ordered
-        for col in ordered_cols:
-            if col not in pivot.columns:
-                pivot[col] = np.nan
-        pivot = pivot.reindex(columns=ordered_cols)
+        # Ensure all expected columns exist and are ordered in one operation.
+        # Repeated per-column assignment can heavily fragment wide dataframes.
+        pivot = pivot.reindex(columns=ordered_cols, fill_value=np.nan)
 
         # Finalize output
         out = pivot.reset_index().rename(columns={"index": "t"})
@@ -1837,8 +1867,7 @@ class HybridPandasModel(DatabaseModel):
         value_cols = [c for c in d.columns if c != "t"]
         if not value_cols:
             return d
-        for col in value_cols:
-            d[col] = pd.to_numeric(d[col], errors="coerce")
+        d.loc[:, value_cols] = d.loc[:, value_cols].apply(pd.to_numeric, errors="coerce")
 
         # determine cadence
         _, user_secs = self._parse_seconds_freq(timestep)
@@ -1911,6 +1940,8 @@ class HybridPandasModel(DatabaseModel):
                     exc_info=True,
                 )
 
+        # Defragment before reset_index when operating on very wide frames.
+        d2 = d2.copy()
         out = d2.reset_index().rename(columns={"index": "t"})
 
         # ✅ keep consistent: drop tz without shifting

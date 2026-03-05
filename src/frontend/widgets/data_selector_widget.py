@@ -22,6 +22,8 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+MAX_FEATURES_DETAILS_SUMMARY = 40
+
 
 def _format_date(ts) -> str:
     if ts is None:
@@ -125,6 +127,19 @@ def _build_feature_summary_text(
     return "\n".join(lines)
 
 
+def _cap_feature_payloads(payloads: Sequence[Mapping[str, object]], *, max_count: int) -> list[dict]:
+    out: list[dict] = []
+    if max_count <= 0:
+        return out
+    for payload in payloads:
+        if not isinstance(payload, Mapping):
+            continue
+        out.append(dict(payload))
+        if len(out) >= max_count:
+            break
+    return out
+
+
 
 class DataSelectorViewModel(QObject):
     """View-model that keeps :class:`DataSelectorWidget` in sync with a model."""
@@ -180,11 +195,8 @@ class DataSelectorViewModel(QObject):
     def _on_database_changed(self, *_args) -> None:
         if self._selection_refresh_pending:
             self._finish_selection_refresh()
-        if self._widget.features_widget is not None:
-            try:
-                self._widget.features_widget.clear_selection_and_suppress_autoselect()
-            except Exception:
-                logger.warning("Exception in _on_database_changed", exc_info=True)
+        # Keep current selection IDs so feature reload can restore any rows that
+        # still exist after import/refresh. Missing rows are naturally dropped.
 
     def _on_selection_state_changed(self) -> None:
         """Apply saved selection filters/preprocessing and refresh affected widgets."""
@@ -390,6 +402,55 @@ class DataSelectorViewModel(QObject):
         )
         return True
 
+    # @ai(gpt-5, codex, refactor, 2026-03-05)
+    def fetch_base_dataframe_token_async(
+        self,
+        *,
+        preprocessing_override: Optional[Mapping[str, object]] = None,
+        group_payloads: Optional[Sequence[Mapping[str, object]]] = None,
+        group_kinds: Optional[Sequence[str]] = None,
+        on_result=None,
+        on_error=None,
+        owner: object | None = None,
+        key: object | None = "selector_base_dataframe_token_fetch",
+        cancel_previous: bool = True,
+    ) -> bool:
+        model = self._data_model
+        filters = self.build_data_filters()
+        if model is None or filters is None:
+            return False
+        params = self._resolved_preprocessing_params(
+            preprocessing_override=preprocessing_override
+        )
+
+        def _work() -> str:
+            model.load_base(filters, **params)
+            frame = model.base_dataframe().copy()
+            frame = self._append_requested_group_columns(
+                frame,
+                group_payloads=group_payloads,
+                group_kinds=group_kinds,
+            )
+            return model.store_dataframe_snapshot(frame)
+
+        run_in_thread(
+            _work,
+            on_result=(
+                (lambda token: run_in_main_thread(on_result, str(token)))
+                if callable(on_result)
+                else None
+            ),
+            on_error=(
+                (lambda message: run_in_main_thread(on_error, str(message)))
+                if callable(on_error)
+                else None
+            ),
+            owner=owner or self,
+            key=key,
+            cancel_previous=cancel_previous,
+        )
+        return True
+
     # @ai(gpt-5, codex, refactor, 2026-03-02)
     def fetch_base_dataframe_for_features_async(
         self,
@@ -468,6 +529,93 @@ class DataSelectorViewModel(QObject):
             cancel_previous=cancel_previous,
         )
         return True
+
+    # @ai(gpt-5, codex, refactor, 2026-03-05)
+    def fetch_base_dataframe_for_features_token_async(
+        self,
+        feature_payloads: Sequence[Mapping[str, object]],
+        *,
+        preprocessing_override: Optional[Mapping[str, object]] = None,
+        group_payloads: Optional[Sequence[Mapping[str, object]]] = None,
+        group_kinds: Optional[Sequence[str]] = None,
+        start: Optional[pd.Timestamp] = None,
+        end: Optional[pd.Timestamp] = None,
+        systems: Optional[Sequence[str]] = None,
+        datasets: Optional[Sequence[str]] = None,
+        group_ids: Optional[Sequence[int]] = None,
+        on_result=None,
+        on_error=None,
+        owner: object | None = None,
+        key: object | None = "selector_base_dataframe_token_fetch_for_features",
+        cancel_previous: bool = True,
+    ) -> bool:
+        model = self._data_model
+        payloads = [dict(p) for p in (feature_payloads or []) if isinstance(p, Mapping)]
+        if not payloads:
+            return False
+        if self._widget.filters_widget is None or model is None:
+            return False
+
+        filters = DataFilters(
+            features=[FeatureSelection.from_payload(p) for p in payloads],
+            start=self._widget.filters_widget.start_timestamp() if start is None else start,
+            end=self._widget.filters_widget.end_timestamp() if end is None else end,
+            group_ids=(
+                list(group_ids)
+                if group_ids is not None
+                else self._widget.filters_widget.selected_group_ids()
+            ),
+            months=self._widget.filters_widget.selected_months(),
+            systems=(
+                list(systems)
+                if systems is not None
+                else self._widget.filters_widget.selected_systems()
+            ),
+            datasets=(
+                list(datasets)
+                if datasets is not None
+                else self._widget.filters_widget.selected_datasets()
+            ),
+            import_ids=self._widget.filters_widget.selected_import_ids(),
+        )
+        params = self._resolved_preprocessing_params(
+            preprocessing_override=preprocessing_override
+        )
+
+        def _work() -> str:
+            model.load_base(filters, **params)
+            frame = model.base_dataframe().copy()
+            frame = self._append_requested_group_columns(
+                frame,
+                group_payloads=group_payloads,
+                group_kinds=group_kinds,
+            )
+            return model.store_dataframe_snapshot(frame)
+
+        run_in_thread(
+            _work,
+            on_result=(
+                (lambda token: run_in_main_thread(on_result, str(token)))
+                if callable(on_result)
+                else None
+            ),
+            on_error=(
+                (lambda message: run_in_main_thread(on_error, str(message)))
+                if callable(on_error)
+                else None
+            ),
+            owner=owner or self,
+            key=key,
+            cancel_previous=cancel_previous,
+        )
+        return True
+
+    # @ai(gpt-5, codex, feature, 2026-03-05)
+    def resolve_dataframe_token(self, token: Optional[str], *, consume: bool = False) -> pd.DataFrame:
+        model = self._data_model
+        if model is None:
+            return pd.DataFrame(columns=["t"])
+        return model.dataframe_from_token(token, consume=consume)
 
     @staticmethod
     def _ordered_unique_features(
@@ -829,12 +977,12 @@ class DataSelectorWidget(QGroupBox):
     def _emit_data_requirements_now(self) -> None:
         filters = self.filters_widget.filter_state() if self.filters_widget is not None else {}
         preprocessing = self.preprocessing_widget.parameters() if self.preprocessing_widget is not None else {}
-        features = self.features_widget.selected_payloads() if self.features_widget is not None else []
+        features_count = len(self.features_widget.selected_feature_ids()) if self.features_widget is not None else 0
         self.data_requirements_changed.emit(
             {
                 "filters": filters,
                 "preprocessing": preprocessing,
-                "features": features,
+                "features_count": int(features_count),
             }
         )
 
@@ -970,6 +1118,30 @@ class DataSelectorWidget(QGroupBox):
             cancel_previous=cancel_previous,
         )
 
+    # @ai(gpt-5, codex, refactor, 2026-03-05)
+    def fetch_base_dataframe_token_async(
+        self,
+        *,
+        preprocessing_override: Optional[Mapping[str, object]] = None,
+        group_payloads: Optional[Sequence[Mapping[str, object]]] = None,
+        group_kinds: Optional[Sequence[str]] = None,
+        on_result=None,
+        on_error=None,
+        owner: object | None = None,
+        key: object | None = "selector_base_dataframe_token_fetch",
+        cancel_previous: bool = True,
+    ) -> bool:
+        return self.view_model.fetch_base_dataframe_token_async(
+            preprocessing_override=preprocessing_override,
+            group_payloads=group_payloads,
+            group_kinds=group_kinds,
+            on_result=on_result,
+            on_error=on_error,
+            owner=owner,
+            key=key,
+            cancel_previous=cancel_previous,
+        )
+
     def find_top_correlations(
         self,
         *,
@@ -1031,6 +1203,46 @@ class DataSelectorWidget(QGroupBox):
             cancel_previous=cancel_previous,
         )
 
+    # @ai(gpt-5, codex, refactor, 2026-03-05)
+    def fetch_base_dataframe_for_features_token_async(
+        self,
+        feature_payloads: Sequence[Mapping[str, object]],
+        *,
+        preprocessing_override: Optional[Mapping[str, object]] = None,
+        group_payloads: Optional[Sequence[Mapping[str, object]]] = None,
+        group_kinds: Optional[Sequence[str]] = None,
+        start: Optional[pd.Timestamp] = None,
+        end: Optional[pd.Timestamp] = None,
+        systems: Optional[Sequence[str]] = None,
+        datasets: Optional[Sequence[str]] = None,
+        group_ids: Optional[Sequence[int]] = None,
+        on_result=None,
+        on_error=None,
+        owner: object | None = None,
+        key: object | None = "selector_base_dataframe_token_fetch_for_features",
+        cancel_previous: bool = True,
+    ) -> bool:
+        return self.view_model.fetch_base_dataframe_for_features_token_async(
+            feature_payloads,
+            preprocessing_override=preprocessing_override,
+            group_payloads=group_payloads,
+            group_kinds=group_kinds,
+            start=start,
+            end=end,
+            systems=systems,
+            datasets=datasets,
+            group_ids=group_ids,
+            on_result=on_result,
+            on_error=on_error,
+            owner=owner,
+            key=key,
+            cancel_previous=cancel_previous,
+        )
+
+    # @ai(gpt-5, codex, feature, 2026-03-05)
+    def resolve_dataframe_token(self, token: Optional[str], *, consume: bool = False) -> pd.DataFrame:
+        return self.view_model.resolve_dataframe_token(token, consume=consume)
+
     # ------------------------------------------------------------------
     def _resolve_log_view_model(self):
         try:
@@ -1076,6 +1288,13 @@ class DataSelectorWidget(QGroupBox):
         """
         if not payloads:
             return
+        total_payload_count = len(payloads)
+        payloads = _cap_feature_payloads(
+            payloads,
+            max_count=MAX_FEATURES_DETAILS_SUMMARY,
+        )
+        if not payloads:
+            return
 
         self._ensure_feature_dialog(tr("Loading feature details…"))
 
@@ -1097,7 +1316,13 @@ class DataSelectorWidget(QGroupBox):
             except Exception:
                 filters = None
 
-        self._load_feature_summary(payloads=payloads, model=model, filters=filters, params=params)
+        self._load_feature_summary(
+            payloads=payloads,
+            total_payload_count=total_payload_count,
+            model=model,
+            filters=filters,
+            params=params,
+        )
 
     def show_feature_details(self, payloads: Optional[Sequence[Mapping[str, object]]] = None) -> None:
         resolved_payloads: list[dict] = []
@@ -1147,11 +1372,20 @@ class DataSelectorWidget(QGroupBox):
         self,
         *,
         payloads: list[dict],
+        total_payload_count: int,
         model: Optional[HybridPandasModel],
         filters: Optional[DataFilters],
         params: dict[str, Any],
     ) -> None:
         def _build_summary() -> str:
+            prefix = ""
+            if total_payload_count > len(payloads):
+                prefix = tr(
+                    "Showing first {shown} of {total} selected features to keep details concise.\n\n"
+                ).format(
+                    shown=len(payloads),
+                    total=total_payload_count,
+                )
             display_start = None
             display_end = None
             if model is not None and filters is not None:
@@ -1165,7 +1399,7 @@ class DataSelectorWidget(QGroupBox):
                     display_start = filters.start
                     display_end = filters.end
                 try:
-                    return _build_feature_summary_text(
+                    return prefix + _build_feature_summary_text(
                         model,
                         filters,
                         display_start,
@@ -1175,7 +1409,7 @@ class DataSelectorWidget(QGroupBox):
                 except Exception:
                     logger.warning("Exception in _build_summary", exc_info=True)
             from ..utils.feature_details import build_feature_summary_from_payloads
-            return build_feature_summary_from_payloads(payloads)
+            return prefix + build_feature_summary_from_payloads(payloads)
 
         def _apply_summary(summary_text: str) -> None:
             if self._feature_dialog is None:
