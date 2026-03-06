@@ -460,6 +460,7 @@ Create reusable feature selections and filter presets.
   <li>Use <b>Reload features</b> to restore the table from the database and discard unsaved edits.</li>
   <li>Apply saved filters to limit rows before modeling.</li>
   <li>Store multiple presets and quickly switch between them for experimentation.</li>
+  <li>Choose a filter scope per feature to apply value limits globally, by system, dataset, import, or only to that feature.</li>
   <li>Export or import selection databases to share with teammates.</li>
 </ul>
 <p>Adjusting selections here keeps your preprocessing and modeling steps consistent.</p>

@@ -13,7 +13,15 @@ from backend.models import ImportOptions
 
 from .settings_model import SettingsModel
 from .database_model import DatabaseModel
-from .selection_settings import FeatureValueFilter
+from .selection_settings import (
+    FILTER_SCOPE_DATASET,
+    FILTER_SCOPE_GLOBAL,
+    FILTER_SCOPE_IMPORT,
+    FILTER_SCOPE_LOCAL,
+    FILTER_SCOPE_SYSTEM,
+    FeatureValueFilter,
+    normalize_filter_scope,
+)
 
 from core.datetime_utils import ensure_series_naive, drop_timezone_preserving_wall
 from ..utils.time_steps import TIMESTEP_SECONDS
@@ -211,7 +219,7 @@ class HybridPandasModel(DatabaseModel):
         self._hard_cap: int = self.HARD_POINT_CAP
         self._current_cap: int = self._soft_cap
         self._visible_feature_ids: set[int] = set()
-        self._global_filter_feature_ids: set[int] = set()
+        self._helper_filter_feature_ids: set[int] = set()
         self._lag_min_seconds: int = 0
         self._lag_max_seconds: int = 0
         self._frame_token_lock = threading.RLock()
@@ -288,7 +296,7 @@ class HybridPandasModel(DatabaseModel):
         # last delivered df
         self._current_df: pd.DataFrame = pd.DataFrame(columns=["t"])
         self._visible_feature_ids = set()
-        self._global_filter_feature_ids = set()
+        self._helper_filter_feature_ids = set()
         self._lag_min_seconds = 0
         self._lag_max_seconds = 0
 
@@ -878,26 +886,6 @@ class HybridPandasModel(DatabaseModel):
             start=start,
             end=end,
         )
-        value_filters_payload = []
-        for flt in self._value_filters or []:
-            feature_id = getattr(flt, "feature_id", None)
-            if feature_id is None:
-                continue
-            min_value = getattr(flt, "min_value", None)
-            max_value = getattr(flt, "max_value", None)
-            if min_value is None and max_value is None:
-                continue
-            value_filters_payload.append(
-                {
-                    "feature_id": int(feature_id),
-                    "min_value": min_value,
-                    "max_value": max_value,
-                    "apply_globally": bool(getattr(flt, "apply_globally", False)),
-                }
-            )
-        if value_filters_payload:
-            common_kwargs["value_filters"] = value_filters_payload
-
         if feature_ids:
             common_kwargs["feature_ids"] = feature_ids
         else:
@@ -921,7 +909,8 @@ class HybridPandasModel(DatabaseModel):
                 zoom_kwargs["step_seconds"] = int(step_seconds)
             df = self.db.query_zoom(**zoom_kwargs)
 
-        wide_df, col_map = self._normalize_to_wide(df, feature_list)
+        filtered_df = self._apply_value_filters_to_long(df)
+        wide_df, col_map = self._normalize_to_wide(filtered_df, feature_list)
         return self._apply_value_filters(wide_df, col_map)
 
     def _postprocess_window(
@@ -1128,7 +1117,7 @@ class HybridPandasModel(DatabaseModel):
             self._params = params
             self._lag_min_seconds, self._lag_max_seconds = (0, 0)
             self._visible_feature_ids = set()
-            self._global_filter_feature_ids = set()
+            self._helper_filter_feature_ids = set()
             self._base_df = pd.DataFrame(columns=["t"])
             self._base_span = (None, None)
             self._base_cadence_secs = None
@@ -1142,16 +1131,17 @@ class HybridPandasModel(DatabaseModel):
             self._base_cache_key = self._base_cache_key_for(merged_filters, params)
             return
         visible_ids = {int(f.feature_id) for f in merged_filters.features if f.feature_id is not None}
-        global_filter_ids = {
+        helper_filter_ids = {
             int(flt.feature_id)
             for flt in (self._value_filters or [])
-            if flt.apply_globally and flt.feature_id is not None
+            if normalize_filter_scope(getattr(flt, "scope", None)) != FILTER_SCOPE_LOCAL
+            and flt.feature_id is not None
         }
         self._lag_min_seconds, self._lag_max_seconds = self._lag_bounds_seconds(merged_filters.features)
         self._visible_feature_ids = visible_ids
-        self._global_filter_feature_ids = global_filter_ids
-        if global_filter_ids:
-            extra_ids = [fid for fid in global_filter_ids if fid not in visible_ids]
+        self._helper_filter_feature_ids = helper_filter_ids
+        if helper_filter_ids:
+            extra_ids = [fid for fid in helper_filter_ids if fid not in visible_ids]
             if extra_ids:
                 merged_filters.features.extend(self._feature_objects_for_ids(extra_ids))
         self._filters = merged_filters
@@ -1376,7 +1366,7 @@ class HybridPandasModel(DatabaseModel):
                     int(f.feature_id),
                     f.min_value,
                     f.max_value,
-                    bool(f.apply_globally),
+                    normalize_filter_scope(getattr(f, "scope", None)),
                 )
                 for f in (filters or [])
                 if f.feature_id is not None
@@ -1949,6 +1939,114 @@ class HybridPandasModel(DatabaseModel):
 
         return out
 
+    def _apply_value_filters_to_long(self, df: pd.DataFrame) -> pd.DataFrame:
+        if df is None:
+            return df
+        if not isinstance(df, pd.DataFrame):
+            return pd.DataFrame()
+        if df.empty or not self._value_filters:
+            return df
+
+        result = df.copy()
+        t_col = "t" if "t" in result.columns else result.columns[0]
+        result["t"] = self._series_to_naive_utc(result[t_col])
+
+        value_col = None
+        for candidate in ("v", "value", "v_avg"):
+            if candidate in result.columns:
+                value_col = candidate
+                break
+        if value_col is None or "feature_id" not in result.columns:
+            return result
+
+        result["feature_id"] = pd.to_numeric(result["feature_id"], errors="coerce")
+        result[value_col] = pd.to_numeric(result[value_col], errors="coerce")
+        if "system" in result.columns:
+            result["system"] = result["system"].astype("string").fillna("").str.strip()
+        if "dataset" in result.columns:
+            result["dataset"] = result["dataset"].astype("string").fillna("").str.strip()
+        if "Dataset" in result.columns and "dataset" not in result.columns:
+            result["dataset"] = result["Dataset"].astype("string").fillna("").str.strip()
+        if "import_id" in result.columns:
+            result["import_id"] = pd.to_numeric(result["import_id"], errors="coerce")
+
+        for flt in self._value_filters:
+            fid = getattr(flt, "feature_id", None)
+            if fid is None:
+                continue
+            source_mask = result["feature_id"] == int(fid)
+            if not source_mask.any():
+                continue
+            series = result.loc[source_mask, value_col]
+            mask = pd.Series(True, index=series.index)
+            if flt.min_value is not None:
+                mask &= series >= flt.min_value
+            if flt.max_value is not None:
+                mask &= series < flt.max_value
+            scope = normalize_filter_scope(getattr(flt, "scope", None))
+            failing = result.loc[source_mask].loc[~mask]
+            if failing.empty:
+                continue
+            if scope == FILTER_SCOPE_GLOBAL:
+                bad_times = set(failing["t"].tolist())
+                result = result.loc[~result["t"].isin(bad_times)].reset_index(drop=True)
+                continue
+            if scope == FILTER_SCOPE_LOCAL:
+                target_mask = source_mask & result["t"].isin(set(failing["t"].tolist()))
+                result.loc[target_mask, value_col] = np.nan
+                continue
+            if scope == FILTER_SCOPE_SYSTEM:
+                if "system" not in failing.columns:
+                    continue
+                bad_keys = {(row.t, str(row.system or "").strip()) for row in failing.itertuples(index=False)}
+                if not bad_keys:
+                    continue
+                target_mask = result.apply(
+                    lambda row: (row["t"], str(row.get("system", "") or "").strip()) in bad_keys,
+                    axis=1,
+                )
+                result.loc[target_mask, value_col] = np.nan
+                continue
+            if scope == FILTER_SCOPE_DATASET:
+                if "system" not in failing.columns or "dataset" not in failing.columns:
+                    continue
+                bad_keys = {
+                    (row.t, str(row.system or "").strip(), str(row.dataset or "").strip())
+                    for row in failing.itertuples(index=False)
+                }
+                if not bad_keys:
+                    continue
+                target_mask = result.apply(
+                    lambda row: (
+                        row["t"],
+                        str(row.get("system", "") or "").strip(),
+                        str(row.get("dataset", "") or "").strip(),
+                    ) in bad_keys,
+                    axis=1,
+                )
+                result.loc[target_mask, value_col] = np.nan
+                continue
+            if scope == FILTER_SCOPE_IMPORT:
+                if "import_id" not in failing.columns:
+                    continue
+                bad_keys = {
+                    (row.t, int(row.import_id))
+                    for row in failing.itertuples(index=False)
+                    if not pd.isna(row.import_id)
+                }
+                if not bad_keys:
+                    continue
+                target_mask = result.apply(
+                    lambda row: (
+                        row["t"],
+                        int(row.get("import_id")),
+                    ) in bad_keys if not pd.isna(row.get("import_id")) else False,
+                    axis=1,
+                )
+                result.loc[target_mask, value_col] = np.nan
+                continue
+        return result
+
     def _apply_value_filters(
         self,
         df: pd.DataFrame,
@@ -1958,33 +2056,10 @@ class HybridPandasModel(DatabaseModel):
             return df
         if not isinstance(df, pd.DataFrame):
             return pd.DataFrame()
-        if df.empty or not self._value_filters:
+        if df.empty:
             return df
         result = df.copy()
-        id_to_column: Dict[int, str] = {}
-        for key, column_name in col_map.items():
-            fid = key[0]
-            if fid is None:
-                continue
-            id_to_column[int(fid)] = column_name
-        for flt in self._value_filters:
-            fid = getattr(flt, "feature_id", None)
-            if fid is None:
-                continue
-            column = id_to_column.get(int(fid))
-            if not column or column not in result.columns:
-                continue
-            series = pd.to_numeric(result[column], errors="coerce")
-            mask = pd.Series(True, index=result.index)
-            if flt.min_value is not None:
-                mask &= series >= flt.min_value
-            if flt.max_value is not None:
-                mask &= series < flt.max_value
-            if flt.apply_globally:
-                result = result.loc[mask].reset_index(drop=True)
-            else:
-                result[column] = series.where(mask, np.nan)
-        hidden_ids = self._global_filter_feature_ids - self._visible_feature_ids
+        hidden_ids = self._helper_filter_feature_ids - self._visible_feature_ids
         if hidden_ids:
             hidden_cols = [
                 name for key, name in col_map.items() if key[0] in hidden_ids

@@ -6,7 +6,14 @@ import logging
 import pandas as pd
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 
-from ...models.selection_settings import FeatureLabelFilter, FeatureValueFilter, SelectionSettingsPayload
+from ...models.selection_settings import (
+    FILTER_SCOPE_CHOICES,
+    FILTER_SCOPE_SYSTEM,
+    FeatureLabelFilter,
+    FeatureValueFilter,
+    SelectionSettingsPayload,
+    normalize_filter_scope,
+)
 
 
 class FeatureSelectionTableModel(QAbstractTableModel):
@@ -21,7 +28,7 @@ class FeatureSelectionTableModel(QAbstractTableModel):
         "notes",
     ]
 
-    SELECTION_COLUMNS = ["selected", "filter_min", "filter_max", "filter_global"]
+    SELECTION_COLUMNS = ["selected", "filter_min", "filter_max", "filter_scope"]
 
     COLUMN_DEFINITIONS: List[Tuple[str, str]] = [
         ("selected", "Use"),
@@ -34,7 +41,7 @@ class FeatureSelectionTableModel(QAbstractTableModel):
         ("tags", "Tags"),
         ("filter_min", "Min value"),
         ("filter_max", "Max value"),
-        ("filter_global", "Global filter"),
+        ("filter_scope", "Filter scope"),
         ("notes", "Notes"),
     ]
 
@@ -75,8 +82,10 @@ class FeatureSelectionTableModel(QAbstractTableModel):
         base = Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled
         if key == "feature_id":
             return base
-        if key in {"selected", "filter_global"}:
+        if key == "selected":
             return base | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEditable
+        if key == "filter_scope":
+            return base | Qt.ItemFlag.ItemIsEditable
         return base | Qt.ItemFlag.ItemIsEditable
 
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole):  # noqa: N802
@@ -85,11 +94,18 @@ class FeatureSelectionTableModel(QAbstractTableModel):
         row = self._rows[index.row()]
         key = self.COLUMN_DEFINITIONS[index.column()][0]
         value = row.get(key)
-        if key in {"selected", "filter_global"}:
+        if key == "selected":
             if role == Qt.ItemDataRole.CheckStateRole:
                 return Qt.CheckState.Checked if bool(value) else Qt.CheckState.Unchecked
             if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole):
                 return "Enabled" if bool(value) else "Disabled"
+            return None
+        if key == "filter_scope":
+            scope = normalize_filter_scope(value)
+            if role == Qt.ItemDataRole.DisplayRole:
+                return scope.title()
+            if role == Qt.ItemDataRole.EditRole:
+                return scope
             return None
         if key == "feature_id":
             if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole):
@@ -117,7 +133,7 @@ class FeatureSelectionTableModel(QAbstractTableModel):
         row_idx = index.row()
         col_idx = index.column()
         key = self.COLUMN_DEFINITIONS[index.column()][0]
-        if key in {"selected", "filter_global"}:
+        if key == "selected":
             if role == Qt.ItemDataRole.CheckStateRole:
                 try:
                     state = Qt.CheckState(value)
@@ -135,6 +151,14 @@ class FeatureSelectionTableModel(QAbstractTableModel):
                 self.dataChanged.emit(index, index, [Qt.ItemDataRole.CheckStateRole, Qt.ItemDataRole.DisplayRole])
                 return True
             return False
+        if key == "filter_scope":
+            if role != Qt.ItemDataRole.EditRole:
+                return False
+            row[key] = normalize_filter_scope(value)
+            if 0 <= row_idx < len(self._df.index):
+                self._df.iat[row_idx, col_idx] = row.get(key)
+            self.dataChanged.emit(index, index, [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole])
+            return True
         if role != Qt.ItemDataRole.EditRole:
             return False
         if key in {"filter_min", "filter_max"}:
@@ -180,7 +204,7 @@ class FeatureSelectionTableModel(QAbstractTableModel):
                     selected=True,
                     filter_min=None,
                     filter_max=None,
-                    filter_global=True,
+                    filter_scope=FILTER_SCOPE_SYSTEM,
                     tags=self._coerce_tags(record.get("tags")),
                 )
                 payload["_original"] = {field: payload.get(field) for field in self.FEATURE_COLUMNS}
@@ -271,11 +295,11 @@ class FeatureSelectionTableModel(QAbstractTableModel):
             if flt:
                 row["filter_min"] = flt.min_value
                 row["filter_max"] = flt.max_value
-                row["filter_global"] = bool(flt.apply_globally)
+                row["filter_scope"] = normalize_filter_scope(getattr(flt, "scope", None))
             else:
                 row["filter_min"] = None
                 row["filter_max"] = None
-                row["filter_global"] = True
+                row["filter_scope"] = FILTER_SCOPE_SYSTEM
         self._rebuild_df_cache()
         self.dataChanged.emit(top_left, bottom_right)
 
@@ -291,7 +315,7 @@ class FeatureSelectionTableModel(QAbstractTableModel):
                     int(flt.feature_id),
                     flt.min_value,
                     flt.max_value,
-                    bool(flt.apply_globally),
+                    normalize_filter_scope(getattr(flt, "scope", None)),
                 )
                 for flt in (payload.feature_filters or [])
                 if flt.feature_id is not None
@@ -303,7 +327,7 @@ class FeatureSelectionTableModel(QAbstractTableModel):
                     str(flt.label),
                     flt.min_value,
                     flt.max_value,
-                    bool(flt.apply_globally),
+                    normalize_filter_scope(getattr(flt, "scope", None)),
                 )
                 for flt in (payload.feature_filter_labels or [])
                 if str(flt.label).strip()
@@ -330,7 +354,7 @@ class FeatureSelectionTableModel(QAbstractTableModel):
             selected=True,
             filter_min=None,
             filter_max=None,
-            filter_global=True,
+            filter_scope=FILTER_SCOPE_SYSTEM,
             tags=[],
             _original={field: "" for field in self.FEATURE_COLUMNS},
         )
@@ -397,7 +421,7 @@ class FeatureSelectionTableModel(QAbstractTableModel):
                         feature_id=int(fid),
                         min_value=row.get("filter_min"),
                         max_value=row.get("filter_max"),
-                        apply_globally=bool(row.get("filter_global")),
+                        scope=normalize_filter_scope(row.get("filter_scope")),
                     )
                 )
         return selected, filters
@@ -417,7 +441,7 @@ class FeatureSelectionTableModel(QAbstractTableModel):
                         label=label,
                         min_value=row.get("filter_min"),
                         max_value=row.get("filter_max"),
-                        apply_globally=bool(row.get("filter_global")),
+                        scope=normalize_filter_scope(row.get("filter_scope")),
                     )
                 )
         return selected, filters

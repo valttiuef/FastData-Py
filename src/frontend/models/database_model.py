@@ -16,7 +16,7 @@ from backend.data_db import Database
 from backend.data_db.repositories.feature_tags import normalize_tag
 from backend.settings_db import SelectionSettingsDatabase
 from .settings_model import SettingsModel
-from .selection_settings import FeatureLabelFilter, SelectionSettingsPayload, FeatureValueFilter
+from .selection_settings import FeatureLabelFilter, SelectionSettingsPayload, FeatureValueFilter, normalize_filter_scope
 from ..threading.runner import run_in_thread
 from ..threading.utils import run_in_main_thread
 
@@ -530,7 +530,7 @@ class DatabaseModel(QObject):
                     int(flt.feature_id),
                     flt.min_value,
                     flt.max_value,
-                    bool(flt.apply_globally),
+                    normalize_filter_scope(getattr(flt, "scope", None)),
                 )
                 for flt in (payload.feature_filters or [])
                 if flt.feature_id is not None
@@ -542,7 +542,7 @@ class DatabaseModel(QObject):
                     str(flt.label),
                     flt.min_value,
                     flt.max_value,
-                    bool(flt.apply_globally),
+                    normalize_filter_scope(getattr(flt, "scope", None)),
                 )
                 for flt in (payload.feature_filter_labels or [])
                 if str(flt.label).strip()
@@ -1988,7 +1988,7 @@ class DatabaseModel(QObject):
                     feature_id=int(fid),
                     min_value=flt.min_value,
                     max_value=flt.max_value,
-                    apply_globally=bool(flt.apply_globally),
+                    scope=normalize_filter_scope(getattr(flt, "scope", None)),
                 )
             )
         return resolved

@@ -11,12 +11,12 @@ from typing import List, Optional
 
 import pandas as pd
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QAbstractItemView, QInputDialog, QLabel, QLineEdit, QMessageBox, QWidget
+from PySide6.QtWidgets import QAbstractItemView, QComboBox, QInputDialog, QLabel, QLineEdit, QMessageBox, QStyledItemDelegate, QWidget
 from ...localization import tr
 
 from ...models.database_model import DatabaseModel
 from ...utils import toast_error, toast_info, toast_success, toast_warn
-from ...models.selection_settings import SelectionSettingsPayload
+from ...models.selection_settings import FILTER_SCOPE_CHOICES, SelectionSettingsPayload, normalize_filter_scope
 from ...widgets.fast_table import FastPandasProxyModel, FastTable
 from ...widgets.panel import Panel
 from ..tab_widget import TabWidget
@@ -27,6 +27,25 @@ from .viewmodel import SelectionsViewModel
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+class FilterScopeDelegate(QStyledItemDelegate):
+    def createEditor(self, parent, option, index):
+        editor = QComboBox(parent)
+        for scope in FILTER_SCOPE_CHOICES:
+            editor.addItem(scope.title(), scope)
+        return editor
+
+    def setEditorData(self, editor, index):
+        current = normalize_filter_scope(index.model().data(index, Qt.ItemDataRole.EditRole))
+        current_index = editor.findData(current)
+        editor.setCurrentIndex(max(0, current_index))
+
+    def setModelData(self, editor, model, index):
+        model.setData(index, editor.currentData(), Qt.ItemDataRole.EditRole)
+
+    def updateEditorGeometry(self, editor, option, index):
+        editor.setGeometry(option.rect)
 
 class SelectionsTab(TabWidget):
     def __init__(self, database_model: DatabaseModel, parent: Optional[QWidget] = None) -> None:
@@ -89,6 +108,12 @@ class SelectionsTab(TabWidget):
             | QAbstractItemView.EditTrigger.DoubleClicked
         )
         self.features_table.setModel(self._proxy_model)
+        filter_scope_column = next(
+            (idx for idx, (key, _label) in enumerate(self._table_model.COLUMN_DEFINITIONS) if key == "filter_scope"),
+            -1,
+        )
+        if filter_scope_column >= 0:
+            self.features_table.setItemDelegateForColumn(filter_scope_column, FilterScopeDelegate(self.features_table))
         self.features_table.sortByColumn(1, Qt.SortOrder.AscendingOrder)  # Id
         layout.addWidget(self.features_table, 1)
         return panel
@@ -356,13 +381,19 @@ class SelectionsTab(TabWidget):
 
     def _coerce_bulk_value(self, column_key: str, text: str):
         raw = (text or "").strip()
-        if column_key in {"selected", "filter_global"}:
+        if column_key == "selected":
             normalized = raw.lower()
             if normalized in {"1", "true", "yes", "on", "enabled"}:
                 return True
             if normalized in {"0", "false", "no", "off", "disabled"}:
                 return False
             raise ValueError(tr("Enter a boolean value (true/false, yes/no, 1/0)."))
+        if column_key == "filter_scope":
+            normalized = normalize_filter_scope(raw, default="")
+            if normalized in FILTER_SCOPE_CHOICES:
+                return normalized
+            allowed = ", ".join(scope.title() for scope in FILTER_SCOPE_CHOICES)
+            raise ValueError(tr("Enter one of: {allowed}.").format(allowed=allowed))
         if column_key in {"filter_min", "filter_max"}:
             if raw == "":
                 return ""
@@ -596,7 +627,7 @@ class SelectionsTab(TabWidget):
                 continue
         if keys.intersection({"selected", "type"}):
             self._refresh_group_filters_for_enabled_group_features()
-        if not keys.intersection({"filter_min", "filter_max", "filter_global"}):
+        if not keys.intersection({"filter_min", "filter_max", "filter_scope"}):
             return
         # Do not apply value filters immediately; wait for selection settings save/activate.
         return

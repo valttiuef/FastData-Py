@@ -8,7 +8,7 @@ entries:
         <li>Toggle columns on or off to build a focused feature set.</li>
         <li>Right-click a saved feature to convert its measurement values into database groups.</li>
         <li>Use <b>Reload features</b> to restore the table from the database and discard unsaved edits.</li>
-        <li>Apply saved filters to limit rows before modeling.</li>
+        <li>Choose a filter scope per feature to apply value limits globally, by system, dataset, import, or only to that feature.</li>
         <li>Store multiple presets and quickly switch between them for experimentation.</li>
         <li>Export or import selection databases to share with teammates.</li>
       </ul>

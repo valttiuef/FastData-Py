@@ -11,6 +11,29 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional
 
 
+FILTER_SCOPE_GLOBAL = "global"
+FILTER_SCOPE_SYSTEM = "system"
+FILTER_SCOPE_DATASET = "dataset"
+FILTER_SCOPE_IMPORT = "import"
+FILTER_SCOPE_LOCAL = "local"
+FILTER_SCOPE_CHOICES = (
+    FILTER_SCOPE_GLOBAL,
+    FILTER_SCOPE_SYSTEM,
+    FILTER_SCOPE_DATASET,
+    FILTER_SCOPE_IMPORT,
+    FILTER_SCOPE_LOCAL,
+)
+
+
+def normalize_filter_scope(value: object, *, default: str = FILTER_SCOPE_SYSTEM) -> str:
+    if isinstance(value, bool):
+        return FILTER_SCOPE_GLOBAL if value else FILTER_SCOPE_LOCAL
+    text = str(value or "").strip().lower()
+    if text in FILTER_SCOPE_CHOICES:
+        return text
+    return default
+
+
 @dataclass
 class FeatureValueFilter:
     """Serializable definition of a per-feature value filter."""
@@ -18,14 +41,20 @@ class FeatureValueFilter:
     feature_id: int
     min_value: Optional[float] = None
     max_value: Optional[float] = None
-    apply_globally: bool = False
+    scope: str = FILTER_SCOPE_SYSTEM
+
+    @property
+    def apply_globally(self) -> bool:
+        return self.scope == FILTER_SCOPE_GLOBAL
 
     def to_dict(self) -> dict:
+        scope = normalize_filter_scope(self.scope)
         return {
             "feature_id": int(self.feature_id),
             "min_value": self.min_value,
             "max_value": self.max_value,
-            "apply_globally": bool(self.apply_globally),
+            "scope": scope,
+            "apply_globally": scope == FILTER_SCOPE_GLOBAL,
         }
 
     @classmethod
@@ -37,7 +66,9 @@ class FeatureValueFilter:
             raise ValueError("feature_id is required for FeatureValueFilter") from exc
         min_value = payload.get("min_value")
         max_value = payload.get("max_value")
-        apply_globally = bool(payload.get("apply_globally", False))
+        scope = normalize_filter_scope(
+            payload.get("scope", payload.get("apply_globally")),
+        )
         try:
             if min_value is not None:
                 min_value = float(min_value)
@@ -52,7 +83,7 @@ class FeatureValueFilter:
             feature_id=fid,
             min_value=min_value,
             max_value=max_value,
-            apply_globally=apply_globally,
+            scope=scope,
         )
 
 
@@ -63,14 +94,20 @@ class FeatureLabelFilter:
     label: str
     min_value: Optional[float] = None
     max_value: Optional[float] = None
-    apply_globally: bool = False
+    scope: str = FILTER_SCOPE_SYSTEM
+
+    @property
+    def apply_globally(self) -> bool:
+        return self.scope == FILTER_SCOPE_GLOBAL
 
     def to_dict(self) -> dict:
+        scope = normalize_filter_scope(self.scope)
         return {
             "label": str(self.label),
             "min_value": self.min_value,
             "max_value": self.max_value,
-            "apply_globally": bool(self.apply_globally),
+            "scope": scope,
+            "apply_globally": scope == FILTER_SCOPE_GLOBAL,
         }
 
     @classmethod
@@ -81,7 +118,9 @@ class FeatureLabelFilter:
             raise ValueError("label is required for FeatureLabelFilter")
         min_value = payload.get("min_value")
         max_value = payload.get("max_value")
-        apply_globally = bool(payload.get("apply_globally", False))
+        scope = normalize_filter_scope(
+            payload.get("scope", payload.get("apply_globally")),
+        )
         try:
             if min_value is not None:
                 min_value = float(min_value)
@@ -96,7 +135,7 @@ class FeatureLabelFilter:
             label=label,
             min_value=min_value,
             max_value=max_value,
-            apply_globally=apply_globally,
+            scope=scope,
         )
 
 
@@ -193,7 +232,14 @@ class SelectionSettingsPayload:
 
 
 __all__ = [
+    "FILTER_SCOPE_CHOICES",
+    "FILTER_SCOPE_DATASET",
+    "FILTER_SCOPE_GLOBAL",
+    "FILTER_SCOPE_IMPORT",
+    "FILTER_SCOPE_LOCAL",
+    "FILTER_SCOPE_SYSTEM",
     "FeatureValueFilter",
     "FeatureLabelFilter",
     "SelectionSettingsPayload",
+    "normalize_filter_scope",
 ]

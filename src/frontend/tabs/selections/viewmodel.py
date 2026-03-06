@@ -15,7 +15,7 @@ import pandas as pd
 from PySide6.QtCore import QObject, Signal
 
 from ...models.database_model import DatabaseModel
-from ...models.selection_settings import SelectionSettingsPayload
+from ...models.selection_settings import SelectionSettingsPayload, normalize_filter_scope
 from ...threading.runner import run_in_thread
 from ...threading.utils import run_in_main_thread
 
@@ -581,7 +581,7 @@ class SelectionsViewModel(QObject):
                         int(f.feature_id),
                         f.min_value,
                         f.max_value,
-                        bool(f.apply_globally),
+                        normalize_filter_scope(getattr(f, "scope", None)),
                     )
                     for f in (payload.feature_filters or [])
                     if f.feature_id is not None
@@ -593,7 +593,7 @@ class SelectionsViewModel(QObject):
                         str(f.label),
                         f.min_value,
                         f.max_value,
-                        bool(f.apply_globally),
+                        normalize_filter_scope(getattr(f, "scope", None)),
                     )
                     for f in (payload.feature_filter_labels or [])
                     if str(f.label).strip()
