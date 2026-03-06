@@ -35,7 +35,7 @@ def add_tab_with_help(
     if help_viewmodel is not None:
         container = QWidget(tab_bar)
         lay = QHBoxLayout(container)
-        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setContentsMargins(0, 0, 4, 0)
         lay.setSpacing(0)
 
         btn = InfoButton(help_key, help_viewmodel, parent=container)
