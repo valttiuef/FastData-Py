@@ -10,6 +10,23 @@ from PySide6.QtCore import QAbstractTableModel, Qt, QModelIndex
 logger = logging.getLogger(__name__)
 
 
+def _is_missing_scalar(value: object) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, (list, tuple, set, dict, np.ndarray)):
+        return False
+    try:
+        result = pd.isna(value)
+    except Exception:
+        return False
+    if isinstance(result, (list, tuple, set, dict, np.ndarray)):
+        return False
+    try:
+        return bool(result)
+    except Exception:
+        return False
+
+
 class FeaturesTableModel(QAbstractTableModel):
     """
     Simple table model over a features DataFrame:
@@ -39,7 +56,8 @@ class FeaturesTableModel(QAbstractTableModel):
         super().__init__(parent)
         if df is None:
             df = pd.DataFrame(columns=list(self.TABLE_COLUMNS))
-        self._df = self._normalize_for_table(df)
+        self._payload_df = self._normalize_payload_dataframe(df)
+        self._df = self._normalize_for_table(self._payload_df)
 
         # Hot-path caches (paint/sort/filter call data() a lot)
         self._np = self._df.to_numpy(copy=False) if self._df is not None else None
@@ -49,11 +67,13 @@ class FeaturesTableModel(QAbstractTableModel):
         self._search_cache: list[str] | None = None
 
     def set_dataframe(self, df: pd.DataFrame):
-        normalized = self._normalize_for_table(df)
+        normalized_payload = self._normalize_payload_dataframe(df)
+        normalized = self._normalize_for_table(normalized_payload)
         old_df = self._df
         try:
             if old_df is not None and old_df.shape == normalized.shape and tuple(old_df.columns) == tuple(normalized.columns):
                 if old_df.equals(normalized):
+                    self._payload_df = normalized_payload
                     return
         except Exception:
             logger.warning("Exception in set_dataframe equality check", exc_info=True)
@@ -69,11 +89,13 @@ class FeaturesTableModel(QAbstractTableModel):
         # Resetting is significantly cheaper than incremental row inserts/removals for full table reloads.
         if old_shape != new_shape or old_columns != tuple(normalized.columns):
             self.beginResetModel()
+            self._payload_df = normalized_payload
             self._df = normalized
             self._np = self._df.to_numpy(copy=False) if self._df is not None else None
             self.endResetModel()
             return
 
+        self._payload_df = normalized_payload
         self._df = normalized
         self._np = self._df.to_numpy(copy=False) if self._df is not None else None
         if new_shape[0] > 0 and new_shape[1] > 0:
@@ -83,7 +105,7 @@ class FeaturesTableModel(QAbstractTableModel):
                 [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole],
             )
 
-    def _normalize_for_table(self, df: pd.DataFrame) -> pd.DataFrame:
+    def _normalize_payload_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         if not isinstance(df, pd.DataFrame):
             raise TypeError("FeaturesTableModel expects a pandas DataFrame input.")
 
@@ -99,7 +121,10 @@ class FeaturesTableModel(QAbstractTableModel):
         out = df.copy()
         if "tags" not in out.columns:
             out["tags"] = [[] for _ in range(len(out))]
-        return out.loc[:, list(self.TABLE_COLUMNS)]
+        return out
+
+    def _normalize_for_table(self, df: pd.DataFrame) -> pd.DataFrame:
+        return df.loc[:, list(self.TABLE_COLUMNS)]
 
     def rowCount(self, parent=QModelIndex()) -> int:  # noqa: N802
         if parent.isValid():
@@ -175,11 +200,8 @@ class FeaturesTableModel(QAbstractTableModel):
     def _coerce_int_display(value: object) -> Optional[int]:
         if value is None:
             return None
-        try:
-            if pd.isna(value):
-                return None
-        except Exception:
-            pass
+        if _is_missing_scalar(value):
+            return None
         try:
             if isinstance(value, str):
                 txt = value.strip()
@@ -212,16 +234,13 @@ class FeaturesTableModel(QAbstractTableModel):
         return None
 
     def feature_payload_at(self, row: int) -> dict | None:
-        if self._df is None or row < 0 or row >= len(self._df):
+        if self._payload_df is None or row < 0 or row >= len(self._payload_df):
             return None
-        r = self._df.iloc[row]
+        r = self._payload_df.iloc[row]
 
         def _normalize(value):
-            try:
-                if pd.isna(value):
-                    return None
-            except Exception:
-                logger.warning("Exception in _normalize", exc_info=True)
+            if _is_missing_scalar(value):
+                return None
             return value
 
         fid = r.get("feature_id")
@@ -230,7 +249,7 @@ class FeaturesTableModel(QAbstractTableModel):
         except Exception:
             feature_id = None
 
-        return dict(
+        payload = dict(
             feature_id=feature_id,
             name=_normalize(r.get("name")),
             source=_normalize(r.get("source")),
@@ -240,6 +259,20 @@ class FeaturesTableModel(QAbstractTableModel):
             lag_seconds=_normalize(r.get("lag_seconds")),
             tags=_normalize(r.get("tags")),
         )
+        for key in (
+            "system",
+            "systems",
+            "dataset",
+            "datasets",
+            "dataset_ids",
+            "imports",
+            "import_ids",
+        ):
+            if key in r.index:
+                payload[key] = _normalize(r.get(key))
+        if "locations" not in payload and "datasets" in payload:
+            payload["locations"] = payload.get("datasets")
+        return payload
 
     def search_text_at(self, row: int) -> str:
         if self._search_cache is None:

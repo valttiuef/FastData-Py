@@ -139,10 +139,7 @@ class SelectionsTab(TabWidget):
         self.sidebar.save_db_button.clicked.connect(self._on_save_settings_database)
         self.sidebar.reset_db_button.clicked.connect(self._on_reset_settings_database)
         if self.sidebar.filters_widget is not None:
-            self.sidebar.filters_widget.systems_changed.connect(self._on_scope_filters_changed)
-            self.sidebar.filters_widget.datasets_changed.connect(self._on_scope_filters_changed)
-            self.sidebar.filters_widget.imports_changed.connect(self._on_scope_filters_changed)
-            self.sidebar.filters_widget.tags_changed.connect(self._on_scope_filters_changed)
+            self.sidebar.filters_widget.filters_changed.connect(self._on_scope_filters_changed)
         self._search_edit.textChanged.connect(self._on_search_text_changed)
         self._table_model.dataChanged.connect(self._on_table_data_changed)
 
@@ -176,14 +173,6 @@ class SelectionsTab(TabWidget):
     def _on_scope_filters_changed(self, *_args) -> None:
         fw = self.sidebar.filters_widget
         if fw is None:
-            return
-        if not self._current_payload.filters_enabled():
-            self._view_model.set_feature_scope_filters(
-                systems=[],
-                datasets=[],
-                import_ids=[],
-                tags=[],
-            )
             return
         self._view_model.set_feature_scope_filters(
             systems=fw.selected_systems(),

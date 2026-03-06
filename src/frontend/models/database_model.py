@@ -135,6 +135,7 @@ class DatabaseModel(QObject):
         self._systems_cache: Optional[list[str]] = None
         self._datasets_cache: Optional[list[str]] = None
         self._tags_cache: Optional[list[str]] = None
+        self._imports_cache: Optional[pd.DataFrame] = None
         self._selected_features_job_id: int = 0
 
     @staticmethod
@@ -145,6 +146,20 @@ class DatabaseModel(QObject):
         for col in ("feature_id", "name", "source", "unit", "type", "notes", "lag_seconds"):
             if col not in out.columns:
                 out[col] = pd.NA
+        if "system" not in out.columns:
+            out["system"] = pd.NA
+        if "systems" not in out.columns:
+            systems_values: list[list[str]] = []
+            for system in out["system"].tolist():
+                try:
+                    if pd.isna(system):
+                        systems_values.append([])
+                        continue
+                except Exception:
+                    pass
+                text = str(system).strip()
+                systems_values.append([text] if text else [])
+            out["systems"] = systems_values
         for col in ("datasets", "imports", "tags", "dataset_ids", "import_ids"):
             if col not in out.columns:
                 out[col] = [[] for _ in range(len(out))]
@@ -441,8 +456,49 @@ class DatabaseModel(QObject):
         self._systems_cache = None
         self._datasets_cache = None
         self._tags_cache = None
+        self._imports_cache = None
         self._features_cache_version += 1
         self._last_selected_features_key = None
+
+    @staticmethod
+    def _empty_imports_frame() -> pd.DataFrame:
+        return pd.DataFrame(
+            columns=[
+                "import_id",
+                "dataset_id",
+                "dataset",
+                "system",
+                "file_name",
+                "sheet_name",
+                "imported_at",
+                "file_sha256",
+            ]
+        )
+
+    def _all_imports_df(self) -> pd.DataFrame:
+        if self._imports_cache is not None:
+            return self._imports_cache.copy()
+        db = self._ensure_database()
+        try:
+            frame = db.list_imports()
+            if frame is None or not isinstance(frame, pd.DataFrame):
+                frame = self._empty_imports_frame()
+        except Exception:
+            frame = self._empty_imports_frame()
+        if frame.empty:
+            self._imports_cache = self._empty_imports_frame()
+            return self._imports_cache.copy()
+        normalized = frame.copy()
+        for col in ("system", "dataset", "file_name", "sheet_name"):
+            if col not in normalized.columns:
+                normalized[col] = ""
+            normalized[col] = normalized[col].astype("string").fillna("").str.strip()
+        for col in ("import_id", "dataset_id"):
+            if col not in normalized.columns:
+                normalized[col] = pd.NA
+            normalized[col] = pd.to_numeric(normalized[col], errors="coerce")
+        self._imports_cache = normalized
+        return normalized.copy()
 
     def notify_features_changed(
         self,
@@ -954,10 +1010,21 @@ class DatabaseModel(QObject):
                     continue
             return out
 
+        if systems is not None and not [str(item) for item in systems if str(item).strip()]:
+            return scoped.iloc[0:0].copy()
         system_filter = {str(item) for item in (systems or []) if str(item).strip()}
-        if system_filter and "system" in scoped.columns:
-            scoped = scoped[scoped["system"].astype(str).isin(system_filter)]
+        if system_filter:
+            if "systems" in scoped.columns:
+                scoped = scoped[
+                    scoped["systems"].apply(
+                        lambda values: bool(system_filter.intersection(_as_text_set(values)))
+                    )
+                ]
+            elif "system" in scoped.columns:
+                scoped = scoped[scoped["system"].astype(str).isin(system_filter)]
 
+        if datasets is not None and not [str(item) for item in datasets if str(item).strip()]:
+            return scoped.iloc[0:0].copy()
         dataset_filter = {str(item) for item in (datasets or []) if str(item).strip()}
         if dataset_filter:
             if "datasets" in scoped.columns:
@@ -969,6 +1036,8 @@ class DatabaseModel(QObject):
             elif "dataset" in scoped.columns:
                 scoped = scoped[scoped["dataset"].astype(str).isin(dataset_filter)]
 
+        if import_ids is not None and not [item for item in import_ids if item is not None]:
+            return scoped.iloc[0:0].copy()
         import_filter = {int(v) for v in (import_ids or [])}
         if import_filter and "import_ids" in scoped.columns:
             scoped = scoped[
@@ -1778,21 +1847,74 @@ class DatabaseModel(QObject):
         """
         if self._systems_cache is not None:
             return list(self._systems_cache)
-        db = self._ensure_database()
         try:
-            result = list(db.list_systems())
+            imports_df = self._all_imports_df()
+            if imports_df is not None and not imports_df.empty and "system" in imports_df.columns:
+                result = sorted(
+                    {
+                        str(value).strip()
+                        for value in imports_df["system"].tolist()
+                        if str(value).strip()
+                    }
+                )
+            else:
+                db = self._ensure_database()
+                result = list(db.list_systems())
             self._systems_cache = result
             return result
         except Exception:
             return []
 
-    def list_datasets(self, system: Optional[str] = None) -> list[str]:
-        if system is None and self._datasets_cache is not None:
+    def list_datasets(
+        self,
+        system: Optional[str] = None,
+        *,
+        systems: Optional[Sequence[str]] = None,
+    ) -> list[str]:
+        if systems is not None:
+            provided_systems = [str(item).strip() for item in systems if str(item).strip()]
+            if not provided_systems:
+                return []
+        normalized_systems = [str(item).strip() for item in (systems or []) if str(item).strip()]
+        if system is None and not normalized_systems and self._datasets_cache is not None:
             return list(self._datasets_cache)
-        db = self._ensure_database()
         try:
-            result = list(db.list_datasets(system))
-            if system is None:
+            imports_df = self._all_imports_df()
+            if imports_df is not None and not imports_df.empty:
+                scoped = imports_df
+                if normalized_systems:
+                    scoped = scoped[scoped["system"].isin(normalized_systems)]
+                elif system is not None:
+                    scoped = scoped[scoped["system"] == str(system).strip()]
+                result = sorted(
+                    {
+                        str(value).strip()
+                        for value in scoped["dataset"].tolist()
+                        if str(value).strip()
+                    }
+                )
+                if system is None and not normalized_systems:
+                    self._datasets_cache = result
+                return result
+            if normalized_systems:
+                db = self._ensure_database()
+                with db.connection() as con:
+                    placeholders = ",".join(["?"] * len(normalized_systems))
+                    rows = con.execute(
+                        f"""
+                        SELECT DISTINCT d.name
+                        FROM datasets d
+                        JOIN systems s ON s.id = d.system_id
+                        WHERE s.name IN ({placeholders})
+                        ORDER BY d.name
+                        """,
+                        normalized_systems,
+                    ).fetchall()
+                result = [str(row[0]) for row in rows if row and str(row[0]).strip()]
+            else:
+                db = self._ensure_database()
+                result = list(db.list_datasets(system))
+            if system is None and not normalized_systems:
                 self._datasets_cache = result
             return result
         except Exception:
@@ -1804,10 +1926,69 @@ class DatabaseModel(QObject):
         system: Optional[str] = None,
         dataset: Optional[str] = None,
         datasets: Optional[Sequence[str]] = None,
+        systems: Optional[Sequence[str]] = None,
     ) -> list[tuple[str, int]]:
-        db = self._ensure_database()
         try:
-            frame = db.list_imports(system=system, dataset=dataset, datasets=datasets)
+            if systems is not None:
+                provided_systems = [str(item).strip() for item in systems if str(item).strip()]
+                if not provided_systems:
+                    return []
+            if datasets is not None:
+                provided_datasets = [str(item).strip() for item in datasets if str(item).strip()]
+                if not provided_datasets:
+                    return []
+            normalized_systems = [str(item).strip() for item in (systems or []) if str(item).strip()]
+            ds_values = [str(item).strip() for item in (datasets or []) if str(item).strip()]
+            frame = self._all_imports_df()
+            if frame is not None and not frame.empty:
+                scoped = frame
+                if normalized_systems:
+                    scoped = scoped[scoped["system"].isin(normalized_systems)]
+                elif system:
+                    scoped = scoped[scoped["system"] == str(system).strip()]
+                if dataset:
+                    scoped = scoped[scoped["dataset"] == str(dataset).strip()]
+                elif ds_values:
+                    scoped = scoped[scoped["dataset"].isin(ds_values)]
+                frame = scoped.copy()
+            elif normalized_systems:
+                db = self._ensure_database()
+                where: list[str] = []
+                params: list[object] = []
+                placeholders = ",".join(["?"] * len(normalized_systems))
+                where.append(f"sy.name IN ({placeholders})")
+                params.extend(normalized_systems)
+                if dataset:
+                    where.append("ds.name = ?")
+                    params.append(str(dataset))
+                if ds_values:
+                    placeholders = ",".join(["?"] * len(ds_values))
+                    where.append(f"ds.name IN ({placeholders})")
+                    params.extend(ds_values)
+                where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+                with db.connection() as con:
+                    frame = con.execute(
+                        f"""
+                        SELECT
+                            i.id AS import_id,
+                            i.dataset_id,
+                            ds.name AS dataset,
+                            sy.name AS system,
+                            i.file_name,
+                            i.sheet_name,
+                            i.imported_at,
+                            i.file_sha256
+                        FROM imports i
+                        JOIN datasets ds ON ds.id = i.dataset_id
+                        JOIN systems sy ON sy.id = ds.system_id
+                        {where_sql}
+                        ORDER BY i.imported_at DESC, i.id DESC
+                        """,
+                        params,
+                    ).df()
+            else:
+                db = self._ensure_database()
+                frame = db.list_imports(system=system, dataset=dataset, datasets=datasets)
         except Exception:
             return []
         if frame is None or frame.empty:

@@ -161,6 +161,7 @@ class DataSelectorViewModel(QObject):
         self._data_model: Optional[HybridPandasModel] = None
         self._selection_refresh_pending = False
         self._selection_refresh_waiting_features_reload = False
+        self._initial_filters_refresh_pending = False
         self._widget.filters_changed.connect(self.filters_changed)
         self._widget.preprocessing_changed.connect(self.preprocessing_changed)
         self._widget.features_selection_changed.connect(self.features_selection_changed)
@@ -178,15 +179,17 @@ class DataSelectorViewModel(QObject):
     def refresh_from_model(self) -> None:
         """Refresh filter choices and feature list from the current model."""
         if self._widget.filters_widget is not None:
+            self._initial_filters_refresh_pending = self._widget.features_widget is not None
             try:
                 self._widget.filters_widget.refresh_filters()
             except Exception:
                 logger.warning("Exception in refresh_from_model", exc_info=True)
+                self._initial_filters_refresh_pending = False
         try:
             self._apply_selection_state_to_widget()
         except Exception:
             logger.warning("Exception in refresh_from_model", exc_info=True)
-        if self._widget.features_widget is not None:
+        if self._widget.features_widget is not None and self._widget.filters_widget is None:
             try:
                 self._widget.features_widget.reload_features()
             except Exception:
@@ -216,6 +219,10 @@ class DataSelectorViewModel(QObject):
             self._apply_selection_state_after_filters_refresh()
 
     def _apply_selection_state_after_filters_refresh(self) -> None:
+        if self._initial_filters_refresh_pending and not self._selection_refresh_pending:
+            self._initial_filters_refresh_pending = False
+            self._widget._on_filters_changed()
+            return
         if not self._selection_refresh_pending:
             return
         self._apply_selection_state_to_widget()
@@ -881,6 +888,7 @@ class DataSelectorWidget(QGroupBox):
         self._requirements_emit_pending = False
         self._feature_reload_batch_depth = 0
         self._feature_reload_pending = False
+        self._last_filters_state_key: tuple | None = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -919,12 +927,6 @@ class DataSelectorWidget(QGroupBox):
         if self.preprocessing_widget is not None:
             self.preprocessing_widget.parameters_changed.connect(self._on_preprocessing_changed)
         if self.filters_widget is not None:
-            # Connect to specific filter signals that affect features (systems, datasets, tags)
-            self.filters_widget.systems_changed.connect(self._on_feature_affecting_filters_changed)
-            self.filters_widget.datasets_changed.connect(self._on_feature_affecting_filters_changed)
-            self.filters_widget.imports_changed.connect(self._on_feature_affecting_filters_changed)
-            self.filters_widget.tags_changed.connect(self._on_feature_affecting_filters_changed)
-            # Connect to all filter changes for general notification (without reloading features)
             self.filters_widget.filters_changed.connect(self._on_filters_changed)
         if self.features_widget is not None:
             self.features_widget.selection_changed.connect(self._on_features_selection_changed)
@@ -932,7 +934,8 @@ class DataSelectorWidget(QGroupBox):
         self.view_model = DataSelectorViewModel(widget=self, data_model=data_model, parent=self)
 
         # Initial propagation
-        self._on_feature_affecting_filters_changed()
+        if self.filters_widget is None:
+            self._on_feature_affecting_filters_changed()
 
     # ------------------------------------------------------------------
     def _on_preprocessing_changed(self, params: Mapping[str, Any]) -> None:
@@ -961,7 +964,23 @@ class DataSelectorWidget(QGroupBox):
             self.filters_changed.emit({})
             self._emit_data_requirements()
             return
-        self.filters_changed.emit(self.filters_widget.filter_state())
+        state = self.filters_widget.filter_state()
+        state_key = (
+            state.get("start"),
+            state.get("end"),
+            tuple(state.get("systems") or []),
+            tuple(state.get("datasets") or []),
+            tuple(state.get("import_ids") or []),
+            tuple(state.get("months") or []),
+            tuple(state.get("group_ids") or []),
+            tuple(state.get("tags") or []),
+        )
+        if state_key == self._last_filters_state_key:
+            self._emit_data_requirements()
+            return
+        self._last_filters_state_key = state_key
+        self._on_feature_affecting_filters_changed()
+        self.filters_changed.emit(state)
         self._emit_data_requirements()
 
     def _on_features_selection_changed(self, payloads: list[dict]) -> None:

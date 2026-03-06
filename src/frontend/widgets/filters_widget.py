@@ -193,34 +193,86 @@ class FiltersWidgetViewModel(QObject):
         self.group_remove_failed.emit(message)
 
     def refresh_imports(self, systems: Optional[list[str]], datasets: Optional[list[str]]) -> None:
+        self.refresh_imports_sync(systems, datasets)
+
+    def datasets_for_systems(
+        self,
+        systems: Optional[list[str]],
+    ) -> list[tuple[str, str]]:
         model = self._model
-
-        def _load() -> list[tuple[str, int]]:
-            if model is None:
+        if model is None:
+            return []
+        if systems is not None:
+            selected_systems = [str(s).strip() for s in systems if str(s).strip()]
+            if not selected_systems:
                 return []
-            selected_systems = [str(s).strip() for s in (systems or []) if str(s).strip()]
-            selected_datasets = [str(d).strip() for d in (datasets or []) if str(d).strip()]
-            selected_system = selected_systems[0] if len(selected_systems) == 1 else None
-            selected_dataset = selected_datasets[0] if len(selected_datasets) == 1 else None
-            try:
-                return list(
-                    model.list_imports(
-                        system=selected_system,
-                        dataset=selected_dataset,
-                        datasets=selected_datasets if selected_datasets else None,
-                    )
-                    or []
+        else:
+            selected_systems = []
+        try:
+            items = model.list_datasets(systems=selected_systems if systems is not None else None)
+        except Exception:
+            items = []
+        return [(str(name), str(name)) for name in items]
+
+    def imports_for_filters(
+        self,
+        systems: Optional[list[str]],
+        datasets: Optional[list[str]],
+    ) -> list[tuple[str, int]]:
+        model = self._model
+        if model is None:
+            return []
+        if systems is not None:
+            selected_systems = [str(s).strip() for s in systems if str(s).strip()]
+            if not selected_systems:
+                return []
+        else:
+            selected_systems = []
+        if datasets is not None:
+            selected_datasets = [str(d).strip() for d in datasets if str(d).strip()]
+            if not selected_datasets:
+                return []
+        else:
+            selected_datasets = []
+        selected_system = selected_systems[0] if len(selected_systems) == 1 else None
+        selected_dataset = selected_datasets[0] if len(selected_datasets) == 1 else None
+        try:
+            return list(
+                model.list_imports(
+                    system=selected_system,
+                    dataset=selected_dataset,
+                    datasets=selected_datasets if datasets is not None else None,
+                    systems=selected_systems if systems is not None else None,
                 )
-            except Exception:
-                return []
+                or []
+            )
+        except Exception:
+            return []
 
-        run_in_thread(
-            _load,
-            on_result=lambda items: run_in_main_thread(self.imports_updated.emit, list(items)),
-            owner=self,
-            key="filters_imports_load",
-            cancel_previous=True,
-        )
+    def refresh_datasets_sync(
+        self,
+        systems: Optional[list[str]],
+        *,
+        on_result=None,
+    ) -> None:
+        items = self.datasets_for_systems(systems)
+        if callable(on_result):
+            on_result(list(items))
+            return
+        self.datasets_updated.emit(list(items))
+
+    def refresh_imports_sync(
+        self,
+        systems: Optional[list[str]],
+        datasets: Optional[list[str]],
+        *,
+        on_result=None,
+    ) -> None:
+        items = self.imports_for_filters(systems, datasets)
+        if callable(on_result):
+            on_result(list(items))
+            return
+        self.imports_updated.emit(list(items))
 
 class FiltersWidget(CollapsibleSection):
     """Reusable block that exposes the filtering controls used by multiple tabs."""
@@ -255,6 +307,11 @@ class FiltersWidget(CollapsibleSection):
             except Exception:
                 resolved_help = None
         self._help_viewmodel = resolved_help
+        self._filters_batch_depth = 0
+        self._filters_changed_pending = False
+        self._pending_signal_names: set[str] = set()
+        self._dependency_refresh_token = 0
+        self._dependency_refresh_active = False
 
         grid = QGridLayout()
         grid.setContentsMargins(4, 4, 4, 4)
@@ -266,11 +323,15 @@ class FiltersWidget(CollapsibleSection):
         systems_info = self._make_info("controls.filters.systems_datasets")
         grid.addWidget(systems_label, 0, 0, Qt.AlignmentFlag.AlignRight)
         self.systems_combo = MultiCheckCombo(placeholder=tr("All systems"), summary_max=4)
+        self.systems_combo.set_empty_selection_means_all(False)
+        self.systems_combo.set_preserve_missing_selected_values(True)
         grid.addWidget(self.systems_combo, 0, 1)
 
         datasets_label = self._make_label(tr("Datasets:"))
         grid.addWidget(datasets_label, 0, 3, Qt.AlignmentFlag.AlignRight)
         self.datasets_combo = MultiCheckCombo(placeholder=tr("All datasets"), summary_max=4)
+        self.datasets_combo.set_empty_selection_means_all(False)
+        self.datasets_combo.set_preserve_missing_selected_values(True)
         grid.addWidget(self.datasets_combo, 0, 4)
         if systems_info:
             grid.addWidget(systems_info, 0, 5, Qt.AlignmentFlag.AlignLeft)
@@ -315,6 +376,8 @@ class FiltersWidget(CollapsibleSection):
         imports_label = self._make_label(tr("Imports:"))
         grid.addWidget(imports_label, 3, 0, Qt.AlignmentFlag.AlignRight)
         self.imports_combo = MultiCheckCombo(placeholder=tr("All imports"), summary_max=2)
+        self.imports_combo.set_empty_selection_means_all(False)
+        self.imports_combo.set_preserve_missing_selected_values(True)
         grid.addWidget(self.imports_combo, 3, 1)
 
         tags_label = self._make_label(tr("Tags:"))
@@ -340,28 +403,15 @@ class FiltersWidget(CollapsibleSection):
         self.months_combo.set_items(months, check_all=True)
 
         # Signals
-        self.dt_from.dateTimeChanged.connect(lambda _dt: self.date_range_changed.emit())
-        self.dt_to.dateTimeChanged.connect(lambda _dt: self.date_range_changed.emit())
-        self.systems_combo.selection_changed.connect(self.systems_changed.emit)
-        self.datasets_combo.selection_changed.connect(self.datasets_changed.emit)
-        self.imports_combo.selection_changed.connect(self.imports_changed.emit)
-        self.months_combo.selection_changed.connect(self.months_changed.emit)
-        self.group_combo.selection_changed.connect(self.groups_changed.emit)
-        self.tags_combo.selection_changed.connect(self.tags_changed.emit)
+        self.dt_from.dateTimeChanged.connect(lambda _dt: self._emit_filter_change("date_range_changed"))
+        self.dt_to.dateTimeChanged.connect(lambda _dt: self._emit_filter_change("date_range_changed"))
+        self.systems_combo.selection_changed.connect(self._on_systems_selection_changed)
+        self.datasets_combo.selection_changed.connect(self._on_datasets_selection_changed)
+        self.imports_combo.selection_changed.connect(lambda: self._emit_filter_change("imports_changed"))
+        self.months_combo.selection_changed.connect(lambda: self._emit_filter_change("months_changed"))
+        self.group_combo.selection_changed.connect(lambda: self._emit_filter_change("groups_changed"))
+        self.tags_combo.selection_changed.connect(lambda: self._emit_filter_change("tags_changed"))
         self.group_combo.context_action_triggered.connect(self._on_group_context_action)
-        self.systems_combo.selection_changed.connect(lambda: self._refresh_imports_for_selection())
-        self.datasets_combo.selection_changed.connect(lambda: self._refresh_imports_for_selection())
-
-        for signal in (
-            self.date_range_changed,
-            self.systems_changed,
-            self.datasets_changed,
-            self.imports_changed,
-            self.months_changed,
-            self.groups_changed,
-            self.tags_changed,
-        ):
-            signal.connect(self.filters_changed.emit)
 
         self.bodyLayout().addLayout(grid)
 
@@ -494,8 +544,11 @@ class FiltersWidget(CollapsibleSection):
         combo: MultiCheckCombo,
         values: Iterable[Any] | None,
     ) -> None:
+        if values is None:
+            combo.set_selected_values(self._all_combo_values(combo))
+            return
         normalized = list(values or [])
-        if not normalized:
+        if not normalized and combo.empty_selection_means_all():
             combo.set_selected_values(self._all_combo_values(combo))
             return
         combo.set_selected_values(normalized)
@@ -505,13 +558,16 @@ class FiltersWidget(CollapsibleSection):
         combo: MultiCheckCombo,
         values: Iterable[Any] | None,
     ) -> None:
+        if values is None:
+            combo.set_selected_values(self._all_combo_values(combo))
+            return
         normalized: list[int] = []
         for value in values or []:
             try:
                 normalized.append(int(value))
             except Exception:
                 continue
-        if not normalized:
+        if not normalized and combo.empty_selection_means_all():
             combo.set_selected_values(self._all_combo_values(combo))
             return
         combo.set_selected_values(normalized)
@@ -525,13 +581,6 @@ class FiltersWidget(CollapsibleSection):
 
     def refresh_filters(self) -> None:
         self._filters_view_model.refresh_filters()
-        self._refresh_imports_for_selection()
-
-    def _refresh_imports_for_selection(self) -> None:
-        self._filters_view_model.refresh_imports(
-            self.selected_systems(),
-            self.selected_datasets(),
-        )
 
     # ------------------------------------------------------------------
     def selected_systems(self) -> list[str]:
@@ -622,6 +671,156 @@ class FiltersWidget(CollapsibleSection):
         finally:
             for widget, was in reversed(previous_states):
                 widget.blockSignals(was)
+
+    def _begin_filters_batch(self) -> None:
+        self._filters_batch_depth += 1
+
+    def _end_filters_batch(self) -> None:
+        if self._filters_batch_depth <= 0:
+            self._filters_batch_depth = 0
+            return
+        self._filters_batch_depth -= 1
+        if self._filters_batch_depth == 0 and self._filters_changed_pending:
+            self._filters_changed_pending = False
+            pending = set(self._pending_signal_names)
+            self._pending_signal_names.clear()
+            self._emit_filter_signals_now(pending)
+
+    def _emit_filter_change(self, *signal_names: str) -> None:
+        valid_names = {name for name in signal_names if hasattr(self, name)}
+        if self._filters_batch_depth > 0:
+            self._filters_changed_pending = True
+            self._pending_signal_names.update(valid_names)
+            return
+        self._emit_filter_signals_now(valid_names)
+
+    def _emit_filter_signals_now(self, signal_names: set[str]) -> None:
+        for name in (
+            "date_range_changed",
+            "systems_changed",
+            "datasets_changed",
+            "imports_changed",
+            "months_changed",
+            "groups_changed",
+            "tags_changed",
+        ):
+            if name in signal_names:
+                getattr(self, name).emit()
+        self.filters_changed.emit()
+
+    def _replace_combo_items_preserving_selection(
+        self,
+        combo: MultiCheckCombo,
+        items: list[tuple[str, Any]],
+        *,
+        check_all: bool,
+        previous_values: list[Any],
+    ) -> list[Any]:
+        was = combo.blockSignals(True)
+        try:
+            if combo.preserve_missing_selected_values():
+                remembered_values = combo.remembered_selected_values()
+                if not remembered_values and check_all:
+                    remembered_values = [value for _label, value in items]
+                combo.set_remembered_selected_values(remembered_values)
+                combo.set_items(items, check_all=False)
+            else:
+                remembered_values = list(previous_values)
+                previous_set = set(remembered_values)
+                available_values = [value for _label, value in items]
+                available_set = set(available_values)
+                keep_values = [value for value in remembered_values if value in available_set]
+                select_all = (
+                    combo.empty_selection_means_all()
+                    and bool(remembered_values)
+                    and previous_set == available_set
+                    and len(previous_set) == len(available_set)
+                )
+                combo.set_items(items, check_all=check_all)
+                if select_all:
+                    combo.set_selected_values(available_values)
+                elif keep_values:
+                    combo.set_selected_values(keep_values)
+                elif check_all and combo.empty_selection_means_all():
+                    combo.set_selected_values(available_values)
+                else:
+                    combo.set_selected_values([])
+        finally:
+            combo.blockSignals(was)
+        return combo.selected_values()
+
+    def _on_systems_selection_changed(self) -> None:
+        self._dependency_refresh_token += 1
+        token = self._dependency_refresh_token
+        if not self._dependency_refresh_active:
+            self._dependency_refresh_active = True
+            self._begin_filters_batch()
+        previous_datasets = self.selected_datasets()
+        previous_imports = self.selected_import_ids()
+
+        def _apply_datasets(items: list[tuple[str, Any]]) -> None:
+            if token != self._dependency_refresh_token:
+                self._dependency_refresh_active = False
+                self._end_filters_batch()
+                return
+            self._replace_combo_items_preserving_selection(
+                self.datasets_combo,
+                items,
+                check_all=True,
+                previous_values=previous_datasets,
+            )
+            self._filters_view_model.refresh_imports_sync(
+                self.selected_systems(),
+                self.selected_datasets(),
+                on_result=_apply_imports,
+            )
+
+        def _apply_imports(items: list[tuple[str, Any]]) -> None:
+            if token != self._dependency_refresh_token:
+                return
+            self._replace_combo_items_preserving_selection(
+                self.imports_combo,
+                items,
+                check_all=True,
+                previous_values=previous_imports,
+            )
+            self._emit_filter_change("systems_changed")
+            self._dependency_refresh_active = False
+            self._end_filters_batch()
+
+        self._filters_view_model.refresh_datasets_sync(
+            self.selected_systems(),
+            on_result=_apply_datasets,
+        )
+
+    def _on_datasets_selection_changed(self) -> None:
+        self._dependency_refresh_token += 1
+        token = self._dependency_refresh_token
+        if not self._dependency_refresh_active:
+            self._dependency_refresh_active = True
+            self._begin_filters_batch()
+        previous_imports = self.selected_import_ids()
+
+        def _apply_imports(items: list[tuple[str, Any]]) -> None:
+            if token != self._dependency_refresh_token:
+                self._dependency_refresh_active = False
+                self._end_filters_batch()
+                return
+            self._replace_combo_items_preserving_selection(
+                self.imports_combo,
+                items,
+                check_all=True,
+                previous_values=previous_imports,
+            )
+            self._emit_filter_change("datasets_changed")
+            self._dependency_refresh_active = False
+            self._end_filters_batch()
+
+        self._filters_view_model.refresh_imports_sync(
+            self.selected_systems(),
+            self.selected_datasets(),
+            on_result=_apply_imports,
+        )
 
     # ------------------------------------------------------------------
     def start_timestamp(self) -> pd.Timestamp | None:

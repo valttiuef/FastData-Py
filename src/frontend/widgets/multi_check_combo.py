@@ -44,6 +44,9 @@ class MultiCheckCombo(QComboBox):
         self._summary_formatter: Optional[Callable[[List[str], int, int], str]] = None
         self._max_checked: Optional[int] = None
         self._context_actions: list[tuple[str, str]] = []
+        self._empty_selection_means_all = True
+        self._preserve_missing_selected_values = False
+        self._remembered_selected_values: Optional[list[Any]] = None
 
         # --- popup toggle robustness ---
         self._popup_open = False                 # our own truth
@@ -104,6 +107,28 @@ class MultiCheckCombo(QComboBox):
     def max_checked(self) -> Optional[int]:
         return self._max_checked
 
+    def set_empty_selection_means_all(self, enabled: bool) -> None:
+        self._empty_selection_means_all = bool(enabled)
+
+    def empty_selection_means_all(self) -> bool:
+        return bool(self._empty_selection_means_all)
+
+    def set_preserve_missing_selected_values(self, enabled: bool) -> None:
+        self._preserve_missing_selected_values = bool(enabled)
+        if not self._preserve_missing_selected_values:
+            self._remembered_selected_values = list(self.selected_values())
+
+    def preserve_missing_selected_values(self) -> bool:
+        return bool(self._preserve_missing_selected_values)
+
+    def remembered_selected_values(self) -> list[Any]:
+        if not self._preserve_missing_selected_values:
+            return self.selected_values()
+        return list(self._remembered_selected_values or [])
+
+    def set_remembered_selected_values(self, values: Iterable[Any] | None) -> None:
+        self._remembered_selected_values = list(values or [])
+
     def clear_items(self):
         m: QStandardItemModel = self.model()  # type: ignore[assignment]
         self._internal_change = True
@@ -113,6 +138,8 @@ class MultiCheckCombo(QComboBox):
         finally:
             m.blockSignals(False)
             self._internal_change = False
+        if not self._preserve_missing_selected_values:
+            self._remembered_selected_values = []
         self._refresh_summary()
         if not self.signalsBlocked():
             self.selection_changed.emit()
@@ -120,6 +147,11 @@ class MultiCheckCombo(QComboBox):
     def set_items(self, items: Iterable[Tuple[str, Any]], check_all: bool = False):
         m: QStandardItemModel = self.model()  # type: ignore[assignment]
         self._internal_change = True
+        remembered = (
+            None if self._remembered_selected_values is None else list(self._remembered_selected_values)
+            if self._preserve_missing_selected_values
+            else list(self.selected_values())
+        )
 
         if self._popup_open:
             self.hidePopup()
@@ -143,6 +175,17 @@ class MultiCheckCombo(QComboBox):
             m.blockSignals(False)
             self._internal_change = False
 
+        visible_values = self._all_item_values()
+        if self._preserve_missing_selected_values:
+            if remembered is None:
+                remembered = list(visible_values) if check_all else []
+            remembered_full = list(remembered or [])
+            self._remembered_selected_values = list(remembered_full)
+            visible_selected = [value for value in remembered_full if value in set(visible_values)]
+            self.set_selected_values(visible_selected)
+            self._remembered_selected_values = list(remembered_full)
+        else:
+            self._remembered_selected_values = list(self.selected_values())
         self._enforce_max_checked()
         self._refresh_summary()
         self._clear_current_index(self.lineEdit().text() if self.lineEdit() is not None else None)
@@ -180,6 +223,12 @@ class MultiCheckCombo(QComboBox):
             m.blockSignals(False)
             self._internal_change = False
 
+        if self._preserve_missing_selected_values:
+            ordered = [value for value in self._remembered_selected_values if value in vs]
+            extras = [value for value in values or [] if value in vs and value not in ordered]
+            self._remembered_selected_values = ordered + extras
+        else:
+            self._remembered_selected_values = list(values or [])
         self._enforce_max_checked()
         self._refresh_summary()
         self._clear_current_index(self.lineEdit().text() if self.lineEdit() is not None else None)
@@ -319,6 +368,11 @@ class MultiCheckCombo(QComboBox):
         if self._internal_change or it is None:
             return
         self._enforce_max_checked(prefer=it)
+        current = self.selected_values()
+        if self._preserve_missing_selected_values:
+            self._remembered_selected_values = list(current)
+        else:
+            self._remembered_selected_values = list(current)
         self._refresh_summary()
         if not self.signalsBlocked():
             self.selection_changed.emit()
@@ -393,7 +447,11 @@ class MultiCheckCombo(QComboBox):
             text = self._summary_formatter(labels, checked, total)
         else:
             if checked == 0:
-                text = self._placeholder
+                text = (
+                    self._placeholder
+                    if self._empty_selection_means_all
+                    else tr("None selected")
+                )
             elif checked == total:
                 text = tr("All selected ({count})").format(count=total)
             else:
@@ -470,6 +528,8 @@ class MultiCheckCombo(QComboBox):
         finally:
             self._internal_change = False
 
+        current = self.selected_values()
+        self._remembered_selected_values = list(current)
         self._enforce_max_checked()
         self._refresh_summary()
         self._clear_current_index(self.lineEdit().text() if self.lineEdit() is not None else None)
@@ -492,3 +552,13 @@ class MultiCheckCombo(QComboBox):
             le = self.lineEdit()
             if le is not None:
                 le.setText(text)
+
+    def _all_item_values(self) -> list[Any]:
+        values: list[Any] = []
+        m: QStandardItemModel = self.model()  # type: ignore[assignment]
+        for row in range(m.rowCount()):
+            item = m.item(row)
+            if item is None or self._is_action_item(item):
+                continue
+            values.append(item.data(Qt.ItemDataRole.UserRole))
+        return values

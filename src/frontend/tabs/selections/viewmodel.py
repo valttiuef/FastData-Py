@@ -20,6 +20,23 @@ from ...threading.runner import run_in_thread
 from ...threading.utils import run_in_main_thread
 
 
+def _is_selector_visible_feature_type(type_value: object) -> bool:
+    text = str(type_value or "").strip()
+    if not text:
+        return True
+    lowered = text.casefold()
+    while True:
+        if lowered in {"text", "group"}:
+            return False
+        if lowered.startswith("text (") and lowered.endswith(")"):
+            lowered = lowered[6:-1].strip().casefold()
+            continue
+        if lowered.startswith("group (") and lowered.endswith(")"):
+            lowered = lowered[7:-1].strip().casefold()
+            continue
+        return True
+
+
 class SelectionsViewModel(QObject):
     """Coordinator that exposes CRUD helpers for features and selection presets.
     
@@ -83,10 +100,10 @@ class SelectionsViewModel(QObject):
 
         def _load():
             try:
-                systems = list(scope.get("systems") or []) if self._apply_scope_filters else []
-                datasets = list(scope.get("datasets") or []) if self._apply_scope_filters else []
-                import_ids = list(scope.get("import_ids") or []) if self._apply_scope_filters else []
-                tags = list(scope.get("tags") or []) if self._apply_scope_filters else []
+                systems = list(scope.get("systems") or [])
+                datasets = list(scope.get("datasets") or [])
+                import_ids = list(scope.get("import_ids") or [])
+                tags = list(scope.get("tags") or [])
 
                 all_features = self._database_model.features_df_unconstrained()
                 filtered_features = self._database_model.features_df_unconstrained(
@@ -95,6 +112,9 @@ class SelectionsViewModel(QObject):
                     import_ids=import_ids or None,
                     tags=tags or None,
                 )
+                if filtered_features is not None and not filtered_features.empty and "type" in filtered_features.columns:
+                    mask = filtered_features["type"].map(_is_selector_visible_feature_type)
+                    filtered_features = filtered_features.loc[mask].reset_index(drop=True)
                 return all_features, filtered_features, None
             except Exception as exc:
                 return None, None, f"Unable to load features: {exc}"
@@ -192,7 +212,6 @@ class SelectionsViewModel(QObject):
         if self._apply_scope_filters == flag:
             return
         self._apply_scope_filters = flag
-        self.refresh_features()
 
     # ------------------------------------------------------------------
     def _maybe_extend_active_selection(self, features: pd.DataFrame) -> None:

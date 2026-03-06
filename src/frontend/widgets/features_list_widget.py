@@ -11,8 +11,6 @@ from PySide6.QtWidgets import QGroupBox, QLineEdit, QVBoxLayout
 from ..localization import tr
 from ..models.features_model import FeaturesTableModel
 from ..models.hybrid_pandas_model import HybridPandasModel
-from ..threading.runner import run_in_thread
-from ..threading.utils import run_in_main_thread
 from .fast_table import FastTable, FastPandasProxyModel
 from ..utils import toast_error
 
@@ -97,7 +95,7 @@ class FeaturesListWidgetViewModel(QObject):
             "import_ids": import_ids if import_ids is None else tuple(int(v) for v in import_ids),
             "tags": tags if tags is None else tuple(tags),
         }
-        if updated == self._filters and not reload:
+        if updated == self._filters:
             return
         self._filters = updated
         if reload:
@@ -106,32 +104,15 @@ class FeaturesListWidgetViewModel(QObject):
     def reload_features(self) -> None:
         model = self._data_model
         filters = dict(self._filters)
-
-        def _load() -> pd.DataFrame:
-            try:
-                return self._load_features_dataframe(model, filters)
-            except Exception as exc:  # pragma: no cover
-                logger.exception("Failed to load features: %s", exc)
-                raise exc
-
-        def _apply(df: pd.DataFrame) -> None:
-            self.features_loaded.emit(df)
-
-        def _handle_error(message: str) -> None:
-            self.load_failed.emit(message)
-            fallback = pd.DataFrame(
+        try:
+            df = self._load_features_dataframe(model, filters)
+        except Exception as exc:  # pragma: no cover
+            logger.exception("Failed to load features: %s", exc)
+            self.load_failed.emit(str(exc))
+            df = pd.DataFrame(
                 columns=["feature_id", "name", "source", "unit", "type", "lag_seconds", "tags", "notes"],
             )
-            self.features_loaded.emit(fallback)
-
-        run_in_thread(
-            _load,
-            on_result=lambda df: run_in_main_thread(_apply, df),
-            on_error=lambda msg: run_in_main_thread(_handle_error, msg),
-            owner=self,
-            key="features_list_load",
-            cancel_previous=True,
-        )
+        self.features_loaded.emit(df)
 
     def _on_database_changed(self, *_args) -> None:
         self.reload_features()
@@ -153,6 +134,14 @@ class FeaturesListWidgetViewModel(QObject):
         datasets = filters.get("datasets")
         import_ids = filters.get("import_ids")
         tags = filters.get("tags")
+        if (
+            (systems is not None and len(tuple(systems)) == 0)
+            or (datasets is not None and len(tuple(datasets)) == 0)
+            or (import_ids is not None and len(tuple(import_ids)) == 0)
+        ):
+            return pd.DataFrame(
+                columns=["feature_id", "name", "source", "unit", "type", "lag_seconds", "tags", "notes"],
+            )
         if model is None:
             return pd.DataFrame(
                 columns=["feature_id", "name", "source", "unit", "type", "lag_seconds", "tags", "notes"],
@@ -196,6 +185,8 @@ class FeaturesListWidget(QGroupBox):
         self._pending_search_text = ""
         self._suppress_selection_emit = False
         self._last_selection_ids: tuple[int, ...] = ()
+        self._selection_memory_ids: set[int] = set()
+        self._retain_hidden_selection_memory = False
 
         # Domain source model (keeps payload + headers)
         self._table_model = FeaturesTableModel()
@@ -231,6 +222,12 @@ class FeaturesListWidget(QGroupBox):
         self._search_timer.setInterval(120)
         self._search_timer.timeout.connect(self._apply_search_text)
         self._search_edit.textChanged.connect(self._queue_search_text)
+
+        self._selection_restore_timer = QTimer(self)
+        self._selection_restore_timer.setSingleShot(True)
+        self._selection_restore_timer.setInterval(0)
+        self._selection_restore_timer.timeout.connect(self._restore_selection_after_proxy_change)
+        self._proxy_model.modelReset.connect(self._schedule_restore_selection_after_proxy_change)
 
         # Selection debounce
         self._selection_emit_timer = QTimer(self)
@@ -295,6 +292,10 @@ class FeaturesListWidget(QGroupBox):
     def _apply_search_text(self) -> None:
         text = (self._pending_search_text or "").strip()
         # proxy rebuild is fast; our own timer already debounces
+        visible_selected_ids = set(self._visible_selected_feature_ids())
+        if visible_selected_ids:
+            self._selection_memory_ids = set(visible_selected_ids)
+            self._retain_hidden_selection_memory = True
         self._suppress_selection_emit = True
         try:
             self._proxy_model.set_filter(text, columns=None, case_sensitive=False, debounce_ms=0)
@@ -305,7 +306,12 @@ class FeaturesListWidget(QGroupBox):
         self._suppress_selection_emit = False
 
     def _queue_selection_changed(self, *_args) -> None:
+        if self._suppress_selection_emit:
+            return
         self._selection_emit_timer.start()
+
+    def _schedule_restore_selection_after_proxy_change(self, *_args) -> None:
+        self._selection_restore_timer.start()
 
     def _build_context_menu(self, menu, _pos, _table):
         action = QAction(tr("Details..."), menu)
@@ -330,6 +336,14 @@ class FeaturesListWidget(QGroupBox):
         return payloads
 
     def selected_feature_ids(self) -> list[int]:
+        ids = self._visible_selected_feature_ids()
+        if self._selection_memory_ids and (
+            self._retain_hidden_selection_memory or not ids
+        ):
+            return sorted(int(fid) for fid in self._selection_memory_ids)
+        return ids
+
+    def _visible_selected_feature_ids(self) -> list[int]:
         payloads = self.selected_payloads()
         ids: list[int] = []
         for payload in payloads:
@@ -359,13 +373,20 @@ class FeaturesListWidget(QGroupBox):
 
     def clear_selection_and_suppress_autoselect(self) -> None:
         self._suppress_autoselect = True
+        self._retain_hidden_selection_memory = False
+        self._selection_memory_ids.clear()
         self.clear_selection()
 
     # ------------------------------------------------------------------
     def _apply_dataframe(self, df: pd.DataFrame) -> None:
-        previously_selected_ids = set(self.selected_feature_ids())
+        previously_selected_ids = set(self._selection_memory_ids)
+        if not previously_selected_ids:
+            previously_selected_ids = set(self.selected_feature_ids())
+        if previously_selected_ids:
+            self._selection_memory_ids = set(previously_selected_ids)
         if self._suppress_autoselect:
             previously_selected_ids = set()
+        emit_selection_after_reload = False
 
         previous_suppression = self._suppress_selection_emit
         self._suppress_selection_emit = True
@@ -406,7 +427,9 @@ class FeaturesListWidget(QGroupBox):
                 selection_restored = self._restore_selection(previously_selected_ids)
 
             if previously_selected_ids and not selection_restored:
-                pass
+                # Current filters hide previously selected rows. Keep logical
+                # selection memory so it can be restored when rows reappear.
+                self._retain_hidden_selection_memory = True
             elif (
                 not self._suppress_autoselect
                 and not self.selected_payloads()
@@ -414,8 +437,13 @@ class FeaturesListWidget(QGroupBox):
             ):
                 try:
                     self._table.selectRow(0)
+                    self._selection_memory_ids = set(self.selected_feature_ids())
+                    self._retain_hidden_selection_memory = False
+                    emit_selection_after_reload = bool(self._selection_memory_ids)
                 except Exception:
                     logger.warning("Exception in _apply_dataframe", exc_info=True)
+            else:
+                self._retain_hidden_selection_memory = False
 
         finally:
             self._table.setUpdatesEnabled(True)
@@ -425,7 +453,8 @@ class FeaturesListWidget(QGroupBox):
             self._suppress_autoselect = False
 
         self.features_reloaded.emit(df)
-        self._queue_selection_changed()
+        if emit_selection_after_reload:
+            self._queue_selection_changed()
 
     def _restore_selection(self, feature_ids: set[int]) -> bool:
         selection = self._table.selectionModel()
@@ -435,13 +464,21 @@ class FeaturesListWidget(QGroupBox):
         rows_to_select: list[int] = []
         for row in range(self._table_model.rowCount()):
             payload = self._table_model.feature_payload_at(row)
-            if payload and payload.get("feature_id") in feature_ids:
+            if not payload:
+                continue
+            fid_value = payload.get("feature_id")
+            try:
+                fid = int(fid_value) if fid_value is not None else None
+            except Exception:
+                fid = None
+            if fid is not None and fid in feature_ids:
                 rows_to_select.append(row)
 
         if not rows_to_select:
             return False
 
         try:
+            selected_any = False
             selection.clearSelection()
             for row in rows_to_select:
                 source_index = self._table_model.index(row, 0)
@@ -451,9 +488,37 @@ class FeaturesListWidget(QGroupBox):
                         proxy_index,
                         QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows,
                     )
-            return True
+                    selected_any = True
+            return selected_any
         except Exception:
             return False
+
+    def _restore_selection_after_proxy_change(self) -> None:
+        if self._suppress_selection_emit or not self._selection_memory_ids:
+            return
+        if self.selected_payloads():
+            return
+        restored = self._restore_selection(set(self._selection_memory_ids))
+        if restored:
+            self._retain_hidden_selection_memory = False
+            self._queue_selection_changed()
+            return
+        self._retain_hidden_selection_memory = True
+
+    def _payloads_for_feature_ids(self, feature_ids: Sequence[int]) -> list[dict]:
+        payloads_by_id: dict[int, dict] = {}
+        for row in range(self._table_model.rowCount()):
+            payload = self._table_model.feature_payload_at(row)
+            if not payload:
+                continue
+            fid_value = payload.get("feature_id")
+            if fid_value is None:
+                continue
+            try:
+                payloads_by_id[int(fid_value)] = payload
+            except Exception:
+                continue
+        return [payloads_by_id[fid] for fid in feature_ids if fid in payloads_by_id]
 
     def _log_failure(self, message: str) -> None:  # pragma: no cover
         logger.warning("Features list reload failed: %s", message)
@@ -478,11 +543,29 @@ class FeaturesListWidget(QGroupBox):
                 ids.append(int(fid))
             except Exception:
                 continue
-        selection_ids = tuple(sorted(ids))
+        selected_ids = set(ids)
+        if (
+            not selected_ids
+            and self._retain_hidden_selection_memory
+            and bool(self._selection_memory_ids)
+        ):
+            return
+        if self._retain_hidden_selection_memory and self._selection_memory_ids:
+            selected_ids |= set(self._selection_memory_ids)
+        self._selection_memory_ids = set(selected_ids)
+        selection_ids = tuple(sorted(self._selection_memory_ids))
+        visible_selection_ids = set(ids)
+        self._retain_hidden_selection_memory = bool(self._selection_memory_ids - visible_selection_ids)
         if selection_ids == self._last_selection_ids:
             return
         self._last_selection_ids = selection_ids
-        self.selection_changed.emit(payloads)
+        if selection_ids:
+            ordered_payloads = self._payloads_for_feature_ids(selection_ids)
+            if len(ordered_payloads) != len(selection_ids):
+                return
+            self.selection_changed.emit(ordered_payloads)
+            return
+        self.selection_changed.emit([])
 
 
 __all__ = ["FeaturesListWidget", "FeaturesListWidgetViewModel"]
