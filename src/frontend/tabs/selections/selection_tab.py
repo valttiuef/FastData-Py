@@ -29,6 +29,16 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _default_selection_payload() -> SelectionSettingsPayload:
+    # @ai(gpt-5, codex-cli, fix, 2026-03-10)
+    """Default payload for the built-in startup selection state."""
+    return SelectionSettingsPayload(
+        include_selections=True,
+        include_filters=False,
+        include_preprocessing=False,
+    )
+
+
 class FilterScopeDelegate(QStyledItemDelegate):
     def createEditor(self, parent, option, index):
         editor = QComboBox(parent)
@@ -51,7 +61,7 @@ class SelectionsTab(TabWidget):
     def __init__(self, database_model: DatabaseModel, parent: Optional[QWidget] = None) -> None:
         self._database_model = database_model
         self._table_model = FeatureSelectionTableModel()
-        self._current_payload = SelectionSettingsPayload()
+        self._current_payload = _default_selection_payload()
         self._settings: List[dict] = []
         self._settings_with_default: List[dict] = []
         self._select_all_default = True
@@ -240,11 +250,13 @@ class SelectionsTab(TabWidget):
                 logger.warning("Exception in _on_settings_loaded", exc_info=True)
 
     def _on_active_setting_changed(self, record: Optional[dict]) -> None:
-        payload = record.get("payload") if record else SelectionSettingsPayload()
+        payload = record.get("payload") if record else _default_selection_payload()
         if payload is None:
-            payload = SelectionSettingsPayload()
+            payload = _default_selection_payload()
         if not isinstance(payload, SelectionSettingsPayload):
             payload = SelectionSettingsPayload.from_dict(payload if isinstance(payload, dict) else {})
+            if not record:
+                payload = _default_selection_payload()
         self._current_payload = payload
         self._select_all_default = not bool(record and record.get("id")) or not payload.selections_enabled()
         self._view_model.set_apply_scope_filters(payload.filters_enabled())

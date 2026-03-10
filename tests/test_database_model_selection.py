@@ -26,6 +26,8 @@ src_dir = Path(__file__).parent.parent / "src"
 if str(src_dir) not in sys.path:
     sys.path.insert(0, str(src_dir))
 
+from frontend.models.selection_settings import SelectionSettingsPayload
+
 
 class TestSetSelectedFeatureIds:
     """Tests for set_selected_feature_ids method.
@@ -218,6 +220,50 @@ class TestSetSelectedFeatureIds:
         # wouldn't be updated, so features 4 and 5 would still be filtered out
         assert len(result) == 5, "All re-enabled features should be returned"
         assert set(result["feature_id"].tolist()) == {1, 2, 3, 4, 5}
+
+
+class TestSelectionPayloadClearing:
+    """Tests for clearing retained filter/preprocessing state."""
+
+    def _create_minimal_payload_model(self):
+        class MinimalPayloadModel:
+            def __init__(self):
+                self._selection_filters = {"systems": ["Old System"]}
+                self._selection_preprocessing = {"timestep": "1h"}
+
+            def apply_selection_payload(self, payload):
+                if payload is None:
+                    self._selection_filters = {}
+                    self._selection_preprocessing = {}
+                    return
+                self._selection_filters = (
+                    dict(payload.filters or {})
+                    if payload.filters_enabled()
+                    else {}
+                )
+                self._selection_preprocessing = (
+                    dict(payload.preprocessing or {})
+                    if payload.preprocessing_enabled()
+                    else {}
+                )
+
+        return MinimalPayloadModel()
+
+    def test_disabled_filter_and_preprocessing_flags_clear_previous_state(self):
+        model = self._create_minimal_payload_model()
+
+        payload = SelectionSettingsPayload(
+            include_selections=True,
+            include_filters=False,
+            include_preprocessing=False,
+            filters={"systems": ["Imported System"]},
+            preprocessing={"timestep": "15min"},
+        )
+
+        model.apply_selection_payload(payload)
+
+        assert model._selection_filters == {}
+        assert model._selection_preprocessing == {}
 
 
 class MockSignal:

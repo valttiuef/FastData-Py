@@ -11,7 +11,7 @@ from PySide6.QtWidgets import QApplication
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from frontend.widgets.features_list_widget import FeaturesListWidget
+from frontend.widgets.features_list_widget import FeaturesListWidget, FeaturesListWidgetViewModel
 
 
 @pytest.fixture
@@ -107,3 +107,47 @@ def test_selected_features_persist_across_search_hide_and_reveal(qapp):
 
     assert set(widget.selected_feature_ids()) == {2, 3}
     assert {payload["feature_id"] for payload in widget.selected_payloads()} == {2, 3}
+
+
+class _StubFeaturesModel:
+    def __init__(self) -> None:
+        self.database_changed = type("_Signal", (), {"connect": lambda self, cb: None})()
+        self.selected_features_changed = type("_Signal", (), {"connect": lambda self, cb: None})()
+        self.features_list_changed = type("_Signal", (), {"connect": lambda self, cb: None})()
+        self.features_df_calls: list[dict] = []
+
+    def features_df(self, **kwargs):
+        self.features_df_calls.append(kwargs)
+        return _sample_features_df()
+
+    def features_for_systems_datasets(self, **kwargs):
+        self.features_df_calls.append(kwargs)
+        return _sample_features_df()
+
+
+def test_empty_scope_filters_are_treated_as_unconstrained():
+    model = _StubFeaturesModel()
+    view_model = FeaturesListWidgetViewModel(data_model=model)
+
+    view_model.set_filters(systems=[], datasets=[], import_ids=[], reload=False)
+    frame = view_model._load_features_dataframe(
+        model,
+        {"systems": (), "datasets": (), "import_ids": (), "tags": None},
+    )
+
+    assert not frame.empty
+    assert len(model.features_df_calls) >= 1
+    assert model.features_df_calls[-1]["import_ids"] is None
+
+
+def test_reload_autoselects_first_visible_row_when_previous_selection_is_missing(qapp):
+    widget = FeaturesListWidget()
+    widget._selection_memory_ids = {999}
+    widget._retain_hidden_selection_memory = True
+
+    widget._apply_dataframe(_sample_features_df())
+    _process_events(qapp)
+
+    payloads = widget.selected_payloads()
+    assert len(payloads) == 1
+    assert payloads[0]["feature_id"] == 1

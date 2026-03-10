@@ -474,12 +474,11 @@ class HybridPandasModel(DatabaseModel):
                     exc_info=True,
                 )
         
-        # Signal that the database contents changed so dependent widgets refresh.
-        # This is emitted exactly once after all imports complete, allowing all
-        # listeners (filters, charts, selections) to refresh with fresh data.
+        # Signal that feature/import metadata changed so dependent widgets
+        # refresh once. Do not emit database_changed here: the database path did
+        # not change, and that extra signal causes duplicate UI refresh cycles.
         try:
             self.notify_features_changed()
-            self.refresh()
         except Exception:
             logger.warning(
                 "File import completed, but model refresh/feature-change notification failed.",

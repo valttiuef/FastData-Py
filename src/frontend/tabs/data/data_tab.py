@@ -896,7 +896,7 @@ class DataTab(TabWidget):
         def _on_result(result):
             # result is True/False
             if result:
-                run_in_main_thread(self._reload_now)
+                run_in_main_thread(self._reload_now, force=True)
             else:
                 # already set by worker
                 pass

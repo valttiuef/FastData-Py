@@ -134,14 +134,15 @@ class FeaturesListWidgetViewModel(QObject):
         datasets = filters.get("datasets")
         import_ids = filters.get("import_ids")
         tags = filters.get("tags")
-        if (
-            (systems is not None and len(tuple(systems)) == 0)
-            or (datasets is not None and len(tuple(datasets)) == 0)
-            or (import_ids is not None and len(tuple(import_ids)) == 0)
-        ):
-            return pd.DataFrame(
-                columns=["feature_id", "name", "source", "unit", "type", "lag_seconds", "tags", "notes"],
-            )
+        systems = tuple(systems) if systems is not None else None
+        datasets = tuple(datasets) if datasets is not None else None
+        import_ids = tuple(int(v) for v in import_ids) if import_ids is not None else None
+        if systems is not None and len(systems) == 0:
+            systems = None
+        if datasets is not None and len(datasets) == 0:
+            datasets = None
+        if import_ids is not None and len(import_ids) == 0:
+            import_ids = None
         if model is None:
             return pd.DataFrame(
                 columns=["feature_id", "name", "source", "unit", "type", "lag_seconds", "tags", "notes"],
@@ -430,6 +431,19 @@ class FeaturesListWidget(QGroupBox):
                 # Current filters hide previously selected rows. Keep logical
                 # selection memory so it can be restored when rows reappear.
                 self._retain_hidden_selection_memory = True
+                if (
+                    not self._suppress_autoselect
+                    and not self.selected_payloads()
+                    and self._table_model.rowCount() > 0
+                    and not (self._search_edit.text() or "").strip()
+                ):
+                    try:
+                        self._table.selectRow(0)
+                        self._selection_memory_ids = set(self.selected_feature_ids())
+                        self._retain_hidden_selection_memory = False
+                        emit_selection_after_reload = bool(self._selection_memory_ids)
+                    except Exception:
+                        logger.warning("Exception in _apply_dataframe", exc_info=True)
             elif (
                 not self._suppress_autoselect
                 and not self.selected_payloads()

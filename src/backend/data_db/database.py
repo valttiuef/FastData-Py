@@ -3380,6 +3380,13 @@ class Database:
             default_system_id = self.systems_repo.upsert(con, "DefaultSystem")
             return int(self.datasets_repo.upsert(con, int(default_system_id), "DefaultDataset"))
 
+    def ensure_default_system_dataset(self) -> int:
+        # @ai(gpt-5, codex-cli, implementation, 2026-03-10)
+        """Ensure the built-in default system/dataset pair exists."""
+        with self.write_transaction() as con:
+            default_system_id = self.systems_repo.upsert(con, "DefaultSystem")
+            return int(self.datasets_repo.upsert(con, int(default_system_id), "DefaultDataset"))
+
     def list_models(
         self,
         model_type: Optional[str] = None,

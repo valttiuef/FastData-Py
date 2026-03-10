@@ -338,6 +338,10 @@ class DatabaseModel(QObject):
         if target.exists():
             self._unlink_path_with_retry(target)
         db = self._instantiate_database(target)
+        try:
+            db.ensure_default_system_dataset()
+        except Exception:
+            logger.warning("Exception in new_database while ensuring default system/dataset", exc_info=True)
         db.close()
         self._settings.set_database_path(target)
         if target == old_path:
@@ -376,6 +380,10 @@ class DatabaseModel(QObject):
         if default_path.exists():
             self._unlink_path_with_retry(default_path)
         db = self._instantiate_database(default_path)
+        try:
+            db.ensure_default_system_dataset()
+        except Exception:
+            logger.warning("Exception in reset_database while ensuring default system/dataset", exc_info=True)
         db.close()
         self._selection_payload = None
         self._selected_feature_ids = set()
@@ -555,12 +563,12 @@ class DatabaseModel(QObject):
         self._selection_filters = (
             self._normalize_filter_state(payload.filters or {})
             if payload.filters_enabled()
-            else dict(self._selection_filters or {})
+            else {}
         )
         self._selection_preprocessing = (
             dict(payload.preprocessing or {})
             if payload.preprocessing_enabled()
-            else dict(self._selection_preprocessing or {})
+            else {}
         )
         value_filters = []
         if payload.selections_enabled():
@@ -2234,12 +2242,12 @@ class DatabaseModel(QObject):
             self._selection_filters = (
                 self._normalize_filter_state(payload.filters or {})
                 if payload.filters_enabled()
-                else dict(self._selection_filters or {})
+                else {}
             )
             self._selection_preprocessing = (
                 dict(payload.preprocessing or {})
                 if payload.preprocessing_enabled()
-                else dict(self._selection_preprocessing or {})
+                else {}
             )
             value_filters = []
             if payload.selections_enabled():
