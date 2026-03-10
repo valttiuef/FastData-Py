@@ -100,6 +100,8 @@ For tabs/sidebars that include `DataSelectorWidget`:
 - Main window uses metadata from `src/frontend/tabs/tab_modules.py`.
 - Data tab loads first; others may be lazy-loaded.
 - Theme and localization initialize early.
+- Prefer the repository virtual environment for validation commands when available.
+- On this repo, use `.venv-windows\Scripts\python.exe -m pytest ...` instead of assuming `pytest` is on `PATH`.
 
 ## Data Model Semantics
 

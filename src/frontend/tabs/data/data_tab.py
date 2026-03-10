@@ -746,6 +746,8 @@ class DataTab(TabWidget):
                 else:
                     self.monthly_chart.set_frame(working_df[["t"] + display_cols])
                 self.monthly_chart.chart.legend().setVisible(True)
+            else:
+                self.monthly_chart.clear()
         except Exception:
             logger.warning("Exception in _apply_reload_result", exc_info=True)
 

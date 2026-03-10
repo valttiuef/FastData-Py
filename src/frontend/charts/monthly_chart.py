@@ -267,6 +267,7 @@ class MonthlyBarChart(GroupBarChart):
             self.series.remove(s)
         self.axis_x.clear()
         if reset_axes:
+            self.axis_x.setVisible(False)
             self.axis_x.setLabelsVisible(False)
             self.axis_x.setGridLineVisible(False)
             self.axis_x.setMinorGridLineVisible(False)
@@ -502,6 +503,7 @@ class MonthlyBarChart(GroupBarChart):
             self.series.append(bar)
             bar.hovered.connect(self._on_set_hovered)
 
+            self.axis_x.setVisible(True)
             self.axis_x.append(self._cats)
             try:
                 self.axis_x.setLabelsVisible(True)
@@ -594,6 +596,7 @@ class MonthlyBarChart(GroupBarChart):
                 .fillna(0.0)
             )
 
+            self.axis_x.setVisible(True)
             self.axis_x.append(categories)
             try:
                 self.axis_x.setLabelsVisible(True)

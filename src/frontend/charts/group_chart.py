@@ -258,6 +258,7 @@ class GroupBarChart(QFrame):
                 logger.warning("Failed to clean up connected bar-set signals while clearing group chart.", exc_info=True)
             self.series.remove(s)
         self.axis_x.clear()
+        self.axis_x.setVisible(False)
         self.axis_x.setLabelsVisible(False)
         self.axis_x.setGridLineVisible(False)
         self.axis_x.setMinorGridLineVisible(False)
@@ -325,6 +326,7 @@ class GroupBarChart(QFrame):
             logger.warning("Failed to connect hover/click handlers while setting group chart data.", exc_info=True)
 
         # Set categories
+        self.axis_x.setVisible(True)
         self.axis_x.append([_short_label(c, 20) for c in self._categories])
         try:
             self.axis_x.setLabelsVisible(True)
@@ -453,6 +455,7 @@ class GroupBarChart(QFrame):
                 logger.warning("Failed to connect hover/click handlers for multi-series group bars.", exc_info=True)
         
         # Set categories
+        self.axis_x.setVisible(True)
         self.axis_x.append([_short_label(c, 20) for c in self._categories])
         try:
             self.axis_x.setLabelsVisible(True)
