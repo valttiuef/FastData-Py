@@ -83,7 +83,6 @@ def test_selected_features_persist_across_search_hide_and_reveal(qapp):
     selection = widget.table_view.selectionModel()
     selection.clearSelection()
     widget._selection_memory_ids.clear()
-    widget._retain_hidden_selection_memory = False
     widget._last_selection_ids = ()
     for row in (1, 2):
         index = widget.table_view.model().index(row, 0)
@@ -127,7 +126,7 @@ class _StubFeaturesModel:
         return self.frame.copy()
 
 
-def test_empty_scope_filters_are_treated_as_unconstrained():
+def test_empty_scope_filters_hide_all_rows():
     model = _StubFeaturesModel()
     view_model = FeaturesListWidgetViewModel(data_model=model)
     view_model.reload_features()
@@ -138,7 +137,7 @@ def test_empty_scope_filters_are_treated_as_unconstrained():
         {"systems": (), "datasets": (), "import_ids": (), "tags": None},
     )
 
-    assert not frame.empty
+    assert frame.empty
     assert len(model.features_df_calls) >= 1
     assert model.features_df_calls[-1] == {}
 
@@ -210,17 +209,63 @@ def test_scope_filter_changes_reuse_loaded_features_and_filter_locally():
     assert emitted[-1]["feature_id"].tolist() == [2]
 
 
-def test_reload_autoselects_first_visible_row_when_previous_selection_is_missing(qapp):
+def test_tag_filter_can_select_untagged_features_only():
+    model = _StubFeaturesModel()
+    model.frame = pd.DataFrame(
+        [
+            {
+                "feature_id": 1,
+                "name": "Tagged",
+                "source": "sensor_a",
+                "unit": "C",
+                "type": "numeric",
+                "lag_seconds": 0,
+                "tags": ["tag-a"],
+                "notes": "",
+            },
+            {
+                "feature_id": 2,
+                "name": "Untagged",
+                "source": "sensor_b",
+                "unit": "bar",
+                "type": "numeric",
+                "lag_seconds": 0,
+                "tags": [],
+                "notes": "",
+            },
+        ]
+    )
+    view_model = FeaturesListWidgetViewModel(data_model=model)
+    filtered = view_model._filter_dataframe(
+        model.frame,
+        {"systems": None, "datasets": None, "import_ids": None, "tags": ("__NO_TAG__",)},
+    )
+    assert filtered["feature_id"].tolist() == [2]
+
+
+def test_reload_keeps_visible_selection_empty_when_previous_selection_is_missing(qapp):
     widget = FeaturesListWidget()
     widget._selection_memory_ids = {999}
-    widget._retain_hidden_selection_memory = True
 
     widget._apply_dataframe(_sample_features_df())
     _process_events(qapp)
 
     payloads = widget.selected_payloads()
-    assert len(payloads) == 1
-    assert payloads[0]["feature_id"] == 1
+    assert payloads == []
+    assert widget.selected_feature_ids() == [999]
+
+
+def test_database_change_clears_selection_memory_and_emits_empty(qapp):
+    widget = FeaturesListWidget()
+    widget._selection_memory_ids = {2, 3}
+    widget._last_selection_ids = (2, 3)
+    emitted: list[list[dict]] = []
+    widget.selection_changed.connect(lambda payloads: emitted.append(list(payloads)))
+
+    widget._on_database_changed_reset_selection()
+
+    assert widget.selected_feature_ids() == []
+    assert emitted[-1] == []
 
 
 def test_small_selection_changes_emit_on_next_event_loop_tick(qapp):

@@ -264,7 +264,7 @@ class DataTab(TabWidget):
         requirements = _requirements if isinstance(_requirements, dict) else {}
         self._selector_requirements_key = self._freeze_value(
             {
-                "filters": requirements.get("filters", {}),
+                "filters": requirements.get("data_filters", requirements.get("filters", {})),
                 "preprocessing": requirements.get("preprocessing", {}),
             }
         )

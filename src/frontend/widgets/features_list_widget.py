@@ -16,6 +16,8 @@ from ..utils import toast_error
 
 logger = logging.getLogger(__name__)
 
+NO_TAG_FILTER_VALUE = "__NO_TAG__"
+
 
 def _is_selector_visible_feature_type(type_value: object) -> bool:
     """
@@ -158,10 +160,14 @@ class FeaturesListWidgetViewModel(QObject):
             return self._empty_dataframe()
 
         filtered = df
-        systems = self._normalize_text_filter(filters.get("systems"))
-        datasets = self._normalize_text_filter(filters.get("datasets"))
-        import_ids = self._normalize_int_filter(filters.get("import_ids"))
+        systems = self._normalize_text_filter_allow_empty(filters.get("systems"))
+        datasets = self._normalize_text_filter_allow_empty(filters.get("datasets"))
+        import_ids = self._normalize_int_filter_allow_empty(filters.get("import_ids"))
         tags = self._normalize_text_filter(filters.get("tags"))
+        include_no_tag = False
+        if tags is not None and NO_TAG_FILTER_VALUE in tags:
+            include_no_tag = True
+            tags = {value for value in tags if value != NO_TAG_FILTER_VALUE}
 
         if systems is not None:
             if not systems:
@@ -193,11 +199,17 @@ class FeaturesListWidgetViewModel(QObject):
                 filtered = filtered.loc[import_sets.map(lambda values: bool(values & import_ids))]
 
         if tags is not None:
-            if not tags:
+            if not tags and not include_no_tag:
                 return filtered.iloc[0:0].copy()
             if "tags" in filtered.columns:
                 tag_sets = filtered["tags"].map(self._normalize_text_cell)
-                filtered = filtered.loc[tag_sets.map(lambda values: bool(values & tags))]
+                filtered = filtered.loc[
+                    tag_sets.map(
+                        lambda values: bool(values & tags) or (include_no_tag and not values)
+                    )
+                ]
+            elif tags:
+                return filtered.iloc[0:0].copy()
 
         return filtered.reset_index(drop=True)
 
@@ -219,6 +231,17 @@ class FeaturesListWidgetViewModel(QObject):
         return normalized or None
 
     @staticmethod
+    def _normalize_text_filter_allow_empty(values: Any) -> Optional[set[str]]:
+        if values is None:
+            return None
+        normalized: set[str] = set()
+        for value in values or []:
+            text = str(value or "").strip()
+            if text:
+                normalized.add(text)
+        return normalized
+
+    @staticmethod
     def _normalize_int_filter(values: Any) -> Optional[set[int]]:
         if values is None:
             return None
@@ -229,6 +252,18 @@ class FeaturesListWidgetViewModel(QObject):
             except Exception:
                 continue
         return normalized or None
+
+    @staticmethod
+    def _normalize_int_filter_allow_empty(values: Any) -> Optional[set[int]]:
+        if values is None:
+            return None
+        normalized: set[int] = set()
+        for value in values or []:
+            try:
+                normalized.add(int(value))
+            except Exception:
+                continue
+        return normalized
 
     @staticmethod
     def _normalize_text_cell(value: Any) -> set[str]:
@@ -281,7 +316,6 @@ class FeaturesListWidget(QGroupBox):
         self._suppress_selection_emit = False
         self._last_selection_ids: tuple[int, ...] = ()
         self._selection_memory_ids: set[int] = set()
-        self._retain_hidden_selection_memory = False
         self._selection_cache_valid = False
         self._selected_payloads_cache: list[dict] = []
         self._visible_selected_ids_cache: list[int] = []
@@ -340,6 +374,9 @@ class FeaturesListWidget(QGroupBox):
             selection.selectionChanged.connect(self._queue_selection_changed)
 
         # View model for loading
+        if data_model is not None:
+            data_model.database_changed.connect(self._on_database_changed_reset_selection)
+
         self._view_model = FeaturesListWidgetViewModel(
             data_model=data_model,
             parent=self,
@@ -395,7 +432,6 @@ class FeaturesListWidget(QGroupBox):
         visible_selected_ids = set(self._visible_selected_feature_ids())
         if visible_selected_ids:
             self._selection_memory_ids = set(visible_selected_ids)
-            self._retain_hidden_selection_memory = True
         self._suppress_selection_emit = True
         try:
             self._proxy_model.set_filter(text, columns=None, case_sensitive=False, debounce_ms=0)
@@ -478,12 +514,9 @@ class FeaturesListWidget(QGroupBox):
         return list(self._selected_payloads_cache)
 
     def selected_feature_ids(self) -> list[int]:
-        ids = self._visible_selected_feature_ids()
-        if self._selection_memory_ids and (
-            self._retain_hidden_selection_memory or not ids
-        ):
+        if self._selection_memory_ids:
             return sorted(int(fid) for fid in self._selection_memory_ids)
-        return ids
+        return self._visible_selected_feature_ids()
 
     def _visible_selected_feature_ids(self) -> list[int]:
         if not self._selection_cache_valid:
@@ -508,9 +541,24 @@ class FeaturesListWidget(QGroupBox):
 
     def clear_selection_and_suppress_autoselect(self) -> None:
         self._suppress_autoselect = True
-        self._retain_hidden_selection_memory = False
         self._selection_memory_ids.clear()
         self.clear_selection()
+
+    def _on_database_changed_reset_selection(self, *_args) -> None:
+        had_selection = bool(self._selection_memory_ids) or bool(self._visible_selected_feature_ids())
+        self._selection_memory_ids.clear()
+        self._invalidate_selection_cache()
+        selection = self._table.selectionModel()
+        if selection is not None:
+            previous_suppression = self._suppress_selection_emit
+            self._suppress_selection_emit = True
+            try:
+                selection.clearSelection()
+            finally:
+                self._suppress_selection_emit = previous_suppression
+        if had_selection:
+            self._last_selection_ids = ()
+            self.selection_changed.emit([])
 
     # ------------------------------------------------------------------
     def _apply_dataframe(self, df: pd.DataFrame) -> None:
@@ -521,7 +569,6 @@ class FeaturesListWidget(QGroupBox):
             self._selection_memory_ids = set(previously_selected_ids)
         if self._suppress_autoselect:
             previously_selected_ids = set()
-        emit_selection_after_reload = False
 
         previous_suppression = self._suppress_selection_emit
         self._suppress_selection_emit = True
@@ -562,38 +609,8 @@ class FeaturesListWidget(QGroupBox):
             selection_restored = False
             if previously_selected_ids and self._table_model.rowCount() > 0:
                 selection_restored = self._restore_selection(previously_selected_ids)
-
-            if previously_selected_ids and not selection_restored:
-                # Current filters hide previously selected rows. Keep logical
-                # selection memory so it can be restored when rows reappear.
-                self._retain_hidden_selection_memory = True
-                if (
-                    not self._suppress_autoselect
-                    and not self.selected_payloads()
-                    and self._table_model.rowCount() > 0
-                    and not (self._search_edit.text() or "").strip()
-                ):
-                    try:
-                        self._table.selectRow(0)
-                        self._selection_memory_ids = set(self.selected_feature_ids())
-                        self._retain_hidden_selection_memory = False
-                        emit_selection_after_reload = bool(self._selection_memory_ids)
-                    except Exception:
-                        logger.warning("Exception in _apply_dataframe", exc_info=True)
-            elif (
-                not self._suppress_autoselect
-                and not self.selected_payloads()
-                and self._table_model.rowCount() > 0
-            ):
-                try:
-                    self._table.selectRow(0)
-                    self._selection_memory_ids = set(self.selected_feature_ids())
-                    self._retain_hidden_selection_memory = False
-                    emit_selection_after_reload = bool(self._selection_memory_ids)
-                except Exception:
-                    logger.warning("Exception in _apply_dataframe", exc_info=True)
-            else:
-                self._retain_hidden_selection_memory = False
+            if previously_selected_ids and selection_restored:
+                self._selection_memory_ids = set(previously_selected_ids)
 
         finally:
             self._table.setUpdatesEnabled(True)
@@ -603,8 +620,6 @@ class FeaturesListWidget(QGroupBox):
             self._suppress_autoselect = False
 
         self.features_reloaded.emit(df)
-        if emit_selection_after_reload:
-            self._queue_selection_changed()
 
     def _restore_selection(self, feature_ids: set[int]) -> bool:
         selection = self._table.selectionModel()
@@ -639,10 +654,7 @@ class FeaturesListWidget(QGroupBox):
             return
         restored = self._restore_selection(set(self._selection_memory_ids))
         if restored:
-            self._retain_hidden_selection_memory = False
             self._queue_selection_changed()
-            return
-        self._retain_hidden_selection_memory = True
 
     def _payloads_for_feature_ids(self, feature_ids: Sequence[int]) -> list[dict]:
         return [self._payloads_by_feature_id[fid] for fid in feature_ids if fid in self._payloads_by_feature_id]
@@ -663,18 +675,8 @@ class FeaturesListWidget(QGroupBox):
         payloads = self.selected_payloads()
         ids = list(self._visible_selected_ids_cache)
         selected_ids = set(ids)
-        if (
-            not selected_ids
-            and self._retain_hidden_selection_memory
-            and bool(self._selection_memory_ids)
-        ):
-            return
-        if self._retain_hidden_selection_memory and self._selection_memory_ids:
-            selected_ids |= set(self._selection_memory_ids)
         self._selection_memory_ids = set(selected_ids)
         selection_ids = tuple(sorted(self._selection_memory_ids))
-        visible_selection_ids = set(ids)
-        self._retain_hidden_selection_memory = bool(self._selection_memory_ids - visible_selection_ids)
         if selection_ids == self._last_selection_ids:
             return
         self._last_selection_ids = selection_ids

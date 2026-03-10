@@ -22,6 +22,8 @@ from ..threading.utils import run_in_main_thread
 
 logger = logging.getLogger(__name__)
 
+NO_TAG_FILTER_VALUE = "__NO_TAG__"
+
 _MODE_TYPE_PATTERN = re.compile(r"^\s*(text|group)\s*\((.*)\)\s*$", re.IGNORECASE)
 
 def _extract_original_type(type_value: object) -> str:
@@ -1137,11 +1139,19 @@ class DatabaseModel(QObject):
         ensured = self._ensure_tags_column(df)
         normalized_rows = ensured["tags"].apply(self._normalized_tag_set)
         mask = pd.Series(True, index=ensured.index)
+        no_tag_token = self._normalize_tag_text(NO_TAG_FILTER_VALUE)
         for group in tag_groups:
+            include_no_tag = any(
+                self._normalize_tag_text(item) == no_tag_token for item in (group or [])
+            )
             normalized_group = self._normalized_tag_set(group)
-            if not normalized_group:
+            normalized_group.discard(no_tag_token)
+            if not normalized_group and not include_no_tag:
                 continue
-            mask &= normalized_rows.apply(lambda row: bool(row.intersection(normalized_group)))
+            mask &= normalized_rows.apply(
+                lambda row: bool(row.intersection(normalized_group))
+                or (include_no_tag and not row)
+            )
         return ensured.loc[mask]
 
     def _apply_explicit_tag_filters(
@@ -1153,10 +1163,15 @@ class DatabaseModel(QObject):
             return df
         ensured = self._ensure_tags_column(df)
         normalized_rows = ensured["tags"].apply(self._normalized_tag_set)
+        no_tag_token = self._normalize_tag_text(NO_TAG_FILTER_VALUE)
+        include_no_tag = any(self._normalize_tag_text(item) == no_tag_token for item in (tags or []))
         normalized_group = self._normalized_tag_set(tags)
-        if not normalized_group:
-            return ensured
-        mask = normalized_rows.apply(lambda row: bool(row.intersection(normalized_group)))
+        normalized_group.discard(no_tag_token)
+        if not normalized_group and not include_no_tag:
+            return ensured.iloc[0:0].copy()
+        mask = normalized_rows.apply(
+            lambda row: bool(row.intersection(normalized_group)) or (include_no_tag and not row)
+        )
         return ensured.loc[mask]
 
     def _ensure_tags_column(self, df: pd.DataFrame) -> pd.DataFrame:

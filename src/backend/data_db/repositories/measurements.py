@@ -53,6 +53,10 @@ class MeasurementsRepository:
         elif dataset:
             where.append("ds.name = ?")
             params.append(dataset)
+        elif datasets is not None:
+            provided_datasets = [str(item).strip() for item in datasets if str(item).strip()]
+            if not provided_datasets:
+                where.append("1 = 0")
 
         if base_name:
             where.append("f.name = ?")
@@ -74,19 +78,38 @@ class MeasurementsRepository:
             ph = ",".join(["?"] * len(import_ids))
             where.append(f"m.import_id IN ({ph})")
             params.extend([int(iid) for iid in import_ids])
+        elif import_ids is not None:
+            provided_import_ids = [item for item in import_ids if item is not None]
+            if not provided_import_ids:
+                where.append("1 = 0")
         if group_ids:
-            gids = [int(gid) for gid in group_ids]
-            ph = ",".join(["?"] * len(gids))
-            where.append(
-                "EXISTS ("
-                "SELECT 1 FROM group_points gp "
-                f"WHERE gp.group_id IN ({ph}) "
-                "AND gp.dataset_id = m.dataset_id "
-                "AND gp.start_ts <= m.ts "
-                "AND gp.end_ts >= m.ts"
-                ")"
-            )
-            params.extend(gids)
+            gids_raw = [int(gid) for gid in group_ids if gid is not None]
+            include_ungrouped = any(gid <= 0 for gid in gids_raw)
+            gids = [gid for gid in gids_raw if gid > 0]
+            predicates: List[str] = []
+            if gids:
+                ph = ",".join(["?"] * len(gids))
+                predicates.append(
+                    "EXISTS ("
+                    "SELECT 1 FROM group_points gp "
+                    f"WHERE gp.group_id IN ({ph}) "
+                    "AND gp.dataset_id = m.dataset_id "
+                    "AND gp.start_ts <= m.ts "
+                    "AND gp.end_ts >= m.ts"
+                    ")"
+                )
+                params.extend(gids)
+            if include_ungrouped:
+                predicates.append(
+                    "NOT EXISTS ("
+                    "SELECT 1 FROM group_points gp "
+                    "WHERE gp.dataset_id = m.dataset_id "
+                    "AND gp.start_ts <= m.ts "
+                    "AND gp.end_ts >= m.ts"
+                    ")"
+                )
+            if predicates:
+                where.append("(" + " OR ".join(predicates) + ")")
         if start is not None:
             where.append("m.ts >= ?")
             params.append(pd.Timestamp(start))

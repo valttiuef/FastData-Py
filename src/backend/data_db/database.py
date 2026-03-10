@@ -2164,7 +2164,9 @@ class Database:
                 "max_value": max_value,
             }
         column_cache: dict[str, tuple[list[str], dict[str, str]]] = {}
-        group_ids_list: list[int] = [int(gid) for gid in (group_ids or []) if gid is not None]
+        group_ids_raw: list[int] = [int(gid) for gid in (group_ids or []) if gid is not None]
+        include_ungrouped = any(gid <= 0 for gid in group_ids_raw)
+        group_ids_list: list[int] = [gid for gid in group_ids_raw if gid > 0]
         linked_by_import: dict[int, list[tuple[str, list[str]]]] = {}
         import_feature_columns: dict[int, dict[int, str]] = {}
         for map_row in mappings.itertuples(index=False):
@@ -2378,22 +2380,35 @@ class Database:
                     if max_value is not None:
                         where.append(f"{filtered_numeric} < ?")
                         params.append(float(max_value))
-            if group_ids_list:
+            if group_ids_raw:
                 group_predicates: list[str] = []
-                phg = ",".join(["?"] * len(group_ids_list))
-                group_predicates.append(
-                    "EXISTS ("
-                    "SELECT 1 "
-                    "FROM imports ii "
-                    "JOIN group_points gp ON gp.dataset_id = ii.dataset_id "
-                    "WHERE ii.id = ? "
-                    f"AND gp.group_id IN ({phg}) "
-                    f"AND gp.start_ts <= {ts_expr} "
-                    f"AND gp.end_ts >= {ts_expr}"
-                    ")"
-                )
-                params.append(int(import_id))
-                params.extend(group_ids_list)
+                if group_ids_list:
+                    phg = ",".join(["?"] * len(group_ids_list))
+                    group_predicates.append(
+                        "EXISTS ("
+                        "SELECT 1 "
+                        "FROM imports ii "
+                        "JOIN group_points gp ON gp.dataset_id = ii.dataset_id "
+                        "WHERE ii.id = ? "
+                        f"AND gp.group_id IN ({phg}) "
+                        f"AND gp.start_ts <= {ts_expr} "
+                        f"AND gp.end_ts >= {ts_expr}"
+                        ")"
+                    )
+                    params.append(int(import_id))
+                    params.extend(group_ids_list)
+                if include_ungrouped:
+                    group_predicates.append(
+                        "NOT EXISTS ("
+                        "SELECT 1 "
+                        "FROM imports ii "
+                        "JOIN group_points gp ON gp.dataset_id = ii.dataset_id "
+                        "WHERE ii.id = ? "
+                        f"AND gp.start_ts <= {ts_expr} "
+                        f"AND gp.end_ts >= {ts_expr}"
+                        ")"
+                    )
+                    params.append(int(import_id))
 
                 linked_rules = linked_by_import.get(int(import_id), [])
                 for linked_col, labels in linked_rules:

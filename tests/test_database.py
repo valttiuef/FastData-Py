@@ -96,6 +96,49 @@ def test_query_raw_can_filter_by_import_ids(temp_db: Database, tmp_path: Path):
     assert set(pd.to_numeric(only_a["import_id"], errors="coerce").dropna().astype(int).unique()) == {int(ids_a[0])}
 
 
+def test_query_raw_returns_empty_when_datasets_filter_is_explicitly_empty(temp_db: Database, tmp_path: Path):
+    csv_path = tmp_path / "empty_ds.csv"
+    _write_csv(csv_path, [("2026-02-02 00:00:00", 1.0), ("2026-02-02 00:01:00", 2.0)])
+
+    opts = ImportOptions(
+        system_name="SysEmptyDs",
+        dataset_name="DataEmptyDs",
+        csv_header_rows=1,
+        auto_detect_datetime=False,
+        date_column="Time",
+    )
+    temp_db.import_file(csv_path, opts)
+
+    result = temp_db.query_raw(systems=["SysEmptyDs"], datasets=[])
+    assert result is not None
+    assert result.empty
+
+
+def test_query_zoom_returns_empty_when_import_filter_is_explicitly_empty(temp_db: Database, tmp_path: Path):
+    csv_path = tmp_path / "empty_imports.csv"
+    _write_csv(csv_path, [("2026-02-03 00:00:00", 1.0), ("2026-02-03 00:01:00", 2.0)])
+
+    opts = ImportOptions(
+        system_name="SysEmptyImport",
+        dataset_name="DataEmptyImport",
+        csv_header_rows=1,
+        auto_detect_datetime=False,
+        date_column="Time",
+    )
+    temp_db.import_file(csv_path, opts)
+
+    result = temp_db.query_zoom(
+        systems=["SysEmptyImport"],
+        datasets=["DataEmptyImport"],
+        import_ids=[],
+        start=pd.Timestamp("2026-02-03 00:00:00"),
+        end=pd.Timestamp("2026-02-03 00:05:00"),
+        target_points=100,
+    )
+    assert result is not None
+    assert result.empty
+
+
 def test_repeated_imports_update_feature_import_scope_in_database_model(temp_db: Database, tmp_path: Path):
     csv_a = tmp_path / "scope_a.csv"
     csv_b = tmp_path / "scope_b.csv"
@@ -581,6 +624,67 @@ def test_query_raw_group_ids_filters_measurement_rows(temp_db: Database, tmp_pat
     filtered = temp_db.query_raw(system="SysGroupMeas", dataset="DataGroupMeas", group_ids=[group_id])
     assert len(filtered) == 1
     assert pd.Timestamp(filtered.iloc[0]["t"]) == target_ts
+
+
+def test_query_raw_group_ids_negative_one_selects_ungrouped_rows(temp_db: Database, tmp_path: Path):
+    csv_path = tmp_path / "group_ungrouped_filter.csv"
+    _write_csv(
+        csv_path,
+        [
+            ("2026-02-01 00:00:00", 1.0),
+            ("2026-02-01 00:01:00", 2.0),
+            ("2026-02-01 00:02:00", 3.0),
+        ],
+    )
+    opts = ImportOptions(
+        system_name="SysGroupUngrouped",
+        dataset_name="DataGroupUngrouped",
+        csv_header_rows=1,
+        auto_detect_datetime=False,
+        date_column="Time",
+    )
+    temp_db.import_file(csv_path, opts)
+    all_df = temp_db.query_raw(system="SysGroupUngrouped", dataset="DataGroupUngrouped")
+    assert len(all_df) == 3
+    target_ts = pd.Timestamp(all_df.sort_values("t").iloc[1]["t"])
+    with temp_db.write_transaction() as con:
+        con.execute(
+            "INSERT INTO group_labels (id, label, kind) VALUES (nextval('group_labels_id_seq'), ?, ?)",
+            ["Window", "ManualKind"],
+        )
+        group_id = int(
+            con.execute(
+                "SELECT id FROM group_labels WHERE label = ? AND kind = ? LIMIT 1",
+                ["Window", "ManualKind"],
+            ).fetchone()[0]
+        )
+        dataset_id = int(
+            con.execute(
+                """
+                SELECT ds.id
+                FROM datasets ds
+                JOIN systems sy ON sy.id = ds.system_id
+                WHERE sy.name = ? AND ds.name = ?
+                LIMIT 1
+                """,
+                ["SysGroupUngrouped", "DataGroupUngrouped"],
+            ).fetchone()[0]
+        )
+        con.execute(
+            """
+            INSERT INTO group_points (start_ts, end_ts, dataset_id, group_id)
+            VALUES (?, ?, ?, ?)
+            """,
+            [target_ts, target_ts, dataset_id, group_id],
+        )
+
+    ungrouped = temp_db.query_raw(
+        system="SysGroupUngrouped",
+        dataset="DataGroupUngrouped",
+        group_ids=[-1],
+    )
+    assert len(ungrouped) == 2
+    assert target_ts not in set(pd.to_datetime(ungrouped["t"], errors="coerce"))
 
 
 def test_query_raw_group_ids_filters_linked_csv_values(temp_db: Database, tmp_path: Path):

@@ -428,7 +428,7 @@ class MultiCheckCombo(QComboBox):
             if le is not None:
                 le.setText(self._placeholder)
             self.setToolTip(self._placeholder)
-            self._clear_current_index()
+            self._clear_current_index(self._placeholder)
             self._update_toggle_action_label()
             return
 

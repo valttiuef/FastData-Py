@@ -65,6 +65,10 @@ class CsvFeatureColumnsRepository:
         elif dataset:
             where.append("ds.name = ?")
             params.append(dataset)
+        elif datasets is not None:
+            provided_datasets = [str(item).strip() for item in datasets if str(item).strip()]
+            if not provided_datasets:
+                where.append("1 = 0")
 
         if base_name:
             where.append("f.name = ?")
@@ -86,6 +90,10 @@ class CsvFeatureColumnsRepository:
             ph = ",".join(["?"] * len(import_ids))
             where.append(f"cf.import_id IN ({ph})")
             params.extend([int(iid) for iid in import_ids])
+        elif import_ids is not None:
+            provided_import_ids = [item for item in import_ids if item is not None]
+            if not provided_import_ids:
+                where.append("1 = 0")
 
         where_sql = ""
         if where:

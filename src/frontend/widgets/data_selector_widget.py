@@ -278,21 +278,25 @@ class DataSelectorViewModel(QObject):
             logger.warning("Exception in _apply_selection_state_to_widget", exc_info=True)
 
     # ------------------------------------------------------------------
+    # @ai(gpt-5, codex, refactor, 2026-03-10)
     def build_data_filters(self) -> Optional[DataFilters]:
         if self._widget.features_widget is None or self._widget.filters_widget is None:
             return None
         payloads = self._widget.features_widget.selected_payloads()
         if not payloads:
-            return None
+            remembered_ids = self._widget.features_widget.selected_feature_ids()
+            if not remembered_ids:
+                return None
+            payloads = [{"feature_id": int(fid)} for fid in remembered_ids]
         return DataFilters(
             features=[FeatureSelection.from_payload(p) for p in payloads],
             start=self._widget.filters_widget.start_timestamp(),
             end=self._widget.filters_widget.end_timestamp(),
             group_ids=self._widget.filters_widget.selected_group_ids(),
             months=self._widget.filters_widget.selected_months(),
-            systems=self._widget.filters_widget.selected_systems(),
-            datasets=self._widget.filters_widget.selected_datasets(),
-            import_ids=self._widget.filters_widget.selected_import_ids(),
+            systems=None,
+            datasets=self._widget.filters_widget.selected_datasets_for_data_scope(),
+            import_ids=self._widget.filters_widget.selected_import_ids_for_data_scope(),
         )
 
     def _resolved_preprocessing_params(
@@ -494,17 +498,13 @@ class DataSelectorViewModel(QObject):
                 else self._widget.filters_widget.selected_group_ids()
             ),
             months=self._widget.filters_widget.selected_months(),
-            systems=(
-                list(systems)
-                if systems is not None
-                else self._widget.filters_widget.selected_systems()
-            ),
             datasets=(
                 list(datasets)
                 if datasets is not None
-                else self._widget.filters_widget.selected_datasets()
+                else self._widget.filters_widget.selected_datasets_for_data_scope()
             ),
-            import_ids=self._widget.filters_widget.selected_import_ids(),
+            systems=None,
+            import_ids=self._widget.filters_widget.selected_import_ids_for_data_scope(),
         )
         params = self._resolved_preprocessing_params(
             preprocessing_override=preprocessing_override
@@ -573,17 +573,13 @@ class DataSelectorViewModel(QObject):
                 else self._widget.filters_widget.selected_group_ids()
             ),
             months=self._widget.filters_widget.selected_months(),
-            systems=(
-                list(systems)
-                if systems is not None
-                else self._widget.filters_widget.selected_systems()
-            ),
             datasets=(
                 list(datasets)
                 if datasets is not None
-                else self._widget.filters_widget.selected_datasets()
+                else self._widget.filters_widget.selected_datasets_for_data_scope()
             ),
-            import_ids=self._widget.filters_widget.selected_import_ids(),
+            systems=None,
+            import_ids=self._widget.filters_widget.selected_import_ids_for_data_scope(),
         )
         params = self._resolved_preprocessing_params(
             preprocessing_override=preprocessing_override
@@ -1001,10 +997,37 @@ class DataSelectorWidget(QGroupBox):
         self.data_requirements_changed.emit(
             {
                 "filters": filters,
+                "data_filters": self._data_reload_filter_state(filters),
                 "preprocessing": preprocessing,
                 "features_count": int(self._selected_features_count_cache),
             }
         )
+
+    def _data_reload_filter_state(self, filters: Mapping[str, Any] | None) -> dict[str, Any]:
+        state = dict(filters or {})
+        datasets: list[str] = []
+        import_ids: list[int] = []
+        if self.filters_widget is not None:
+            try:
+                datasets = list(self.filters_widget.selected_datasets_for_data_scope())
+            except Exception:
+                datasets = list(state.get("datasets") or state.get("Datasets") or [])
+            try:
+                import_ids = list(self.filters_widget.selected_import_ids_for_data_scope())
+            except Exception:
+                import_ids = list(state.get("import_ids") or [])
+        else:
+            datasets = list(state.get("datasets") or state.get("Datasets") or [])
+            import_ids = list(state.get("import_ids") or [])
+        # Keep reload key scoped to filters that must change fetched data.
+        return {
+            "start": state.get("start"),
+            "end": state.get("end"),
+            "datasets": datasets,
+            "import_ids": import_ids,
+            "months": list(state.get("months") or []),
+            "group_ids": list(state.get("group_ids") or []),
+        }
 
     def begin_data_requirements_batch(self) -> None:
         self._requirements_batch_depth += 1

@@ -30,6 +30,9 @@ from ..utils import toast_error, toast_success
 from .help_widgets import InfoButton
 from ..viewmodels.help_viewmodel import HelpViewModel, get_help_viewmodel
 
+NO_GROUP_FILTER_VALUE = -1
+NO_TAG_FILTER_VALUE = "__NO_TAG__"
+
 
 
 class FiltersWidgetViewModel(QObject):
@@ -442,6 +445,8 @@ class FiltersWidget(CollapsibleSection):
             group_id = int(data.get("value"))
         except Exception:
             return
+        if group_id <= 0:
+            return
         group_label = str(data.get("label") or "").strip() or str(group_id)
         title = tr("Remove group")
         body = tr(
@@ -494,6 +499,12 @@ class FiltersWidget(CollapsibleSection):
     def set_datasets(self, items: list[tuple[str, Any]], *, check_all: bool = True) -> None:
         was = self.datasets_combo.blockSignals(True)
         try:
+            self._set_combo_placeholder_from_items(
+                self.datasets_combo,
+                items,
+                empty_placeholder="No datasets available",
+                default_placeholder="All datasets",
+            )
             self.datasets_combo.set_items(items, check_all=check_all)
         finally:
             self.datasets_combo.blockSignals(was)
@@ -501,6 +512,12 @@ class FiltersWidget(CollapsibleSection):
     def set_imports(self, items: list[tuple[str, Any]], *, check_all: bool = True) -> None:
         was = self.imports_combo.blockSignals(True)
         try:
+            self._set_combo_placeholder_from_items(
+                self.imports_combo,
+                items,
+                empty_placeholder="No imports available",
+                default_placeholder="All imports",
+            )
             self.imports_combo.set_items(items, check_all=check_all)
         finally:
             self.imports_combo.blockSignals(was)
@@ -508,10 +525,12 @@ class FiltersWidget(CollapsibleSection):
     def set_groups(self, df: pd.DataFrame) -> None:
         was = self.group_combo.blockSignals(True)
         try:
-            if df is None or df.empty:
-                self.group_combo.clear_items()
-                return
-            items = [(f"{row['kind']}: {row['label']}", int(row['group_id'])) for _, row in df.iterrows()]
+            items: list[tuple[str, Any]] = [(tr("No group"), NO_GROUP_FILTER_VALUE)]
+            if df is not None and not df.empty:
+                items.extend(
+                    (f"{row['kind']}: {row['label']}", int(row["group_id"]))
+                    for _, row in df.iterrows()
+                )
             self.group_combo.set_items(items, check_all=False)
         finally:
             self.group_combo.blockSignals(was)
@@ -519,7 +538,12 @@ class FiltersWidget(CollapsibleSection):
     def set_tags(self, items: list[tuple[str, Any]], *, check_all: bool = True) -> None:
         was = self.tags_combo.blockSignals(True)
         try:
-            self.tags_combo.set_items(items, check_all=check_all)
+            combined: list[tuple[str, Any]] = [(tr("No tag"), NO_TAG_FILTER_VALUE)]
+            combined.extend(items or [])
+            self.tags_combo.set_placeholder(
+                "No tags available" if not (items or []) else "All tags"
+            )
+            self.tags_combo.set_items(combined, check_all=check_all)
         finally:
             self.tags_combo.blockSignals(was)
 
@@ -539,6 +563,18 @@ class FiltersWidget(CollapsibleSection):
                 continue
             values.append(value)
         return values
+
+    def _set_combo_placeholder_from_items(
+        self,
+        combo: MultiCheckCombo,
+        items: Iterable[tuple[str, Any]] | None,
+        *,
+        empty_placeholder: str,
+        default_placeholder: str,
+    ) -> None:
+        normalized_items = list(items or [])
+        has_real_items = bool(normalized_items)
+        combo.set_placeholder(empty_placeholder if not has_real_items else default_placeholder)
 
     def _select_values_or_all(
         self,
@@ -592,6 +628,21 @@ class FiltersWidget(CollapsibleSection):
 
     def selected_import_ids(self) -> list[int]:
         return [int(v) for v in self.imports_combo.selected_values()]
+
+    # @ai(gpt-5, codex, feature, 2026-03-10)
+    def selected_datasets_for_data_scope(self) -> list[str]:
+        values = self.datasets_combo.remembered_selected_values()
+        return [str(v) for v in values if str(v).strip()]
+
+    # @ai(gpt-5, codex, feature, 2026-03-10)
+    def selected_import_ids_for_data_scope(self) -> list[int]:
+        out: list[int] = []
+        for value in self.imports_combo.remembered_selected_values():
+            try:
+                out.append(int(value))
+            except Exception:
+                continue
+        return out
 
     def selected_months(self) -> list[int]:
         return [int(v) for v in self.months_combo.selected_values()]
@@ -731,13 +782,20 @@ class FiltersWidget(CollapsibleSection):
         *,
         check_all: bool,
         previous_values: list[Any],
+        empty_placeholder: str | None = None,
+        default_placeholder: str | None = None,
     ) -> list[Any]:
         was = combo.blockSignals(True)
         try:
+            if empty_placeholder is not None and default_placeholder is not None:
+                self._set_combo_placeholder_from_items(
+                    combo,
+                    items,
+                    empty_placeholder=empty_placeholder,
+                    default_placeholder=default_placeholder,
+                )
             if combo.preserve_missing_selected_values():
                 remembered_values = combo.remembered_selected_values()
-                if not remembered_values and check_all:
-                    remembered_values = [value for _label, value in items]
                 combo.set_remembered_selected_values(remembered_values)
                 combo.set_items(items, check_all=False)
             else:
@@ -784,6 +842,8 @@ class FiltersWidget(CollapsibleSection):
                 items,
                 check_all=True,
                 previous_values=previous_datasets,
+                empty_placeholder="No datasets available",
+                default_placeholder="All datasets",
             )
             self._filters_view_model.refresh_imports_sync(
                 self.selected_systems(),
@@ -799,6 +859,8 @@ class FiltersWidget(CollapsibleSection):
                 items,
                 check_all=True,
                 previous_values=previous_imports,
+                empty_placeholder="No imports available",
+                default_placeholder="All imports",
             )
             self._emit_filter_change("systems_changed")
             self._dependency_refresh_active = False
@@ -827,6 +889,8 @@ class FiltersWidget(CollapsibleSection):
                 items,
                 check_all=True,
                 previous_values=previous_imports,
+                empty_placeholder="No imports available",
+                default_placeholder="All imports",
             )
             self._emit_filter_change("datasets_changed")
             self._dependency_refresh_active = False
