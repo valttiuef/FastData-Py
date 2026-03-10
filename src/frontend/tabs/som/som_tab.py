@@ -907,6 +907,7 @@ class SomTab(TabWidget):
             logger.warning("Exception in _on_cluster_names_changed", exc_info=True)
         self._update_timeline_cluster_map()
         self._update_timeline_views()
+        self._update_feature_group_chart()
         if preserved_range is not None:
             self._restore_timeline_x_range(preserved_range)
 
