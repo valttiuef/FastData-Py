@@ -64,11 +64,11 @@ class FeaturesListWidgetViewModel(QObject):
         }
         self._data_model: Optional[HybridPandasModel] = data_model
         self._use_selection_filter: bool = False
+        self._base_features_df: pd.DataFrame = self._empty_dataframe()
         if self._data_model is not None:
             self._data_model.database_changed.connect(self._on_database_changed)
             self._data_model.selected_features_changed.connect(self._on_selected_features_changed)
             self._data_model.features_list_changed.connect(self._on_features_list_changed)
-        self.reload_features()
 
     def set_use_selection_filter(self, enabled: bool) -> None:
         if self._use_selection_filter == enabled:
@@ -99,20 +99,18 @@ class FeaturesListWidgetViewModel(QObject):
             return
         self._filters = updated
         if reload:
-            self.reload_features()
+            self._emit_filtered_features()
 
     def reload_features(self) -> None:
         model = self._data_model
-        filters = dict(self._filters)
         try:
-            df = self._load_features_dataframe(model, filters)
+            df = self._load_base_features_dataframe(model)
         except Exception as exc:  # pragma: no cover
             logger.exception("Failed to load features: %s", exc)
             self.load_failed.emit(str(exc))
-            df = pd.DataFrame(
-                columns=["feature_id", "name", "source", "unit", "type", "lag_seconds", "tags", "notes"],
-            )
-        self.features_loaded.emit(df)
+            df = self._empty_dataframe()
+        self._base_features_df = df
+        self._emit_filtered_features()
 
     def _on_database_changed(self, *_args) -> None:
         self.reload_features()
@@ -120,51 +118,147 @@ class FeaturesListWidgetViewModel(QObject):
     def _on_selected_features_changed(self, selected_features: pd.DataFrame) -> None:
         if not self._use_selection_filter:
             return
-        self.features_loaded.emit(selected_features)
+        self._base_features_df = self._prepare_features_dataframe(selected_features)
+        self._emit_filtered_features()
 
     def _on_features_list_changed(self) -> None:
         self.reload_features()
 
-    def _load_features_dataframe(
+    def _load_base_features_dataframe(
         self,
         model: Optional[HybridPandasModel],
-        filters: dict[str, Any],
     ) -> pd.DataFrame:
-        systems = filters.get("systems")
-        datasets = filters.get("datasets")
-        import_ids = filters.get("import_ids")
-        tags = filters.get("tags")
-        systems = tuple(systems) if systems is not None else None
-        datasets = tuple(datasets) if datasets is not None else None
-        import_ids = tuple(int(v) for v in import_ids) if import_ids is not None else None
-        if systems is not None and len(systems) == 0:
-            systems = None
-        if datasets is not None and len(datasets) == 0:
-            datasets = None
-        if import_ids is not None and len(import_ids) == 0:
-            import_ids = None
         if model is None:
-            return pd.DataFrame(
-                columns=["feature_id", "name", "source", "unit", "type", "lag_seconds", "tags", "notes"],
-            )
-        if systems or datasets:
-            df = model.features_for_systems_datasets(
-                systems=systems,
-                datasets=datasets,
-                import_ids=import_ids,
-                tags=tags,
-            )
-        else:
-            df = model.features_df(import_ids=import_ids, tags=tags)
+            return self._empty_dataframe()
+        df = model.features_df()
+        return self._prepare_features_dataframe(df)
 
-        if df is None or df.empty or "type" not in df.columns:
-            return df
+    def _emit_filtered_features(self) -> None:
+        df = self._filter_dataframe(self._base_features_df, self._filters)
+        self.features_loaded.emit(df)
+
+    def _prepare_features_dataframe(self, df: Optional[pd.DataFrame]) -> pd.DataFrame:
+        if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+            return self._empty_dataframe()
+        if "type" not in df.columns:
+            return df.copy()
         try:
             mask = df["type"].map(_is_selector_visible_feature_type)
             return df.loc[mask].reset_index(drop=True)
         except Exception:
             logger.warning("Exception while filtering selector-visible feature types", exc_info=True)
-            return df
+            return df.copy()
+
+    def _filter_dataframe(
+        self,
+        df: pd.DataFrame,
+        filters: dict[str, Any],
+    ) -> pd.DataFrame:
+        if df is None or df.empty:
+            return self._empty_dataframe()
+
+        filtered = df
+        systems = self._normalize_text_filter(filters.get("systems"))
+        datasets = self._normalize_text_filter(filters.get("datasets"))
+        import_ids = self._normalize_int_filter(filters.get("import_ids"))
+        tags = self._normalize_text_filter(filters.get("tags"))
+
+        if systems is not None:
+            if not systems:
+                return filtered.iloc[0:0].copy()
+            if "systems" in filtered.columns:
+                system_sets = filtered["systems"].map(self._normalize_text_cell)
+                filtered = filtered.loc[system_sets.map(lambda values: bool(values & systems))]
+            elif "system" in filtered.columns:
+                filtered = filtered.loc[
+                    filtered["system"].astype("string").fillna("").str.strip().isin(list(systems))
+                ]
+
+        if datasets is not None:
+            if not datasets:
+                return filtered.iloc[0:0].copy()
+            if "datasets" in filtered.columns:
+                dataset_sets = filtered["datasets"].map(self._normalize_text_cell)
+                filtered = filtered.loc[dataset_sets.map(lambda values: bool(values & datasets))]
+            elif "dataset" in filtered.columns:
+                filtered = filtered.loc[
+                    filtered["dataset"].astype("string").fillna("").str.strip().isin(list(datasets))
+                ]
+
+        if import_ids is not None:
+            if not import_ids:
+                return filtered.iloc[0:0].copy()
+            if "import_ids" in filtered.columns:
+                import_sets = filtered["import_ids"].map(self._normalize_int_cell)
+                filtered = filtered.loc[import_sets.map(lambda values: bool(values & import_ids))]
+
+        if tags is not None:
+            if not tags:
+                return filtered.iloc[0:0].copy()
+            if "tags" in filtered.columns:
+                tag_sets = filtered["tags"].map(self._normalize_text_cell)
+                filtered = filtered.loc[tag_sets.map(lambda values: bool(values & tags))]
+
+        return filtered.reset_index(drop=True)
+
+    @staticmethod
+    def _empty_dataframe() -> pd.DataFrame:
+        return pd.DataFrame(
+            columns=["feature_id", "name", "source", "unit", "type", "lag_seconds", "tags", "notes"],
+        )
+
+    @staticmethod
+    def _normalize_text_filter(values: Any) -> Optional[set[str]]:
+        if values is None:
+            return None
+        normalized: set[str] = set()
+        for value in values or []:
+            text = str(value or "").strip()
+            if text:
+                normalized.add(text)
+        return normalized or None
+
+    @staticmethod
+    def _normalize_int_filter(values: Any) -> Optional[set[int]]:
+        if values is None:
+            return None
+        normalized: set[int] = set()
+        for value in values or []:
+            try:
+                normalized.add(int(value))
+            except Exception:
+                continue
+        return normalized or None
+
+    @staticmethod
+    def _normalize_text_cell(value: Any) -> set[str]:
+        if value is None:
+            return set()
+        if isinstance(value, (str, bytes, dict)):
+            text = str(value).strip()
+            return {text} if text else set()
+        if hasattr(value, "__iter__"):
+            values: set[str] = set()
+            for item in value:
+                text = str(item or "").strip()
+                if text:
+                    values.add(text)
+            return values
+        text = str(value).strip()
+        return {text} if text else set()
+
+    @staticmethod
+    def _normalize_int_cell(value: Any) -> set[int]:
+        if value is None:
+            return set()
+        candidates = value if hasattr(value, "__iter__") and not isinstance(value, (str, bytes, dict)) else [value]
+        values: set[int] = set()
+        for item in candidates:
+            try:
+                values.add(int(item))
+            except Exception:
+                continue
+        return values
 
 
 class FeaturesListWidget(QGroupBox):
@@ -252,6 +346,7 @@ class FeaturesListWidget(QGroupBox):
         )
         self._view_model.features_loaded.connect(self._apply_dataframe)
         self._view_model.load_failed.connect(self._log_failure)
+        self._view_model.reload_features()
 
     # ------------------------------------------------------------------
     @property
@@ -440,18 +535,7 @@ class FeaturesListWidget(QGroupBox):
 
             try:
                 self._table_model.set_dataframe(df)
-                self._payloads_by_feature_id = {}
-                for row in range(self._table_model.rowCount()):
-                    payload = self._table_model.feature_payload_at(row)
-                    if not payload:
-                        continue
-                    fid_value = payload.get("feature_id")
-                    try:
-                        fid = int(fid_value) if fid_value is not None else None
-                    except Exception:
-                        fid = None
-                    if fid is not None:
-                        self._payloads_by_feature_id[fid] = payload
+                self._payloads_by_feature_id = self._table_model._payload_map_by_feature_id()
             except Exception as exc:
                 logger.exception(
                     "Features list received invalid dataframe payload: %s (type=%s shape=%s columns=%s)",
@@ -527,18 +611,7 @@ class FeaturesListWidget(QGroupBox):
         if selection is None:
             return False
 
-        rows_to_select: list[int] = []
-        for row in range(self._table_model.rowCount()):
-            payload = self._table_model.feature_payload_at(row)
-            if not payload:
-                continue
-            fid_value = payload.get("feature_id")
-            try:
-                fid = int(fid_value) if fid_value is not None else None
-            except Exception:
-                fid = None
-            if fid is not None and fid in feature_ids:
-                rows_to_select.append(row)
+        rows_to_select = self._table_model._rows_for_feature_ids(feature_ids)
 
         if not rows_to_select:
             return False

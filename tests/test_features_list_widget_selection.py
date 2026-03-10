@@ -116,29 +116,98 @@ class _StubFeaturesModel:
         self.selected_features_changed = type("_Signal", (), {"connect": lambda self, cb: None})()
         self.features_list_changed = type("_Signal", (), {"connect": lambda self, cb: None})()
         self.features_df_calls: list[dict] = []
+        self.frame = _sample_features_df()
 
     def features_df(self, **kwargs):
         self.features_df_calls.append(kwargs)
-        return _sample_features_df()
+        return self.frame.copy()
 
     def features_for_systems_datasets(self, **kwargs):
         self.features_df_calls.append(kwargs)
-        return _sample_features_df()
+        return self.frame.copy()
 
 
 def test_empty_scope_filters_are_treated_as_unconstrained():
     model = _StubFeaturesModel()
     view_model = FeaturesListWidgetViewModel(data_model=model)
+    view_model.reload_features()
 
     view_model.set_filters(systems=[], datasets=[], import_ids=[], reload=False)
-    frame = view_model._load_features_dataframe(
-        model,
+    frame = view_model._filter_dataframe(
+        model.frame,
         {"systems": (), "datasets": (), "import_ids": (), "tags": None},
     )
 
     assert not frame.empty
     assert len(model.features_df_calls) >= 1
-    assert model.features_df_calls[-1]["import_ids"] is None
+    assert model.features_df_calls[-1] == {}
+
+
+def test_scope_filter_changes_reuse_loaded_features_and_filter_locally():
+    model = _StubFeaturesModel()
+    model.frame = pd.DataFrame(
+        [
+            {
+                "feature_id": 1,
+                "name": "Temperature",
+                "source": "sensor_a",
+                "unit": "C",
+                "type": "numeric",
+                "lag_seconds": 0,
+                "tags": ["tag-a", "shared"],
+                "notes": "",
+                "system": "System A",
+                "systems": ["System A"],
+                "datasets": ["Dataset A"],
+                "import_ids": [1001],
+                "imports": ["a.csv"],
+            },
+            {
+                "feature_id": 2,
+                "name": "Pressure",
+                "source": "sensor_b",
+                "unit": "bar",
+                "type": "numeric",
+                "lag_seconds": 0,
+                "tags": ["tag-b"],
+                "notes": "",
+                "system": "System B",
+                "systems": ["System B"],
+                "datasets": ["Dataset B"],
+                "import_ids": [1002],
+                "imports": ["b.csv"],
+            },
+        ]
+    )
+
+    view_model = FeaturesListWidgetViewModel(data_model=model)
+    emitted: list[pd.DataFrame] = []
+    view_model.features_loaded.connect(lambda df: emitted.append(df.copy()))
+
+    view_model.reload_features()
+    assert len(model.features_df_calls) == 1
+    assert len(emitted[-1]) == 2
+
+    view_model.set_filters(systems=["System B"])
+    assert len(model.features_df_calls) == 1
+    assert emitted[-1]["feature_id"].tolist() == [2]
+
+    view_model.set_filters(systems=["System B"], datasets=["Dataset B"])
+    assert len(model.features_df_calls) == 1
+    assert emitted[-1]["feature_id"].tolist() == [2]
+
+    view_model.set_filters(systems=["System B"], datasets=["Dataset B"], import_ids=[1002])
+    assert len(model.features_df_calls) == 1
+    assert emitted[-1]["feature_id"].tolist() == [2]
+
+    view_model.set_filters(
+        systems=["System B"],
+        datasets=["Dataset B"],
+        import_ids=[1002],
+        tags=["tag-b"],
+    )
+    assert len(model.features_df_calls) == 1
+    assert emitted[-1]["feature_id"].tolist() == [2]
 
 
 def test_reload_autoselects_first_visible_row_when_previous_selection_is_missing(qapp):

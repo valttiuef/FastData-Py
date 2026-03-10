@@ -58,6 +58,8 @@ class FeaturesTableModel(QAbstractTableModel):
             df = pd.DataFrame(columns=list(self.TABLE_COLUMNS))
         self._payload_df = self._normalize_payload_dataframe(df)
         self._df = self._normalize_for_table(self._payload_df)
+        self._payload_cache = self._build_payload_cache(self._payload_df)
+        self._row_by_feature_id = self._build_row_by_feature_id(self._payload_cache)
 
         # Hot-path caches (paint/sort/filter call data() a lot)
         self._np = self._df.to_numpy(copy=False) if self._df is not None else None
@@ -69,11 +71,16 @@ class FeaturesTableModel(QAbstractTableModel):
     def set_dataframe(self, df: pd.DataFrame):
         normalized_payload = self._normalize_payload_dataframe(df)
         normalized = self._normalize_for_table(normalized_payload)
+        payload_cache = self._build_payload_cache(normalized_payload)
+        row_by_feature_id = self._build_row_by_feature_id(payload_cache)
         old_df = self._df
         try:
             if old_df is not None and old_df.shape == normalized.shape and tuple(old_df.columns) == tuple(normalized.columns):
                 if old_df.equals(normalized):
                     self._payload_df = normalized_payload
+                    self._payload_cache = payload_cache
+                    self._row_by_feature_id = row_by_feature_id
+                    self._search_cache = None
                     return
         except Exception:
             logger.warning("Exception in set_dataframe equality check", exc_info=True)
@@ -91,12 +98,16 @@ class FeaturesTableModel(QAbstractTableModel):
             self.beginResetModel()
             self._payload_df = normalized_payload
             self._df = normalized
+            self._payload_cache = payload_cache
+            self._row_by_feature_id = row_by_feature_id
             self._np = self._df.to_numpy(copy=False) if self._df is not None else None
             self.endResetModel()
             return
 
         self._payload_df = normalized_payload
         self._df = normalized
+        self._payload_cache = payload_cache
+        self._row_by_feature_id = row_by_feature_id
         self._np = self._df.to_numpy(copy=False) if self._df is not None else None
         if new_shape[0] > 0 and new_shape[1] > 0:
             self.dataChanged.emit(
@@ -234,45 +245,24 @@ class FeaturesTableModel(QAbstractTableModel):
         return None
 
     def feature_payload_at(self, row: int) -> dict | None:
-        if self._payload_df is None or row < 0 or row >= len(self._payload_df):
+        if row < 0 or row >= len(self._payload_cache):
             return None
-        r = self._payload_df.iloc[row]
+        payload = self._payload_cache[row]
+        return dict(payload) if payload is not None else None
 
-        def _normalize(value):
-            if _is_missing_scalar(value):
-                return None
-            return value
+    def _payload_map_by_feature_id(self) -> dict[int, dict]:
+        return {
+            int(feature_id): dict(self._payload_cache[row_idx])
+            for feature_id, row_idx in self._row_by_feature_id.items()
+            if 0 <= row_idx < len(self._payload_cache) and self._payload_cache[row_idx] is not None
+        }
 
-        fid = r.get("feature_id")
-        try:
-            feature_id = int(fid) if pd.notna(fid) else None
-        except Exception:
-            feature_id = None
-
-        payload = dict(
-            feature_id=feature_id,
-            name=_normalize(r.get("name")),
-            source=_normalize(r.get("source")),
-            unit=_normalize(r.get("unit")),
-            type=_normalize(r.get("type")),
-            notes=_normalize(r.get("notes")),
-            lag_seconds=_normalize(r.get("lag_seconds")),
-            tags=_normalize(r.get("tags")),
-        )
-        for key in (
-            "system",
-            "systems",
-            "dataset",
-            "datasets",
-            "dataset_ids",
-            "imports",
-            "import_ids",
-        ):
-            if key in r.index:
-                payload[key] = _normalize(r.get(key))
-        if "locations" not in payload and "datasets" in payload:
-            payload["locations"] = payload.get("datasets")
-        return payload
+    def _rows_for_feature_ids(self, feature_ids: set[int]) -> list[int]:
+        if not feature_ids:
+            return []
+        rows = [self._row_by_feature_id[fid] for fid in feature_ids if fid in self._row_by_feature_id]
+        rows.sort()
+        return rows
 
     def search_text_at(self, row: int) -> str:
         if self._search_cache is None:
@@ -285,16 +275,89 @@ class FeaturesTableModel(QAbstractTableModel):
         if self._df is None or self._df.empty:
             self._search_cache = []
             return
+        rows = self._np if self._np is not None else self._df.to_numpy(copy=False)
+        cache: list[str] = []
         try:
-            safe = self._df.fillna("")
-            joined = safe.astype(str).agg(" ".join, axis=1).str.lower()
-            self._search_cache = joined.tolist()
+            for row in rows:
+                parts: list[str] = []
+                for value in row:
+                    if _is_missing_scalar(value):
+                        continue
+                    if isinstance(value, (list, tuple, set)):
+                        for item in value:
+                            if _is_missing_scalar(item):
+                                continue
+                            text = str(item).strip()
+                            if text:
+                                parts.append(text)
+                        continue
+                    text = str(value).strip()
+                    if text:
+                        parts.append(text)
+                cache.append(" ".join(parts).lower())
         except Exception:
-            self._search_cache = [""] * len(self._df)
+            cache = [""] * len(self._df)
             for idx in range(len(self._df)):
                 try:
                     row = self._df.iloc[idx]
                     text = " ".join(str(v) for v in row if pd.notna(v)).lower()
                 except Exception:
                     text = ""
-                self._search_cache[idx] = text
+                cache[idx] = text
+        self._search_cache = cache
+
+    def _build_payload_cache(self, df: pd.DataFrame) -> list[dict]:
+        if df is None or df.empty:
+            return []
+
+        def _normalize(value):
+            if _is_missing_scalar(value):
+                return None
+            return value
+
+        records = df.to_dict(orient="records")
+        payloads: list[dict] = []
+        for record in records:
+            fid = record.get("feature_id")
+            try:
+                feature_id = int(fid) if pd.notna(fid) else None
+            except Exception:
+                feature_id = None
+
+            payload = dict(
+                feature_id=feature_id,
+                name=_normalize(record.get("name")),
+                source=_normalize(record.get("source")),
+                unit=_normalize(record.get("unit")),
+                type=_normalize(record.get("type")),
+                notes=_normalize(record.get("notes")),
+                lag_seconds=_normalize(record.get("lag_seconds")),
+                tags=_normalize(record.get("tags")),
+            )
+            for key in (
+                "system",
+                "systems",
+                "dataset",
+                "datasets",
+                "dataset_ids",
+                "imports",
+                "import_ids",
+            ):
+                if key in record:
+                    payload[key] = _normalize(record.get(key))
+            if "locations" not in payload and "datasets" in payload:
+                payload["locations"] = payload.get("datasets")
+            payloads.append(payload)
+        return payloads
+
+    def _build_row_by_feature_id(self, payloads: list[dict]) -> dict[int, int]:
+        rows: dict[int, int] = {}
+        for row_idx, payload in enumerate(payloads):
+            fid = payload.get("feature_id") if isinstance(payload, dict) else None
+            if fid is None:
+                continue
+            try:
+                rows[int(fid)] = row_idx
+            except Exception:
+                continue
+        return rows

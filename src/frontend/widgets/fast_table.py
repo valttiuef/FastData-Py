@@ -69,9 +69,18 @@ class FastPandasProxyModel(QAbstractProxyModel):
         case_sensitive: bool = False,
         debounce_ms: int = 60,
     ) -> None:
-        self._filter_text = (text or "").strip()
-        self._filter_cols = columns[:] if columns else None
-        self._filter_case_sensitive = bool(case_sensitive)
+        normalized_text = (text or "").strip()
+        normalized_cols = columns[:] if columns else None
+        normalized_case = bool(case_sensitive)
+        if (
+            normalized_text == self._filter_text
+            and normalized_cols == self._filter_cols
+            and normalized_case == self._filter_case_sensitive
+        ):
+            return
+        self._filter_text = normalized_text
+        self._filter_cols = normalized_cols
+        self._filter_case_sensitive = normalized_case
         self._rebuild_timer.setInterval(max(0, int(debounce_ms)))
         self._rebuild_timer.start()
 
@@ -219,16 +228,28 @@ class FastPandasProxyModel(QAbstractProxyModel):
         ft = self._filter_text
         if ft:
             cols = self._filter_cols
+            search_series = None
             if cols is None:
-                cols = list(range(int(df.shape[1])))
-
-            part = df.iloc[:, cols]
-            s = part.astype("string").fillna("").agg(" ".join, axis=1)
+                build_search_cache = getattr(sm, "_build_search_cache", None)
+                if callable(build_search_cache):
+                    try:
+                        if getattr(sm, "_search_cache", None) is None:
+                            build_search_cache()
+                        cache = getattr(sm, "_search_cache", None)
+                        if cache is not None and len(cache) == n:
+                            search_series = pd.Series(cache, index=df.index, dtype="string", copy=False)
+                    except Exception:
+                        search_series = None
+            if search_series is None:
+                if cols is None:
+                    cols = list(range(int(df.shape[1])))
+                part = df.iloc[:, cols]
+                search_series = part.astype("string").fillna("").agg(" ".join, axis=1)
 
             if self._filter_case_sensitive:
-                mask = s.str.contains(ft, regex=False)
+                mask = search_series.str.contains(ft, regex=False)
             else:
-                mask = s.str.contains(ft, case=False, regex=False)
+                mask = search_series.str.contains(ft, case=False, regex=False)
 
             rows = rows[mask.to_numpy(dtype=bool, na_value=False)]
 
