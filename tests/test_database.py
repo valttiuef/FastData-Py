@@ -96,6 +96,39 @@ def test_query_raw_can_filter_by_import_ids(temp_db: Database, tmp_path: Path):
     assert set(pd.to_numeric(only_a["import_id"], errors="coerce").dropna().astype(int).unique()) == {int(ids_a[0])}
 
 
+def test_repeated_imports_update_feature_import_scope_in_database_model(temp_db: Database, tmp_path: Path):
+    csv_a = tmp_path / "scope_a.csv"
+    csv_b = tmp_path / "scope_b.csv"
+    _write_csv(csv_a, [("2026-02-01 00:00:00", 1.0)])
+    _write_csv(csv_b, [("2026-02-01 00:01:00", 2.0)])
+
+    opts = ImportOptions(
+        system_name="SysScope",
+        dataset_name="DataScope",
+        csv_header_rows=1,
+        auto_detect_datetime=False,
+        date_column="Time",
+        use_duckdb_csv_import=True,
+    )
+    ids_a = temp_db.import_file(csv_a, opts)
+    ids_b = temp_db.import_file(csv_b, opts)
+    assert len(ids_a) == 1 and len(ids_b) == 1
+
+    settings = SettingsModel(organization="FastDataTests", application="FastDataFeatureScope")
+    settings.set_database_path(temp_db.path)
+    model = DatabaseModel(settings)
+    try:
+        features = model.features_df(systems=["SysScope"], datasets=["DataScope"])
+        assert len(features) == 1
+        row = features.iloc[0]
+        assert row["name"] == "Temp"
+        assert row["systems"] == ["SysScope"]
+        assert row["datasets"] == ["DataScope"]
+        assert row["import_ids"] == [int(ids_a[0]), int(ids_b[0])]
+    finally:
+        model._close_database()
+
+
 def test_duplicate_file_replace_policy(temp_db: Database, tmp_path: Path):
     csv_path = tmp_path / "dup.csv"
     _write_csv(csv_path, [("2026-03-01 00:00:00", 5.0), ("2026-03-01 00:01:00", 6.0)])
@@ -268,6 +301,127 @@ def test_hybrid_model_loads_rows_from_duckdb_csv_import(temp_db: Database, tmp_p
         value_columns = [c for c in frame.columns if c != "t"]
         assert value_columns
         assert frame[value_columns].apply(pd.to_numeric, errors="coerce").notna().any().any()
+    finally:
+        model._close_database()
+
+
+def test_hybrid_model_load_base_respects_import_filters_across_cache_reuse(temp_db: Database, tmp_path: Path):
+    csv_a = tmp_path / "hybrid_import_a.csv"
+    csv_b = tmp_path / "hybrid_import_b.csv"
+    _write_csv(csv_a, [("2026-02-01 00:00:00", 10.0), ("2026-02-01 00:01:00", 11.0)])
+    _write_csv(csv_b, [("2026-02-01 00:02:00", 20.0), ("2026-02-01 00:03:00", 21.0)])
+
+    opts = ImportOptions(
+        system_name="SysHybridImport",
+        dataset_name="DataHybridImport",
+        csv_header_rows=1,
+        auto_detect_datetime=False,
+        date_column="Time",
+        use_duckdb_csv_import=True,
+    )
+    ids_a = temp_db.import_file(csv_a, opts)
+    ids_b = temp_db.import_file(csv_b, opts)
+    assert len(ids_a) == 1 and len(ids_b) == 1
+
+    settings = SettingsModel(organization="FastDataTests", application="FastDataHybridImportFilter")
+    settings.set_database_path(temp_db.path)
+    model = HybridPandasModel(settings)
+
+    try:
+        features = temp_db.list_features(systems=["SysHybridImport"], datasets=["DataHybridImport"])
+        feature_id = int(features.iloc[0]["feature_id"])
+        selection = FeatureSelection(feature_id=feature_id, base_name="Temp")
+
+        filters_a = DataFilters(
+            features=[selection],
+            start=pd.Timestamp("2026-02-01 00:00:00"),
+            end=pd.Timestamp("2026-02-01 00:05:00"),
+            systems=["SysHybridImport"],
+            datasets=["DataHybridImport"],
+            import_ids=[int(ids_a[0])],
+        )
+        filters_b = DataFilters(
+            features=[selection],
+            start=pd.Timestamp("2026-02-01 00:00:00"),
+            end=pd.Timestamp("2026-02-01 00:05:00"),
+            systems=["SysHybridImport"],
+            datasets=["DataHybridImport"],
+            import_ids=[int(ids_b[0])],
+        )
+
+        model.load_base(filters_a, timestep="none", fill="none", agg="avg")
+        frame_a = model.base_dataframe()
+        model.load_base(filters_b, timestep="none", fill="none", agg="avg")
+        frame_b = model.base_dataframe()
+
+        values_a = sorted(pd.to_numeric(frame_a["Temp"], errors="coerce").dropna().tolist())
+        values_b = sorted(pd.to_numeric(frame_b["Temp"], errors="coerce").dropna().tolist())
+
+        assert values_a == [10.0, 11.0]
+        assert values_b == [20.0, 21.0]
+    finally:
+        model._close_database()
+
+
+def test_hybrid_model_load_base_respects_dataset_filters(temp_db: Database, tmp_path: Path):
+    csv_a = tmp_path / "hybrid_dataset_a.csv"
+    csv_b = tmp_path / "hybrid_dataset_b.csv"
+    _write_csv(csv_a, [("2026-02-01 00:00:00", 1.0), ("2026-02-01 00:01:00", 2.0)])
+    _write_csv(csv_b, [("2026-02-01 00:02:00", 5.0), ("2026-02-01 00:03:00", 6.0)])
+
+    opts_a = ImportOptions(
+        system_name="SysHybridDataset",
+        dataset_name="DataA",
+        csv_header_rows=1,
+        auto_detect_datetime=False,
+        date_column="Time",
+        use_duckdb_csv_import=True,
+    )
+    opts_b = ImportOptions(
+        system_name="SysHybridDataset",
+        dataset_name="DataB",
+        csv_header_rows=1,
+        auto_detect_datetime=False,
+        date_column="Time",
+        use_duckdb_csv_import=True,
+    )
+    temp_db.import_file(csv_a, opts_a)
+    temp_db.import_file(csv_b, opts_b)
+
+    settings = SettingsModel(organization="FastDataTests", application="FastDataHybridDatasetFilter")
+    settings.set_database_path(temp_db.path)
+    model = HybridPandasModel(settings)
+
+    try:
+        features = temp_db.list_features(systems=["SysHybridDataset"])
+        feature_id = int(features.iloc[0]["feature_id"])
+        selection = FeatureSelection(feature_id=feature_id, base_name="Temp")
+
+        filters_a = DataFilters(
+            features=[selection],
+            start=pd.Timestamp("2026-02-01 00:00:00"),
+            end=pd.Timestamp("2026-02-01 00:05:00"),
+            systems=["SysHybridDataset"],
+            datasets=["DataA"],
+        )
+        filters_b = DataFilters(
+            features=[selection],
+            start=pd.Timestamp("2026-02-01 00:00:00"),
+            end=pd.Timestamp("2026-02-01 00:05:00"),
+            systems=["SysHybridDataset"],
+            datasets=["DataB"],
+        )
+
+        model.load_base(filters_a, timestep="none", fill="none", agg="avg")
+        frame_a = model.base_dataframe()
+        model.load_base(filters_b, timestep="none", fill="none", agg="avg")
+        frame_b = model.base_dataframe()
+
+        values_a = sorted(pd.to_numeric(frame_a["Temp"], errors="coerce").dropna().tolist())
+        values_b = sorted(pd.to_numeric(frame_b["Temp"], errors="coerce").dropna().tolist())
+
+        assert values_a == [1.0, 2.0]
+        assert values_b == [5.0, 6.0]
     finally:
         model._close_database()
 

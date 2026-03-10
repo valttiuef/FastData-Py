@@ -138,11 +138,66 @@ class DatabaseModel(QObject):
         self._imports_cache: Optional[pd.DataFrame] = None
         self._selected_features_job_id: int = 0
 
+    # @ai(gpt-5, codex-cli, refactor, 2026-03-10)
     @staticmethod
     def _normalize_feature_frame_columns(df: pd.DataFrame) -> pd.DataFrame:
         if df is None or df.empty:
             return df
         out = df.copy()
+
+        def _normalize_text_list(value: object) -> list[str]:
+            if value is None:
+                return []
+            try:
+                if pd.isna(value):
+                    return []
+            except Exception:
+                pass
+            if isinstance(value, (str, bytes, dict)):
+                text = str(value).strip()
+                return [text] if text else []
+            if hasattr(value, "__iter__"):
+                items: list[str] = []
+                for item in value:
+                    try:
+                        if pd.isna(item):
+                            continue
+                    except Exception:
+                        pass
+                    text = str(item).strip()
+                    if text:
+                        items.append(text)
+                return items
+            text = str(value).strip()
+            return [text] if text else []
+
+        def _normalize_int_list(value: object) -> list[int]:
+            if value is None:
+                return []
+            try:
+                if pd.isna(value):
+                    return []
+            except Exception:
+                pass
+            if isinstance(value, (str, bytes, dict)):
+                candidates = [value]
+            elif hasattr(value, "__iter__"):
+                candidates = list(value)
+            else:
+                candidates = [value]
+            items: list[int] = []
+            for item in candidates:
+                try:
+                    if pd.isna(item):
+                        continue
+                except Exception:
+                    pass
+                try:
+                    items.append(int(item))
+                except Exception:
+                    continue
+            return items
+
         for col in ("feature_id", "name", "source", "unit", "type", "notes", "lag_seconds"):
             if col not in out.columns:
                 out[col] = pd.NA
@@ -160,9 +215,18 @@ class DatabaseModel(QObject):
                 text = str(system).strip()
                 systems_values.append([text] if text else [])
             out["systems"] = systems_values
-        for col in ("datasets", "imports", "tags", "dataset_ids", "import_ids"):
+        else:
+            out["systems"] = out["systems"].apply(_normalize_text_list)
+        for col in ("datasets", "imports", "tags"):
             if col not in out.columns:
                 out[col] = [[] for _ in range(len(out))]
+            else:
+                out[col] = out[col].apply(_normalize_text_list)
+        for col in ("dataset_ids", "import_ids"):
+            if col not in out.columns:
+                out[col] = [[] for _ in range(len(out))]
+            else:
+                out[col] = out[col].apply(_normalize_int_list)
         order = ["feature_id", "name", "source", "unit", "type", "notes", "lag_seconds", "tags"]
         existing = [c for c in order if c in out.columns]
         remaining = [c for c in out.columns if c not in existing]

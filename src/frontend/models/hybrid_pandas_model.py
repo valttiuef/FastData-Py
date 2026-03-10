@@ -1336,6 +1336,7 @@ class HybridPandasModel(DatabaseModel):
             self._value_filters_cache_key(self._value_filters),
         )
 
+    # @ai(gpt-5, codex-cli, fix, 2026-03-10)
     def _filters_cache_key(self, flt: DataFilters) -> tuple:
         def _ts_key(value: Optional[pd.Timestamp]) -> Optional[str]:
             if value is None:
@@ -1355,6 +1356,7 @@ class HybridPandasModel(DatabaseModel):
         )
         systems_key = tuple(str(s) for s in (flt.systems or []))
         datasets_key = tuple(str(l) for l in (flt.datasets or []))
+        imports_key = tuple(int(i) for i in (flt.import_ids or []))
         groups_key = tuple(int(g) for g in (flt.group_ids or []))
         months_key = tuple(int(m) for m in (flt.months or []))
         return (
@@ -1363,6 +1365,7 @@ class HybridPandasModel(DatabaseModel):
             _ts_key(flt.end),
             systems_key,
             datasets_key,
+            imports_key,
             groups_key,
             months_key,
         )
