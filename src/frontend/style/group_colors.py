@@ -6,23 +6,51 @@ from collections.abc import Iterable
 import pandas as pd
 from PySide6.QtGui import QColor
 
-# Shared categorical palette for group/cluster identity colors outside the
-# unified SOM heatmaps. Keep the lead blue slightly brighter so it reads clearly
-# in charts, overlays, and progress fills across themes.
-GROUP_COLORS = (
-    "#4E79A7",  # blue
+# --- @ai START ---
+# model: gpt-5
+# tool: codex
+# role: visual-refactor
+# reviewed: yes
+# date: 2026-03-10
+# --- @ai END ---
+
+# Theme-specific categorical palettes for group and cluster identity colors.
+# The light palette keeps the existing semantic hues, while the dark palette
+# uses brighter companions tuned for darker surfaces instead of generated
+# lightness shifts. This keeps repeated labels stable and the palette feeling
+# intentional across themes.
+LIGHT_GROUP_COLORS = (
+    "#4E79F7",  # blue
     "#E15759",  # red
     "#59A14F",  # green
     "#F28E2B",  # orange
     "#B07AA1",  # purple
-    "#76B7B2",  # teal
+    "#4DB6AC",  # teal
     "#EDC948",  # yellow
     "#FF9DA7",  # pink
-    "#9C755F",  # brown
-    "#BAB0AC",  # gray
+    "#8C6D31",  # brown
+    "#7F8FA4",  # cool gray
     "#86BC86",  # light green
-    "#6F9CEB",  # bright blue
+    "#6F9CEB",  # sky blue
 )
+
+DARK_GROUP_COLORS = (
+    "#7AA2FF",  # blue
+    "#FF6B6E",  # red
+    "#7ED27A",  # green
+    "#FFAD4D",  # orange
+    "#C39BD3",  # purple
+    "#67D5CC",  # teal
+    "#FFD86B",  # yellow
+    "#FFB3C2",  # pink
+    "#B8945A",  # brown
+    "#A9B4C2",  # cool gray
+    "#A8DFA2",  # light green
+    "#8AB6FF",  # sky blue
+)
+
+# Backwards-compatible default palette used by tests and light-theme callers.
+GROUP_COLORS = LIGHT_GROUP_COLORS
 
 
 def _index_for_label(label: object, palette_len: int) -> int:
@@ -35,30 +63,21 @@ def _index_for_label(label: object, palette_len: int) -> int:
         return int(zlib.crc32(token)) % palette_len
 
 
-def _shade_for_cycle(color: QColor, idx: int, palette_len: int, *, dark_theme: bool) -> QColor:
-    out = QColor(color)
-    if dark_theme:
-        out = out.lighter(130)
-    cycle = idx // max(1, palette_len)
-    if cycle <= 0:
-        return out
-    factor = 108 + (cycle * 10)
-    if out.lightness() < 128:
-        return out.lighter(min(170, factor))
-    return out.darker(min(170, factor))
+def _group_palette(*, dark_theme: bool) -> tuple[str, ...]:
+    return DARK_GROUP_COLORS if dark_theme else LIGHT_GROUP_COLORS
 
 
 # @ai(gpt-5, codex, refactor, 2026-02-27)
 def group_color_for_index(index: int, *, dark_theme: bool = False) -> QColor:
-    base = QColor(GROUP_COLORS[int(index) % len(GROUP_COLORS)])
-    return _shade_for_cycle(base, int(index), len(GROUP_COLORS), dark_theme=dark_theme)
+    palette = _group_palette(dark_theme=dark_theme)
+    return QColor(palette[int(index) % len(palette)])
 
 
 # @ai(gpt-5, codex, refactor, 2026-02-27)
 def group_color_for_label(label: object, *, dark_theme: bool = False) -> QColor:
-    idx = _index_for_label(label, len(GROUP_COLORS))
-    base = QColor(GROUP_COLORS[idx])
-    return _shade_for_cycle(base, idx, len(GROUP_COLORS), dark_theme=dark_theme)
+    palette = _group_palette(dark_theme=dark_theme)
+    idx = _index_for_label(label, len(palette))
+    return QColor(palette[idx])
 
 
 # @ai(gpt-5, codex, refactor, 2026-02-27)

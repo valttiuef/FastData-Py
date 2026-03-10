@@ -1,6 +1,6 @@
 """Shared chart widgets that can be reused across tabs."""
 
-MAX_FEATURES_SHOWN = 2
+MAX_FEATURES_SHOWN = 3
 MAX_FEATURES_SHOWN_LEGEND = 5
 # Analysis/visualization cap for large feature selections. Training/data-fetch
 # flows may still request all selected features explicitly.
