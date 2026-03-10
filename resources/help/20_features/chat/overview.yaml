@@ -11,7 +11,7 @@ entries:
       </ul>
 
   chat.overview:
-    title: "Overview"
+    title: "Using Chat"
     short: "Ask the built-in assistant and keep a record of conversations."
     body: |
       <p>The chat window lets you send questions to the assistant and keeps a history in the log database.</p>

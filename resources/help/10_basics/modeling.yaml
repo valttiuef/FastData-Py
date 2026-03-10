@@ -13,6 +13,6 @@ entries:
         <li><b>Performance Metrics</b> - Use cross-validation to compare models objectively</li>
         <li><b>Training Time</b> - Balance accuracy vs. computational cost</li>
       </ul>
-      <p>FastData provides automatic model selection tools to help you find the best fit.</p>
+      <p>FastData lets you run and compare multiple models so you can choose the best fit based on your metrics and constraints.</p>
     aliases: ["model.choice", "algorithm.selection"]
 

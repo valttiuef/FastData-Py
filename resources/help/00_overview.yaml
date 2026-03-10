@@ -5,11 +5,12 @@ metadata:
   description: "Context-sensitive help entries for FastData application"
 entries:
   app.overview:
-    title: "FastData Help"
-    short: "How this help system is organized."
+    title: "Using This Help"
+    short: "Start here to understand how the help content is organized."
     body: |
-      <p>This help content is organized to match how you work in the app.</p>
+      <p>This help guide is organized around the workflows and concepts you use in FastData.</p>
       <ul>
-        <li><b>Basics</b> covers core concepts and definitions.</li>
-        <li><b>Features</b> groups each major workflow area and its related controls.</li>
+        <li><b>Basics</b> explains the core data and modeling concepts used across the app.</li>
+        <li><b>Features</b> groups the main workflow areas and the controls available in each one.</li>
       </ul>
+      <p>Use the navigation on the left to jump directly to the part of the application you are working with.</p>

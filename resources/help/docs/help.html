@@ -4,42 +4,18 @@
   <meta charset="utf-8" />
   <title>FastData Help</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <style>
-    :root { color-scheme: light; }
-    body { margin: 0; font-family: 'Georgia', 'Times New Roman', serif; color: #1b1b1b; background: #f6f4ef; }
-    .layout { display: grid; grid-template-columns: 280px 1fr; min-height: 100vh; }
-    nav { background: #f0ede6; border-right: 1px solid #d8d2c7; padding: 20px; overflow-y: auto; position: sticky; top: 0; height: 100vh; align-self: start; }
-    main { padding: 32px 48px; }
-    h1 { margin-top: 0; font-size: 32px; }
-    h2 { margin-top: 36px; border-bottom: 1px solid #d8d2c7; padding-bottom: 6px; }
-    h3 { margin-top: 28px; }
-    h4 { margin-top: 20px; font-size: 18px; }
-    h5 { margin-top: 18px; font-size: 16px; }
-    .meta { color: #5c564a; font-size: 14px; margin-bottom: 16px; }
-    .entry-key { font-family: 'Courier New', monospace; font-size: 13px; color: #3d3a33; }
-    a { color: #244a6d; text-decoration: none; }
-    a:hover { text-decoration: underline; }
-    details { margin-bottom: 10px; }
-    summary { cursor: pointer; font-weight: 600; }
-    .nav-group { margin-left: 12px; }
-    .nav-page { display: block; margin: 6px 0 6px 12px; }
-    @media (max-width: 900px) {
-      .layout { grid-template-columns: 1fr; }
-      nav { position: static; height: auto; border-right: none; border-bottom: 1px solid #d8d2c7; }
-      main { padding: 24px; }
-    }
-  </style>
+  <link rel="stylesheet" href="help.css" />
 </head>
 <body>
 <div class="layout">
 <nav>
   <h2>FastData</h2>
   <div class="meta">Context-sensitive help entries for FastData application</div>
-  <div class="meta">Updated: 2026-01-01</div>
+  <div class="meta">Updated: 2026-03-10</div>
   <div class="meta">Version: 2</div>
   <details open>
-    <summary>Overview</summary>
-    <a class="nav-page" href="#overview-overview">Overview</a>
+    <summary>Introduction</summary>
+    <a class="nav-page" href="#introduction-introduction">Introduction</a>
   </details>
   <details open>
     <summary>Basics</summary>
@@ -50,34 +26,34 @@
     <summary>Features</summary>
     <details class="nav-group" open>
       <summary>Data</summary>
-      <a class="nav-page" href="#features-data-overview">Overview</a>
+      <a class="nav-page" href="#features-data-introduction">Introduction</a>
       <a class="nav-page" href="#features-data-filters">Filters</a>
       <a class="nav-page" href="#features-data-import-options">Import Options</a>
     </details>
     <details class="nav-group" open>
       <summary>Selections</summary>
-      <a class="nav-page" href="#features-selections-overview">Overview</a>
+      <a class="nav-page" href="#features-selections-introduction">Introduction</a>
     </details>
     <details class="nav-group" open>
       <summary>Statistics</summary>
-      <a class="nav-page" href="#features-statistics-overview">Overview</a>
+      <a class="nav-page" href="#features-statistics-introduction">Introduction</a>
       <a class="nav-page" href="#features-statistics-preprocessing">Preprocessing</a>
       <a class="nav-page" href="#features-statistics-statistics">Statistics</a>
     </details>
     <details class="nav-group" open>
       <summary>Charts</summary>
-      <a class="nav-page" href="#features-charts-overview">Overview</a>
+      <a class="nav-page" href="#features-charts-introduction">Introduction</a>
     </details>
     <details class="nav-group" open>
       <summary>SOM</summary>
-      <a class="nav-page" href="#features-som-overview">Overview</a>
+      <a class="nav-page" href="#features-som-introduction">Introduction</a>
       <a class="nav-page" href="#features-som-clustering">Clustering</a>
       <a class="nav-page" href="#features-som-controls">Controls</a>
       <a class="nav-page" href="#features-som-hyperparameters">Hyperparameters</a>
     </details>
     <details class="nav-group" open>
       <summary>Regression</summary>
-      <a class="nav-page" href="#features-regression-overview">Overview</a>
+      <a class="nav-page" href="#features-regression-introduction">Introduction</a>
       <a class="nav-page" href="#features-regression-cross-validation">Cross Validation</a>
       <a class="nav-page" href="#features-regression-hyperparameters">Hyperparameters</a>
       <a class="nav-page" href="#features-regression-inputs">Inputs</a>
@@ -85,14 +61,14 @@
     </details>
     <details class="nav-group" open>
       <summary>Forecasting</summary>
-      <a class="nav-page" href="#features-forecasting-overview">Overview</a>
+      <a class="nav-page" href="#features-forecasting-introduction">Introduction</a>
       <a class="nav-page" href="#features-forecasting-controls">Controls</a>
       <a class="nav-page" href="#features-forecasting-hyperparameters">Hyperparameters</a>
       <a class="nav-page" href="#features-forecasting-models">Models</a>
     </details>
     <details class="nav-group" open>
       <summary>Chat</summary>
-      <a class="nav-page" href="#features-chat-overview">Overview</a>
+      <a class="nav-page" href="#features-chat-introduction">Introduction</a>
       <a class="nav-page" href="#features-chat-settings">Settings</a>
     </details>
   </details>
@@ -100,15 +76,16 @@
 <main>
 <h1>FastData Help</h1>
 <p>Context-sensitive help entries for FastData application</p>
-<h2>Overview</h2>
-<h4 id="overview-overview">Overview</h4>
-<h5>FastData Help</h5>
-<p>How this help system is organized.</p>
-<p>This help content is organized to match how you work in the app.</p>
+<h2>Introduction</h2>
+<div id="introduction-introduction" class="page-anchor"></div>
+<h5>Using This Help</h5>
+<p>Start here to understand how the help content is organized.</p>
+<p>This help guide is organized around the workflows and concepts you use in FastData.</p>
 <ul>
-  <li><b>Basics</b> covers core concepts and definitions.</li>
-  <li><b>Features</b> groups each major workflow area and its related controls.</li>
+  <li><b>Basics</b> explains the core data and modeling concepts used across the app.</li>
+  <li><b>Features</b> groups the main workflow areas and the controls available in each one.</li>
 </ul>
+<p>Use the navigation on the left to jump directly to the part of the application you are working with.</p>
 
 <h2>Basics</h2>
 <h4 id="basics-data-concepts">Data Concepts</h4>
@@ -224,12 +201,11 @@ algorithm for your specific problem.</p>
   <li><b>Performance Metrics</b> - Use cross-validation to compare models objectively</li>
   <li><b>Training Time</b> - Balance accuracy vs. computational cost</li>
 </ul>
-<p>FastData provides automatic model selection tools to help you find the best fit.</p>
+<p>FastData lets you run and compare multiple models so you can choose the best fit based on your metrics and constraints.</p>
 
 <h2>Features</h2>
 <h3>Data</h3>
-<h4 id="features-data-overview">Overview</h4>
-<h5>Data</h5>
+<div id="features-data-introduction" class="page-anchor"></div>
 <p>Load datasets and browse their contents.</p>
 <p>The <b>Data</b> tab is the starting point for working with FastData.</p>
 <ul>
@@ -442,24 +418,21 @@ algorithm for your specific problem.</p>
 </ul>
 
 <h3>Selections</h3>
-<h4 id="features-selections-overview">Overview</h4>
-<h5>Selections</h5>
+<div id="features-selections-introduction" class="page-anchor"></div>
 <p>Create reusable feature selections and filter presets.</p>
 <p>The <b>Selections</b> tab lets you curate which features to keep for downstream tasks.</p>
 <ul>
   <li>Toggle columns on or off to build a focused feature set.</li>
   <li>Right-click a saved feature to convert its measurement values into database groups.</li>
   <li>Use <b>Reload features</b> to restore the table from the database and discard unsaved edits.</li>
-  <li>Apply saved filters to limit rows before modeling.</li>
-  <li>Store multiple presets and quickly switch between them for experimentation.</li>
   <li>Choose a filter scope per feature to apply value limits globally, by system, dataset, import, or only to that feature.</li>
+  <li>Store multiple presets and quickly switch between them for experimentation.</li>
   <li>Export or import selection databases to share with teammates.</li>
 </ul>
 <p>Adjusting selections here keeps your preprocessing and modeling steps consistent.</p>
 
 <h3>Statistics</h3>
-<h4 id="features-statistics-overview">Overview</h4>
-<h5>Statistics</h5>
+<div id="features-statistics-introduction" class="page-anchor"></div>
 <p>Review derived statistics and prepared measurements.</p>
 <p>The <b>Statistics</b> tab focuses on validating the numbers produced from your data.</p>
 <ul>
@@ -586,8 +559,7 @@ algorithm for your specific problem.</p>
 </ul>
 
 <h3>Charts</h3>
-<h4 id="features-charts-overview">Overview</h4>
-<h5>Charts</h5>
+<div id="features-charts-introduction" class="page-anchor"></div>
 <p>Visualize your dataset with quick plots.</p>
 <p>The <b>Charts</b> tab provides fast visual feedback on your data.</p>
 <ul>
@@ -600,7 +572,7 @@ algorithm for your specific problem.</p>
 <p>Use charts to spot trends, outliers, and data quality issues early.</p>
 
 <h3>SOM</h3>
-<h4 id="features-som-overview">Overview</h4>
+<div id="features-som-introduction" class="page-anchor"></div>
 <h5>SOM</h5>
 <p>Explore data structure with Self-Organizing Maps.</p>
 <p>The <b>SOM</b> tab visualizes high-dimensional data on a 2D grid.</p>
@@ -829,7 +801,7 @@ trained using unsupervised learning to produce a low-dimensional representation 
 </ul>
 
 <h3>Regression</h3>
-<h4 id="features-regression-overview">Overview</h4>
+<div id="features-regression-introduction" class="page-anchor"></div>
 <h5>Regression</h5>
 <p>Build and evaluate regression models.</p>
 <p>The <b>Regression</b> tab guides you through training models for continuous targets.</p>
@@ -1505,16 +1477,17 @@ and one or more independent variables (features).</p>
 </ul>
 
 <h3>Forecasting</h3>
-<h4 id="features-forecasting-overview">Overview</h4>
+<div id="features-forecasting-introduction" class="page-anchor"></div>
 <h5>Forecasting</h5>
-<p>Create time-series forecasts from historical data.</p>
+<p>Create time-series forecasts from historical data (feature currently disabled in default builds).</p>
 <p>The <b>Forecasting</b> tab focuses on time-aware modeling.</p>
 <ul>
-  <li>Configure horizons, frequency settings, and train/test splits for temporal data.</li>
+  <li>Configure horizon and rolling-window validation settings for temporal data.</li>
   <li>Train forecasting models powered by scikit-learn and compare error metrics.</li>
   <li>Visualize predicted vs. actual values to validate performance.</li>
 </ul>
-<p>Choose this tab for scenarios like demand planning, capacity prediction, or financial projections.</p>
+<p>This feature exists in the codebase but is currently disabled in both development and release tab flags by default.</p>
+<p>When enabled, use it for scenarios like demand planning, capacity prediction, or financial projections.</p>
 
 <h5>Time Series Forecasting</h5>
 <p>Predict future values based on historical time series data.</p>
@@ -1526,7 +1499,7 @@ and one or more independent variables (features).</p>
   <li><b>Lag Features</b> - Past values used to predict future ones</li>
   <li><b>Rolling Statistics</b> - Moving averages and other window-based features</li>
 </ul>
-<p>FastData uses <code>scikit-learn</code> models for forecasting, with manual time-series feature engineering and split strategies.</p>
+<p>FastData uses forecasting models with time-series feature engineering and split strategies for experiments when the tab is enabled.</p>
 <p>The previous <code>sktime</code> version is kept as a non-active reference in <code>backend/services/legacy_forecasting/forecasting_service_sktime.py</code>.</p>
 <p>Common use cases: sales forecasting, demand prediction, financial projections.</p>
 
@@ -1794,7 +1767,7 @@ and one or more independent variables (features).</p>
 <p>Only one target can be active at a time; deselect it to return to univariate mode.</p>
 
 <h3>Chat</h3>
-<h4 id="features-chat-overview">Overview</h4>
+<div id="features-chat-introduction" class="page-anchor"></div>
 <h5>Chat sessions</h5>
 <p>Create, switch, and delete independent chat histories.</p>
 <p>Chat history is stored per session.</p>
@@ -1804,7 +1777,7 @@ and one or more independent variables (features).</p>
   <li>Other sessions and their history remain available in the session selector.</li>
 </ul>
 
-<h5>Overview</h5>
+<h5>Using Chat</h5>
 <p>Ask the built-in assistant and keep a record of conversations.</p>
 <p>The chat window lets you send questions to the assistant and keeps a history in the log database.</p>
 <ul>

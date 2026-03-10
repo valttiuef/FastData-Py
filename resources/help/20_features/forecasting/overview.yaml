@@ -1,15 +1,16 @@
 entries:
   tab.forecasting:
     title: "Forecasting"
-    short: "Create time-series forecasts from historical data."
+    short: "Create time-series forecasts from historical data (feature currently disabled in default builds)."
     body: |
       <p>The <b>Forecasting</b> tab focuses on time-aware modeling.</p>
       <ul>
-        <li>Configure horizons, frequency settings, and train/test splits for temporal data.</li>
+        <li>Configure horizon and rolling-window validation settings for temporal data.</li>
         <li>Train forecasting models powered by scikit-learn and compare error metrics.</li>
         <li>Visualize predicted vs. actual values to validate performance.</li>
       </ul>
-      <p>Choose this tab for scenarios like demand planning, capacity prediction, or financial projections.</p>
+      <p>This feature exists in the codebase but is currently disabled in both development and release tab flags by default.</p>
+      <p>When enabled, use it for scenarios like demand planning, capacity prediction, or financial projections.</p>
     aliases: ["forecasting.tab", "Forecasting"]
 
   app.forecasting:
@@ -24,7 +25,7 @@ entries:
         <li><b>Lag Features</b> - Past values used to predict future ones</li>
         <li><b>Rolling Statistics</b> - Moving averages and other window-based features</li>
       </ul>
-      <p>FastData uses <code>scikit-learn</code> models for forecasting, with manual time-series feature engineering and split strategies.</p>
+      <p>FastData uses forecasting models with time-series feature engineering and split strategies for experiments when the tab is enabled.</p>
       <p>The previous <code>sktime</code> version is kept as a non-active reference in <code>backend/services/legacy_forecasting/forecasting_service_sktime.py</code>.</p>
       <p>Common use cases: sales forecasting, demand prediction, financial projections.</p>
     aliases: ["timeseries", "forecast.tab"]

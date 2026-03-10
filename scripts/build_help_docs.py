@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import date
 import html
 import json
 import re
@@ -16,6 +17,9 @@ except ImportError:  # pragma: no cover - tooling dependency
 
 
 HELP_EXTS = {".yaml", ".yml", ".json"}
+DEFAULT_HTML_CSS = "help.css"
+INTRO_SECTION = "Introduction"
+INTRO_PAGE = "Introduction"
 SECTION_LABELS = {
     "10_basics": "Basics",
     "20_features": "Features",
@@ -87,7 +91,7 @@ def _anchor(section: str, subsection: Optional[str], page: str) -> str:
 
 def _section_for_path(rel_parts: Tuple[str, ...]) -> Tuple[str, Optional[str]]:
     if not rel_parts or len(rel_parts) == 1:
-        return "Overview", None
+        return INTRO_SECTION, None
     top = rel_parts[0]
     if top in SECTION_LABELS:
         section = SECTION_LABELS[top]
@@ -101,12 +105,12 @@ def _section_for_path(rel_parts: Tuple[str, ...]) -> Tuple[str, Optional[str]]:
 
 def _page_title(rel_parts: Tuple[str, ...]) -> str:
     if not rel_parts:
-        return "Overview"
+        return INTRO_PAGE
     if len(rel_parts) == 1:
-        return "Overview"
+        return INTRO_PAGE
     stem = Path(rel_parts[-1]).stem
     if stem in {"tab", "overview"}:
-        return "Overview"
+        return INTRO_PAGE
     return _titleize(stem)
 
 
@@ -117,6 +121,31 @@ def _iter_help_files(help_dir: Path) -> Iterable[Path]:
     )
 
 
+def _is_intro_page(page: str) -> bool:
+    return page == INTRO_PAGE
+
+
+def _should_show_entry_title(
+    section: str,
+    subsection: Optional[str],
+    page: str,
+    entries: List[Tuple[str, Dict[str, Any]]],
+    entry_title: str,
+) -> bool:
+    if not _is_intro_page(page):
+        return True
+    if len(entries) != 1:
+        return True
+
+    normalized_title = entry_title.strip().lower()
+    candidate_labels = {section.strip().lower()}
+    if subsection:
+        candidate_labels.add(subsection.strip().lower())
+
+    return normalized_title not in candidate_labels
+
+
+# @ai(gpt-5, codex, refactor, 2026-03-10)
 def build_help_doc(help_dir: Path, output_path: Path) -> None:
     files = list(_iter_help_files(help_dir))
     if not files:
@@ -124,8 +153,8 @@ def build_help_doc(help_dir: Path, output_path: Path) -> None:
 
     metadata: Dict[str, Any] = {}
     version = None
-    sections: List[str] = []
-    section_entries: Dict[str, List[Tuple[Optional[str], str, Dict[str, Any]]]] = {}
+    tree: Dict[str, Dict[Optional[str], Dict[str, List[Tuple[str, Dict[str, Any]]]]]] = {}
+    section_order: List[str] = []
 
     for path in files:
         data = _load_help_file(path)
@@ -141,16 +170,20 @@ def build_help_doc(help_dir: Path, output_path: Path) -> None:
 
         rel = path.relative_to(help_dir)
         section, subsection = _section_for_path(rel.parts)
-        if section not in section_entries:
-            section_entries[section] = []
-            sections.append(section)
-
+        page_title = _page_title(rel.parts)
+        if section not in tree:
+            tree[section] = {}
+            section_order.append(section)
+        if subsection not in tree[section]:
+            tree[section][subsection] = {}
+        if page_title not in tree[section][subsection]:
+            tree[section][subsection][page_title] = []
         for key, entry in entries.items():
-            section_entries[section].append((subsection, key, entry))
+            tree[section][subsection][page_title].append((key, entry))
 
     title = metadata.get("app") or "Help"
     description = metadata.get("description") or ""
-    updated = metadata.get("updated") or ""
+    updated = date.today().isoformat()
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8") as handle:
@@ -162,35 +195,44 @@ def build_help_doc(help_dir: Path, output_path: Path) -> None:
         if version is not None:
             handle.write(f"Version: {version}\n\n")
 
-        for section in sections:
+        for section in section_order:
             handle.write(f"## {section}\n\n")
-            entries = section_entries.get(section, [])
+            subsections = tree.get(section, {})
+            subsection_items = list(subsections.items())
             if section == "Features":
                 order_index = {name: idx for idx, name in enumerate(FEATURE_ORDER)}
-                entries = sorted(
-                    entries,
-                    key=lambda item: (
-                        order_index.get((item[0] or "").lower(), 999),
-                        0 if (item[1] or "").endswith(".overview") else 1,
-                        item[0] or "",
-                        item[1],
-                    ),
+                subsection_items.sort(
+                    key=lambda item: order_index.get((item[0] or "").lower(), 999)
                 )
-            current_subsection: Optional[str] = None
-            for subsection, key, entry in entries:
-                if subsection and subsection != current_subsection:
+            for subsection, pages in subsection_items:
+                if subsection is not None:
                     handle.write(f"### {subsection}\n\n")
-                    current_subsection = subsection
-                title_text = entry.get("title") or key
-                short = entry.get("short")
-                body = entry.get("body")
-                handle.write(f"#### {title_text}\n\n")
-                if short:
-                    handle.write(f"{short}\n\n")
-                if body:
-                    handle.write(f"{body}\n\n")
+                for page, entries in sorted(
+                    pages.items(),
+                    key=lambda item: (0 if item[0] == INTRO_PAGE else 1, item[0]),
+                ):
+                    if not _is_intro_page(page):
+                        handle.write(f"#### {page}\n\n")
+                    for key, entry in entries:
+                        title_text = entry.get("title") or key
+                        short = entry.get("short")
+                        body = entry.get("body")
+                        show_entry_title = _should_show_entry_title(
+                            section,
+                            subsection,
+                            page,
+                            entries,
+                            str(title_text),
+                        )
+                        if show_entry_title:
+                            handle.write(f"##### {title_text}\n\n")
+                        if short:
+                            handle.write(f"{short}\n\n")
+                        if body:
+                            handle.write(f"{body}\n\n")
 
 
+# @ai(gpt-5, codex, refactor, 2026-03-10)
 def build_help_html(help_dir: Path, output_path: Path) -> None:
     files = list(_iter_help_files(help_dir))
     if not files:
@@ -229,7 +271,7 @@ def build_help_html(help_dir: Path, output_path: Path) -> None:
 
     title = metadata.get("app") or "Help"
     description = metadata.get("description") or ""
-    updated = metadata.get("updated") or ""
+    updated = date.today().isoformat()
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8") as handle:
@@ -239,31 +281,7 @@ def build_help_html(help_dir: Path, output_path: Path) -> None:
         handle.write("  <meta charset=\"utf-8\" />\n")
         handle.write(f"  <title>{html.escape(str(title))} Help</title>\n")
         handle.write("  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />\n")
-        handle.write("  <style>\n")
-        handle.write("    :root { color-scheme: light; }\n")
-        handle.write("    body { margin: 0; font-family: 'Georgia', 'Times New Roman', serif; color: #1b1b1b; background: #f6f4ef; }\n")
-        handle.write("    .layout { display: grid; grid-template-columns: 280px 1fr; min-height: 100vh; }\n")
-        handle.write("    nav { background: #f0ede6; border-right: 1px solid #d8d2c7; padding: 20px; overflow-y: auto; position: sticky; top: 0; height: 100vh; align-self: start; }\n")
-        handle.write("    main { padding: 32px 48px; }\n")
-        handle.write("    h1 { margin-top: 0; font-size: 32px; }\n")
-        handle.write("    h2 { margin-top: 36px; border-bottom: 1px solid #d8d2c7; padding-bottom: 6px; }\n")
-        handle.write("    h3 { margin-top: 28px; }\n")
-        handle.write("    h4 { margin-top: 20px; font-size: 18px; }\n")
-        handle.write("    h5 { margin-top: 18px; font-size: 16px; }\n")
-        handle.write("    .meta { color: #5c564a; font-size: 14px; margin-bottom: 16px; }\n")
-        handle.write("    .entry-key { font-family: 'Courier New', monospace; font-size: 13px; color: #3d3a33; }\n")
-        handle.write("    a { color: #244a6d; text-decoration: none; }\n")
-        handle.write("    a:hover { text-decoration: underline; }\n")
-        handle.write("    details { margin-bottom: 10px; }\n")
-        handle.write("    summary { cursor: pointer; font-weight: 600; }\n")
-        handle.write("    .nav-group { margin-left: 12px; }\n")
-        handle.write("    .nav-page { display: block; margin: 6px 0 6px 12px; }\n")
-        handle.write("    @media (max-width: 900px) {\n")
-        handle.write("      .layout { grid-template-columns: 1fr; }\n")
-        handle.write("      nav { position: static; height: auto; border-right: none; border-bottom: 1px solid #d8d2c7; }\n")
-        handle.write("      main { padding: 24px; }\n")
-        handle.write("    }\n")
-        handle.write("  </style>\n")
+        handle.write(f"  <link rel=\"stylesheet\" href=\"{DEFAULT_HTML_CSS}\" />\n")
         handle.write("</head>\n")
         handle.write("<body>\n")
         handle.write("<div class=\"layout\">\n")
@@ -290,22 +308,22 @@ def build_help_html(help_dir: Path, output_path: Path) -> None:
                 if subsection is None:
                     for page in sorted(
                         pages,
-                        key=lambda name: (0 if name == "Overview" else 1, name),
+                        key=lambda name: (0 if name == INTRO_PAGE else 1, name),
                     ):
                         anchor = _anchor(section, None, page)
                         handle.write(f"    <a class=\"nav-page\" href=\"#{anchor}\">{html.escape(page)}</a>\n")
                     continue
                 handle.write(f"    <details class=\"nav-group\" open>\n")
                 handle.write(f"      <summary>{html.escape(subsection)}</summary>\n")
-                has_overview = "Overview" in pages
+                has_overview = INTRO_PAGE in pages
                 for page in sorted(
                     pages,
                     key=lambda name: (
-                        0 if name == "Overview" else 1,
+                        0 if name == INTRO_PAGE else 1,
                         name,
                     ),
                 ):
-                    if page == "Overview" and not has_overview:
+                    if page == INTRO_PAGE and not has_overview:
                         continue
                     anchor = _anchor(section, subsection, page)
                     handle.write(f"      <a class=\"nav-page\" href=\"#{anchor}\">{html.escape(page)}</a>\n")
@@ -332,15 +350,26 @@ def build_help_html(help_dir: Path, output_path: Path) -> None:
                     handle.write(f"<h3>{html.escape(subsection)}</h3>\n")
                 for page, entries in sorted(
                     pages.items(),
-                    key=lambda item: (0 if item[0] == "Overview" else 1, item[0]),
+                    key=lambda item: (0 if item[0] == INTRO_PAGE else 1, item[0]),
                 ):
                     anchor = _anchor(section, subsection, page)
-                    handle.write(f"<h4 id=\"{anchor}\">{html.escape(page)}</h4>\n")
+                    if not _is_intro_page(page):
+                        handle.write(f"<h4 id=\"{anchor}\">{html.escape(page)}</h4>\n")
+                    else:
+                        handle.write(f"<div id=\"{anchor}\" class=\"page-anchor\"></div>\n")
                     for key, entry in entries:
                         title_text = entry.get("title") or key
                         short = entry.get("short") or ""
                         body = entry.get("body") or ""
-                        handle.write(f"<h5>{html.escape(str(title_text))}</h5>\n")
+                        show_entry_title = _should_show_entry_title(
+                            section,
+                            subsection,
+                            page,
+                            entries,
+                            str(title_text),
+                        )
+                        if show_entry_title:
+                            handle.write(f"<h5>{html.escape(str(title_text))}</h5>\n")
                         if short:
                             handle.write(f"<p>{html.escape(str(short))}</p>\n")
                         if body:
