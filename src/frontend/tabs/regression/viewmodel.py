@@ -814,13 +814,15 @@ class RegressionViewModel(QObject):
         self.run_failed.emit(status_text)
 
     def _handle_run_progress(self, value) -> None:
+        if not self._running:
+            return
         try:
             percent = int(value)
         except Exception:
             percent = 0
         percent = max(0, min(100, percent))
         self.run_progress.emit(percent)
-        run_in_main_thread(set_progress, percent)
+        set_progress(percent)
 
     def _handle_status_update(self, message: Optional[str]) -> None:
         text = str(message).strip() if message else ""

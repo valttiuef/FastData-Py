@@ -12,7 +12,7 @@ from backend.models import ImportOptions
 from frontend.tabs.data.data_tab import _build_import_filter_state
 
 
-def test_import_scope_prefers_actual_imported_systems_datasets_without_pinning_import_ids():
+def test_import_scope_preserves_existing_scope_and_checks_new_imported_items():
     state = _build_import_filter_state(
         current_state={
             "start": "2026-01-01T00:00:00",
@@ -32,10 +32,10 @@ def test_import_scope_prefers_actual_imported_systems_datasets_without_pinning_i
     )
 
     assert state["start"] == "2026-01-01T00:00:00"
-    assert state["systems"] == ["Sys A"]
-    assert state["datasets"] == ["Data 1", "Data 2"]
-    assert state["Datasets"] == ["Data 1", "Data 2"]
-    assert state["import_ids"] is None
+    assert state["systems"] == ["OldSystem", "Sys A"]
+    assert state["datasets"] == ["OldDataset", "Data 1", "Data 2"]
+    assert state["Datasets"] == ["OldDataset", "Data 1", "Data 2"]
+    assert state["import_ids"] == [99, 11, 12]
 
 
 def test_import_scope_falls_back_to_dialog_target_when_import_rows_are_unavailable():
@@ -49,4 +49,4 @@ def test_import_scope_falls_back_to_dialog_target_when_import_rows_are_unavailab
     assert state["systems"] == ["Sys B"]
     assert state["datasets"] == ["Data B"]
     assert state["Datasets"] == ["Data B"]
-    assert state["import_ids"] is None
+    assert state["import_ids"] == []

@@ -807,7 +807,6 @@ class RegressionSidebar(SidebarWidget):
         self._help_dataset_signature = None
         self._help_dataset_rows = None
         self._selected_input_payloads_cache = [dict(p) for p in (payloads or []) if isinstance(p, dict)]
-        self._features_changed_timer.start()
 
     def _on_target_selection_changed(self) -> None:
         previous_ids = list(self._selected_target_ids)
@@ -903,6 +902,10 @@ class RegressionSidebar(SidebarWidget):
     def selected_input_payloads(self) -> list[dict]:
         return [dict(p) for p in self._selected_input_payloads_cache]
 
+    # @ai(gpt-5, codex, perf, 2026-03-10)
+    def available_feature_payloads(self) -> list[dict]:
+        return [dict(payload) for payload in self._feature_payload_lookup.values()]
+
     def selected_target_payloads(self) -> list[dict]:
         payloads: list[dict] = []
         for fid in self._selected_target_ids:
@@ -976,6 +979,8 @@ class RegressionSidebar(SidebarWidget):
             self.target_combo.blockSignals(block)
         if needs_items_update or needs_selection_update:
             self._on_target_selection_changed()
+        if needs_items_update and not needs_selection_update:
+            self._notify_features_changed()
 
     def _payload_id(self, payload: Optional[dict]) -> Optional[int]:
         if not isinstance(payload, dict):

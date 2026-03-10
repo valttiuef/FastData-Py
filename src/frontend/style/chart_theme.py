@@ -19,6 +19,7 @@ from PySide6.QtCharts import (
 from PySide6.QtCore import Qt, QMargins
 
 from frontend.style.styles import THEMES
+from .group_colors import group_color_for_index
 
 
 def _is_dark(c: QColor) -> bool:
@@ -48,10 +49,10 @@ def _from_token(value: str) -> QColor:
 
 def _choose_line_primary(theme_name: Optional[str], dark_background: bool) -> QColor:
     if theme_name == "dark":
-        return QColor(91, 155, 255)
+        return group_color_for_index(0, dark_theme=True)
     if theme_name == "light":
-        return QColor(66, 133, 244)
-    return QColor(66, 133, 244) if not dark_background else QColor(91, 155, 255)
+        return group_color_for_index(0, dark_theme=False)
+    return group_color_for_index(0, dark_theme=dark_background)
 
 
 def make_colors_from_palette(widget, theme_name: Optional[str] = None) -> ChartColors:

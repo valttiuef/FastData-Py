@@ -888,6 +888,7 @@ class DataSelectorWidget(QGroupBox):
         self._requirements_emit_pending = False
         self._feature_reload_batch_depth = 0
         self._feature_reload_pending = False
+        self._selected_features_count_cache = 0
         self._last_filters_state_key: tuple | None = None
 
         layout = QVBoxLayout(self)
@@ -984,6 +985,7 @@ class DataSelectorWidget(QGroupBox):
         self._emit_data_requirements()
 
     def _on_features_selection_changed(self, payloads: list[dict]) -> None:
+        self._selected_features_count_cache = len(payloads or [])
         self.features_selection_changed.emit(payloads)
         self._emit_data_requirements()
 
@@ -996,12 +998,11 @@ class DataSelectorWidget(QGroupBox):
     def _emit_data_requirements_now(self) -> None:
         filters = self.filters_widget.filter_state() if self.filters_widget is not None else {}
         preprocessing = self.preprocessing_widget.parameters() if self.preprocessing_widget is not None else {}
-        features_count = len(self.features_widget.selected_feature_ids()) if self.features_widget is not None else 0
         self.data_requirements_changed.emit(
             {
                 "filters": filters,
                 "preprocessing": preprocessing,
-                "features_count": int(features_count),
+                "features_count": int(self._selected_features_count_cache),
             }
         )
 

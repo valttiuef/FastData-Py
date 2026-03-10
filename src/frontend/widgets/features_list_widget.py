@@ -4,7 +4,7 @@ from typing import Optional, Sequence, Any
 import logging
 import pandas as pd
 
-from PySide6.QtCore import QObject, Qt, Signal, QTimer, QItemSelectionModel
+from PySide6.QtCore import QObject, Qt, Signal, QTimer, QItemSelectionModel, QItemSelection
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QGroupBox, QLineEdit, QVBoxLayout
 
@@ -188,6 +188,10 @@ class FeaturesListWidget(QGroupBox):
         self._last_selection_ids: tuple[int, ...] = ()
         self._selection_memory_ids: set[int] = set()
         self._retain_hidden_selection_memory = False
+        self._selection_cache_valid = False
+        self._selected_payloads_cache: list[dict] = []
+        self._visible_selected_ids_cache: list[int] = []
+        self._payloads_by_feature_id: dict[int, dict] = {}
 
         # Domain source model (keeps payload + headers)
         self._table_model = FeaturesTableModel()
@@ -306,12 +310,41 @@ class FeaturesListWidget(QGroupBox):
     def _clear_search_suppression(self) -> None:
         self._suppress_selection_emit = False
 
-    def _queue_selection_changed(self, *_args) -> None:
+    def _invalidate_selection_cache(self) -> None:
+        self._selection_cache_valid = False
+        self._selected_payloads_cache = []
+        self._visible_selected_ids_cache = []
+
+    def _queue_selection_changed(
+        self,
+        selected: QItemSelection | None = None,
+        deselected: QItemSelection | None = None,
+    ) -> None:
         if self._suppress_selection_emit:
             return
+        self._invalidate_selection_cache()
+        changed_rows: set[int] = set()
+        for batch in (selected, deselected):
+            if batch is None:
+                continue
+            try:
+                for index in batch.indexes():
+                    if index.isValid():
+                        changed_rows.add(int(index.row()))
+            except Exception:
+                logger.warning("Exception in _queue_selection_changed", exc_info=True)
+                self._selection_emit_timer.start()
+                return
+        if len(changed_rows) <= 2:
+            self._selection_emit_timer.setInterval(0)
+            self._selection_emit_timer.stop()
+            self._selection_emit_timer.start()
+            return
+        self._selection_emit_timer.setInterval(60)
         self._selection_emit_timer.start()
 
     def _schedule_restore_selection_after_proxy_change(self, *_args) -> None:
+        self._invalidate_selection_cache()
         self._selection_restore_timer.start()
 
     def _build_context_menu(self, menu, _pos, _table):
@@ -323,10 +356,13 @@ class FeaturesListWidget(QGroupBox):
 
     # ------------------------------------------------------------------
     def selected_payloads(self) -> list[dict]:
+        if self._selection_cache_valid:
+            return list(self._selected_payloads_cache)
         selection = self._table.selectionModel()
         if not selection:
             return []
         payloads: list[dict] = []
+        ids: list[int] = []
         for index in selection.selectedRows():
             if not index.isValid():
                 continue
@@ -334,7 +370,17 @@ class FeaturesListWidget(QGroupBox):
             payload = self._table_model.feature_payload_at(source_index.row())
             if payload:
                 payloads.append(payload)
-        return payloads
+                fid = payload.get("feature_id") if isinstance(payload, dict) else None
+                if fid is None:
+                    continue
+                try:
+                    ids.append(int(fid))
+                except Exception:
+                    continue
+        self._selected_payloads_cache = list(payloads)
+        self._visible_selected_ids_cache = list(ids)
+        self._selection_cache_valid = True
+        return list(self._selected_payloads_cache)
 
     def selected_feature_ids(self) -> list[int]:
         ids = self._visible_selected_feature_ids()
@@ -345,17 +391,9 @@ class FeaturesListWidget(QGroupBox):
         return ids
 
     def _visible_selected_feature_ids(self) -> list[int]:
-        payloads = self.selected_payloads()
-        ids: list[int] = []
-        for payload in payloads:
-            fid = payload.get("feature_id") if isinstance(payload, dict) else None
-            if fid is None:
-                continue
-            try:
-                ids.append(int(fid))
-            except Exception:
-                continue
-        return ids
+        if not self._selection_cache_valid:
+            self.selected_payloads()
+        return list(self._visible_selected_ids_cache)
 
     def all_payloads(self) -> list[dict]:
         payloads: list[dict] = []
@@ -370,6 +408,7 @@ class FeaturesListWidget(QGroupBox):
         selection = self._table.selectionModel()
         if selection is None:
             return
+        self._invalidate_selection_cache()
         selection.clearSelection()
 
     def clear_selection_and_suppress_autoselect(self) -> None:
@@ -392,6 +431,7 @@ class FeaturesListWidget(QGroupBox):
         previous_suppression = self._suppress_selection_emit
         self._suppress_selection_emit = True
         self._table.setUpdatesEnabled(False)
+        self._invalidate_selection_cache()
 
         try:
             selection = self._table.selectionModel()
@@ -400,6 +440,18 @@ class FeaturesListWidget(QGroupBox):
 
             try:
                 self._table_model.set_dataframe(df)
+                self._payloads_by_feature_id = {}
+                for row in range(self._table_model.rowCount()):
+                    payload = self._table_model.feature_payload_at(row)
+                    if not payload:
+                        continue
+                    fid_value = payload.get("feature_id")
+                    try:
+                        fid = int(fid_value) if fid_value is not None else None
+                    except Exception:
+                        fid = None
+                    if fid is not None:
+                        self._payloads_by_feature_id[fid] = payload
             except Exception as exc:
                 logger.exception(
                     "Features list received invalid dataframe payload: %s (type=%s shape=%s columns=%s)",
@@ -520,19 +572,7 @@ class FeaturesListWidget(QGroupBox):
         self._retain_hidden_selection_memory = True
 
     def _payloads_for_feature_ids(self, feature_ids: Sequence[int]) -> list[dict]:
-        payloads_by_id: dict[int, dict] = {}
-        for row in range(self._table_model.rowCount()):
-            payload = self._table_model.feature_payload_at(row)
-            if not payload:
-                continue
-            fid_value = payload.get("feature_id")
-            if fid_value is None:
-                continue
-            try:
-                payloads_by_id[int(fid_value)] = payload
-            except Exception:
-                continue
-        return [payloads_by_id[fid] for fid in feature_ids if fid in payloads_by_id]
+        return [self._payloads_by_feature_id[fid] for fid in feature_ids if fid in self._payloads_by_feature_id]
 
     def _log_failure(self, message: str) -> None:  # pragma: no cover
         logger.warning("Features list reload failed: %s", message)
@@ -548,15 +588,7 @@ class FeaturesListWidget(QGroupBox):
         if self._suppress_selection_emit:
             return
         payloads = self.selected_payloads()
-        ids: list[int] = []
-        for payload in payloads:
-            fid = payload.get("feature_id") if isinstance(payload, dict) else None
-            if fid is None:
-                continue
-            try:
-                ids.append(int(fid))
-            except Exception:
-                continue
+        ids = list(self._visible_selected_ids_cache)
         selected_ids = set(ids)
         if (
             not selected_ids

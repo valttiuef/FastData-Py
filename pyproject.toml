@@ -53,3 +53,8 @@ timeseries = [
   "numpy==2.3.3",
   "pandas==2.3.3",
 ]
+
+[tool.pytest.ini_options]
+markers = [
+  "perf: performance-oriented tests and benchmarks",
+]

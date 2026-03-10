@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 
 from PySide6.QtCore import Qt, QSignalBlocker, Signal
-from PySide6.QtGui import QResizeEvent, QShowEvent
+from PySide6.QtGui import QColor, QResizeEvent, QShowEvent
 from PySide6.QtWidgets import (
 
 
@@ -29,6 +29,7 @@ from ...utils import set_status_text
 from backend.services.modeling_shared import display_name
 from backend.services.regression_service import RegressionSummary, RegressionRunResult
 from frontend.charts import ScatterChart, TimeSeriesChart
+from ...style.group_colors import build_regression_palette, regression_actual_color
 from ...widgets.panel import Panel
 from ...widgets.fast_table import FastTable
 
@@ -931,7 +932,10 @@ class RegressionResultsPanel(Panel):
         if cached_timeline is None:
             cached_timeline = self._timeline_chart_frame(timeline)
             self._timeline_cache[run_key] = cached_timeline
-        self.timeline_chart.set_dataframe(cached_timeline)
+        self.timeline_chart.set_dataframe(
+            cached_timeline,
+            series_colors=self._timeline_series_colors(cached_timeline),
+        )
 
         cached_predictions = self._predictions_cache.get(run_key)
         if cached_predictions is None:
@@ -940,7 +944,12 @@ class RegressionResultsPanel(Panel):
         self.predictions_table.set_dataframe(cached_predictions, include_index=False, float_format="{:.4f}")
 
         scatter = run.scatter_frame if run.scatter_frame is not None else pd.DataFrame()
-        self.scatter_chart.set_points(scatter, force_equal_axes=True)
+        self.scatter_chart.set_points(
+            scatter,
+            force_equal_axes=True,
+            series_colors=self._scatter_series_colors(scatter),
+            identity_color=regression_actual_color(),
+        )
         self._set_scatter_title(scatter)
         self._rebalance_splitters()
 
@@ -1071,6 +1080,27 @@ class RegressionResultsPanel(Panel):
         out["Date"] = out["Date"].dt.strftime("%Y-%m-%d %H:%M:%S UTC")
         out = out.reset_index(drop=True)
         return out.reindex(columns=self._predictions_columns)
+
+    def _timeline_series_colors(self, frame: pd.DataFrame | None) -> dict[str, QColor]:
+        if frame is None or frame.empty:
+            return {}
+        series_cols = [col for col in frame.columns if col != "t"]
+        return {
+            str(key): QColor(color)
+            for key, color in build_regression_palette(series_cols).items()
+        }
+
+    def _scatter_series_colors(self, frame: pd.DataFrame | None) -> dict[str, QColor]:
+        if frame is None or frame.empty:
+            return {}
+        label_column = "split" if "split" in frame.columns else "dataset" if "dataset" in frame.columns else None
+        if not label_column:
+            return {}
+        labels = [str(value) for value in pd.unique(frame[label_column].dropna())]
+        return {
+            str(key): QColor(color)
+            for key, color in build_regression_palette(labels).items()
+        }
 
     @staticmethod
     def _numeric_series(series: pd.Series) -> pd.Series:

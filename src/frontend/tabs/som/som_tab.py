@@ -35,7 +35,7 @@ from ...utils.som_details import build_som_map_prompt, build_som_map_summary_tex
 from ...utils.exporting import export_dataframes
 from ...widgets.export_dialog import ExportOption, ExportSelectionDialog
 from ...utils import toast_error, toast_info, toast_success, toast_warn
-from ...style.cluster_colors import cluster_color_for_label
+from ...style.group_colors import group_color_for_label
 from ...viewmodels.help_viewmodel import get_help_viewmodel
 from ...viewmodels.log_view_model import get_log_view_model
 
@@ -1141,22 +1141,23 @@ class SomTab(TabWidget):
 
         unique_clusters = sorted(cluster_series.dropna().astype(int).unique().tolist())
         cluster_array = cluster_series.to_numpy(dtype=float, copy=False)
-        label_to_mask: dict[str, np.ndarray] = {}
+        label_to_cluster: dict[str, tuple[np.ndarray, int]] = {}
         for cluster_id in unique_clusters:
             mask = cluster_array == float(int(cluster_id))
             if not bool(mask.any()):
                 continue
             cluster_name = self._view_model.get_cluster_name(int(cluster_id)).strip()
             label = cluster_name or f"{tr('Cluster')} {int(cluster_id)}"
-            if label in label_to_mask:
-                label_to_mask[label] = np.logical_or(label_to_mask[label], mask)
+            if label in label_to_cluster:
+                existing_mask, existing_cluster_id = label_to_cluster[label]
+                label_to_cluster[label] = (np.logical_or(existing_mask, mask), existing_cluster_id)
             else:
-                label_to_mask[label] = mask
+                label_to_cluster[label] = (mask, int(cluster_id))
 
-        for idx, (column_name, mask) in enumerate(label_to_mask.items(), start=1):
+        for column_name, (mask, cluster_id) in label_to_cluster.items():
             cluster_means = selected_values.iloc[mask].mean(skipna=True)
             chart_df[column_name] = [float(cluster_means.get(name, np.nan)) for name in selected_actual]
-            cluster_columns[column_name] = int(idx)
+            cluster_columns[column_name] = int(cluster_id)
 
         return chart_df, cluster_columns
 
@@ -1174,7 +1175,7 @@ class SomTab(TabWidget):
             chart.clear()
             return
         series_colors = {
-            str(column): cluster_color_for_label(cluster_id, border=False)
+            str(column): group_color_for_label(cluster_id, dark_theme=False)
             for column, cluster_id in cluster_columns.items()
         }
         chart.set_title(tr("Feature means by neuron cluster"))

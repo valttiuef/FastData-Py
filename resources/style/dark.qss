@@ -293,7 +293,7 @@ QProgressBar {
     text-align: center;
 }
 QProgressBar::chunk {
-    background: #505050;
+    background: #7ea6fb;
     margin: 0px;
     border-radius: 4px;
 }

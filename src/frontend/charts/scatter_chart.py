@@ -9,6 +9,7 @@ from PySide6.QtCore import Qt, QPointF
 from PySide6.QtGui import QColor, QBrush
 from PySide6.QtCharts import QLineSeries, QScatterSeries, QValueAxis
 from ..localization import tr
+from ..style.regression_colors import regression_actual_color
 
 from frontend.style.chart_theme import (
 
@@ -26,13 +27,6 @@ from .base_chart import BaseChart
 
 class ScatterChart(BaseChart):
     """Scatter chart comparing two columns, optionally grouped by dataset."""
-
-    _BASE_RGB = [
-        (66, 133, 244),   # blue
-        (219, 68, 55),    # red
-        (244, 180, 0),    # orange
-        (15, 157, 88),    # green
-    ]
 
     def __init__(self, parent=None) -> None:
         super().__init__(tr("Scatter"), parent=parent)
@@ -59,6 +53,8 @@ class ScatterChart(BaseChart):
         self._dataset_order: list[str] = []
         self._current_colors = None
         self._dark_theme = False
+        self._explicit_series_colors: dict[str, QColor] = {}
+        self._identity_color_override: Optional[QColor] = None
 
         self.apply_current_theme()
 
@@ -74,6 +70,7 @@ class ScatterChart(BaseChart):
         self._current_colors = colors
         self._dark_theme = is_dark_color(colors.plot_bg)
         self._update_dataset_series_colors()
+        self._update_identity_color()
 
     def _update_dataset_series_colors(self) -> None:
         if self._current_colors is None:
@@ -82,7 +79,7 @@ class ScatterChart(BaseChart):
             series = self._series_map.get(label)
             if series is None:
                 continue
-            color = self._color_for_index(idx)
+            color = QColor(self._explicit_series_colors.get(label, self._fallback_color_for_index(idx)))
             pen = series.pen()
             try:
                 pen.setColor(color)
@@ -98,8 +95,14 @@ class ScatterChart(BaseChart):
             except Exception:
                 logger.warning("Failed to update brush color for scatter dataset series.", exc_info=True)
 
-    def _color_for_index(self, index: int) -> QColor:
-        rgb = self._BASE_RGB[index % len(self._BASE_RGB)]
+    def _fallback_color_for_index(self, index: int) -> QColor:
+        rgb_cycle = (
+            (66, 133, 244),
+            (219, 68, 55),
+            (244, 180, 0),
+            (15, 157, 88),
+        )
+        rgb = rgb_cycle[index % len(rgb_cycle)]
         color = self._build_color(rgb)
         if self._dark_theme:
             try:
@@ -127,6 +130,8 @@ class ScatterChart(BaseChart):
     def clear(self) -> None:
         self._reset_series()
         self.identity.clear()
+        self._explicit_series_colors = {}
+        self._identity_color_override = None
 
     def set_points(
         self,
@@ -138,9 +143,17 @@ class ScatterChart(BaseChart):
         show_identity_line: bool = True,
         force_equal_axes: bool = False,
         show_legend: bool = True,
+        series_colors: Optional[dict[str, QColor]] = None,
+        identity_color: Optional[QColor] = None,
     ) -> None:
         self._reset_series()
         self.identity.clear()
+        self._explicit_series_colors = {
+            str(key): QColor(color)
+            for key, color in (series_colors or {}).items()
+            if color is not None
+        }
+        self._identity_color_override = QColor(identity_color) if identity_color is not None else None
         try:
             self.chart.legend().setVisible(bool(show_legend))
         except Exception:
@@ -230,6 +243,7 @@ class ScatterChart(BaseChart):
         if force_equal_axes:
             self.axis_x.setRange(lo, hi)
             self.axis_y.setRange(lo, hi)
+            self._update_identity_color()
             return
 
         x_lo = xmin
@@ -242,6 +256,18 @@ class ScatterChart(BaseChart):
             y_hi = y_lo + 1.0
         self.axis_x.setRange(x_lo, x_hi)
         self.axis_y.setRange(y_lo, y_hi)
+        self._update_identity_color()
+
+    def _update_identity_color(self) -> None:
+        color = QColor(self._identity_color_override) if self._identity_color_override is not None else regression_actual_color(dark_theme=self._dark_theme)
+        pen = self.identity.pen()
+        try:
+            pen.setColor(color)
+            pen.setWidthF(1.6)
+            pen.setCosmetic(True)
+            self.identity.setPen(pen)
+        except Exception:
+            logger.warning("Failed to update scatter identity line color.", exc_info=True)
 
     def _hide_identity_from_legend(self) -> None:
         legend = self.chart.legend()

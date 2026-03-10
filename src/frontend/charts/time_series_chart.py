@@ -147,6 +147,7 @@ class TimeSeriesChart(QFrame):
 
         self._series_segments: dict[str, list[QLineSeries]] = {}
         self._series_colors: dict[str, QColor] = {}
+        self._explicit_series_colors: dict[str, QColor] = {}
         self._feature_order: list[str] = []
         self._max_series: int = MAX_FEATURES_SHOWN_LEGEND
         self._gap_threshold_ms: int | None = None
@@ -378,12 +379,17 @@ class TimeSeriesChart(QFrame):
             value = MAX_FEATURES_SHOWN_LEGEND
         self._max_series = max(1, value)
 
-    def set_dataframe(self, frame: pd.DataFrame | None):
+    def set_dataframe(self, frame: pd.DataFrame | None, *, series_colors: dict[str, QColor] | None = None):
         # Keep current axis state during regular data refreshes to avoid
         # intermediate 0..1 axis flicker before new ranges are applied.
         self.clear(reset_axes=False, request_repaint=False)
         self._preserve_series_colors = False
         self._group_hover_specs = []
+        self._explicit_series_colors = {
+            str(name): QColor(color)
+            for name, color in (series_colors or {}).items()
+            if color is not None
+        }
         if frame is None:
             return
 
@@ -406,13 +412,18 @@ class TimeSeriesChart(QFrame):
 
         colors = self._generate_colors(len(feature_cols))
         self._series_segments = {}
-        self._series_colors = {name: color for name, color in zip(feature_cols, colors)}
+        self._series_colors = {
+            name: QColor(self._explicit_series_colors.get(name, color))
+            for name, color in zip(feature_cols, colors)
+        }
+        self._preserve_series_colors = bool(self._explicit_series_colors)
 
         # raw times
         times_ms_all = _to_ms_epoch_array(df["t"])
 
         all_values: list[float] = []
         for name, color in zip(feature_cols, colors):
+            color = QColor(self._series_colors.get(name, color))
             try:
                 values_arr = pd.to_numeric(df[name], errors="coerce").to_numpy(dtype=float)
             except Exception:
@@ -1117,6 +1128,12 @@ class TimeSeriesChart(QFrame):
             regenerated = self._generate_colors(len(self._feature_order))
             self._series_colors = {
                 name: QColor(color)
+                for name, color in zip(self._feature_order, regenerated)
+            }
+        elif self._feature_order and self._explicit_series_colors:
+            regenerated = self._generate_colors(len(self._feature_order))
+            self._series_colors = {
+                name: QColor(self._explicit_series_colors.get(name, color))
                 for name, color in zip(self._feature_order, regenerated)
             }
 

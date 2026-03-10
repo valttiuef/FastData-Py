@@ -51,6 +51,7 @@ class FastPandasProxyModel(QAbstractProxyModel):
         self._filter_case_sensitive: bool = False
 
         self._visible_rows: np.ndarray = np.empty((0,), dtype=np.int64)
+        self._proxy_row_by_source_row: np.ndarray = np.empty((0,), dtype=np.int64)
         self._sorted_col: int = -1
         self._sorted_order: Qt.SortOrder = Qt.SortOrder.AscendingOrder
 
@@ -145,10 +146,13 @@ class FastPandasProxyModel(QAbstractProxyModel):
         if not sourceIndex.isValid():
             return QModelIndex()
         src_row = int(sourceIndex.row())
-        pos = np.where(self._visible_rows == src_row)[0]
-        if pos.size == 0:
+        lookup = self._proxy_row_by_source_row
+        if src_row < 0 or src_row >= int(lookup.size):
             return QModelIndex()
-        return self.index(int(pos[0]), int(sourceIndex.column()))
+        proxy_row = int(lookup[src_row])
+        if proxy_row < 0:
+            return QModelIndex()
+        return self.index(proxy_row, int(sourceIndex.column()))
 
     def data(self, index: QModelIndex, role=Qt.ItemDataRole.DisplayRole):  # noqa: N802
         sm = self.sourceModel()
@@ -189,6 +193,7 @@ class FastPandasProxyModel(QAbstractProxyModel):
         if sm is None or not hasattr(sm, "_df"):
             self.beginResetModel()
             self._visible_rows = np.empty((0,), dtype=np.int64)
+            self._proxy_row_by_source_row = np.empty((0,), dtype=np.int64)
             self.endResetModel()
             return
 
@@ -196,6 +201,7 @@ class FastPandasProxyModel(QAbstractProxyModel):
         if df is None:
             self.beginResetModel()
             self._visible_rows = np.empty((0,), dtype=np.int64)
+            self._proxy_row_by_source_row = np.empty((0,), dtype=np.int64)
             self.endResetModel()
             return
 
@@ -203,6 +209,7 @@ class FastPandasProxyModel(QAbstractProxyModel):
         if n <= 0:
             self.beginResetModel()
             self._visible_rows = np.empty((0,), dtype=np.int64)
+            self._proxy_row_by_source_row = np.empty((0,), dtype=np.int64)
             self.endResetModel()
             return
 
@@ -258,6 +265,10 @@ class FastPandasProxyModel(QAbstractProxyModel):
 
         self.beginResetModel()
         self._visible_rows = rows
+        lookup = np.full(n, -1, dtype=np.int64)
+        if rows.size:
+            lookup[rows] = np.arange(rows.size, dtype=np.int64)
+        self._proxy_row_by_source_row = lookup
         self.endResetModel()
 
 

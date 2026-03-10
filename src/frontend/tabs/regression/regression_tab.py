@@ -602,7 +602,7 @@ class RegressionTab(TabWidget):
 
     def _update_stratify_options(self) -> None:
         targets = self.sidebar.selected_target_payloads()
-        inputs = self.sidebar.selected_input_payloads()
+        inputs = self.sidebar.available_feature_payloads()
         group_kinds = self._view_model.available_group_kinds()
 
         options: list[tuple[str, Optional[dict]]] = []

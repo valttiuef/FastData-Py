@@ -34,6 +34,7 @@ from backend.models import ImportOptions
 from ..tab_widget import TabWidget
 
 
+# @ai(gpt-5, codex, fix, 2026-03-10)
 def _build_import_filter_state(
     *,
     current_state: dict | None,
@@ -42,6 +43,22 @@ def _build_import_filter_state(
     imports_frame: pd.DataFrame | None,
 ) -> dict:
     state = dict(current_state or {})
+    previous_systems = [
+        str(value).strip()
+        for value in (state.get("systems") or [])
+        if str(value).strip()
+    ]
+    previous_datasets = [
+        str(value).strip()
+        for value in (state.get("datasets") or state.get("Datasets") or [])
+        if str(value).strip()
+    ]
+    previous_import_ids: list[int] = []
+    for value in state.get("import_ids") or []:
+        try:
+            previous_import_ids.append(int(value))
+        except Exception:
+            continue
     resolved_import_ids = [int(v) for v in (import_ids or [])]
     resolved_systems: list[str] = []
     resolved_datasets: list[str] = []
@@ -77,13 +94,10 @@ def _build_import_filter_state(
         if dataset_name and dataset_name != "__sheet__":
             resolved_datasets = [dataset_name]
 
-    state["systems"] = list(dict.fromkeys(resolved_systems))
-    state["datasets"] = list(dict.fromkeys(resolved_datasets))
+    state["systems"] = list(dict.fromkeys(previous_systems + resolved_systems))
+    state["datasets"] = list(dict.fromkeys(previous_datasets + resolved_datasets))
     state["Datasets"] = list(state["datasets"])
-    # Keep the imported system/dataset selected, but do not pin the Imports
-    # filter to only the latest import batch. That would make reset/bounds
-    # operations ignore older imports in the same dataset.
-    state["import_ids"] = None
+    state["import_ids"] = list(dict.fromkeys(previous_import_ids + resolved_import_ids))
     return state
 
 

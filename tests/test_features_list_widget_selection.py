@@ -6,12 +6,13 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pandas as pd
 import pytest
 
-from PySide6.QtCore import QItemSelectionModel
+from PySide6.QtCore import QItemSelection, QItemSelectionModel, Qt
 from PySide6.QtWidgets import QApplication
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from frontend.widgets.features_list_widget import FeaturesListWidget, FeaturesListWidgetViewModel
+from frontend.widgets.fast_table import FastDataFrameModel, FastPandasProxyModel
 
 
 @pytest.fixture
@@ -151,3 +152,54 @@ def test_reload_autoselects_first_visible_row_when_previous_selection_is_missing
     payloads = widget.selected_payloads()
     assert len(payloads) == 1
     assert payloads[0]["feature_id"] == 1
+
+
+def test_small_selection_changes_emit_on_next_event_loop_tick(qapp):
+    widget = FeaturesListWidget()
+    widget._apply_dataframe(_sample_features_df())
+
+    calls: list[str] = []
+    widget._emit_selection_changed = lambda: calls.append("emitted")
+    selection = QItemSelection()
+    index = widget.table_view.model().index(0, 0)
+    selection.select(index, index)
+
+    widget._queue_selection_changed(selection, QItemSelection())
+
+    assert calls == []
+    assert widget._selection_emit_timer.isActive()
+    _process_events(qapp)
+    assert calls == ["emitted"]
+    assert not widget._selection_emit_timer.isActive()
+
+
+def test_fast_proxy_maps_source_rows_after_sort_and_filter():
+    source = FastDataFrameModel(
+        pd.DataFrame(
+            {
+                "Name": ["Charlie", "Alpha", "Bravo"],
+                "Value": [3, 1, 2],
+            }
+        )
+    )
+    proxy = FastPandasProxyModel()
+    proxy.setSourceModel(source)
+    proxy.sort(0, Qt.SortOrder.AscendingOrder)
+
+    alpha_proxy = proxy.mapFromSource(source.index(1, 0))
+    charlie_proxy = proxy.mapFromSource(source.index(0, 0))
+
+    assert alpha_proxy.isValid()
+    assert charlie_proxy.isValid()
+    assert alpha_proxy.row() == 0
+    assert charlie_proxy.row() == 2
+
+    proxy.set_filter("Bravo", debounce_ms=0)
+    proxy._rebuild_visible_rows()
+
+    bravo_proxy = proxy.mapFromSource(source.index(2, 0))
+    alpha_hidden = proxy.mapFromSource(source.index(1, 0))
+
+    assert bravo_proxy.isValid()
+    assert bravo_proxy.row() == 0
+    assert not alpha_hidden.isValid()

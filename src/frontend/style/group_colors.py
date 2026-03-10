@@ -6,21 +6,22 @@ from collections.abc import Iterable
 import pandas as pd
 from PySide6.QtGui import QColor
 
-# Shared colors for grouping (non-cluster semantics).
-# Keep first entries highly distinguishable and familiar (red/blue/green...).
-GROUP_COLORS: tuple[str, ...] = (
-    "#1976D2",  # blue
-    "#D32F2F",  # red
-    "#2E7D32",  # green
-    "#F57C00",  # orange
-    "#7B1FA2",  # purple
-    "#00838F",  # teal
-    "#5D4037",  # brown
-    "#455A64",  # blue gray
-    "#C2185B",  # magenta
-    "#689F38",  # lime green
-    "#EF6C00",  # deep orange
-    "#1565C0",  # darker blue
+# Shared categorical palette for group/cluster identity colors outside the
+# unified SOM heatmaps. Keep the lead blue slightly brighter so it reads clearly
+# in charts, overlays, and progress fills across themes.
+GROUP_COLORS = (
+    "#4E79A7",  # blue
+    "#E15759",  # red
+    "#59A14F",  # green
+    "#F28E2B",  # orange
+    "#B07AA1",  # purple
+    "#76B7B2",  # teal
+    "#EDC948",  # yellow
+    "#FF9DA7",  # pink
+    "#9C755F",  # brown
+    "#BAB0AC",  # gray
+    "#86BC86",  # light green
+    "#6F9CEB",  # bright blue
 )
 
 
@@ -74,4 +75,46 @@ def build_group_palette(labels: Iterable[object], *, dark_theme: bool = False) -
         if label in palette:
             continue
         palette[label] = group_color_for_label(label, dark_theme=dark_theme)
+    return palette
+
+
+# @ai(gpt-5, codex, refactor, 2026-03-10)
+def regression_actual_color(*, dark_theme: bool = False) -> QColor:
+    return group_color_for_index(0, dark_theme=dark_theme)
+
+
+# @ai(gpt-5, codex, refactor, 2026-03-10)
+def regression_train_color(*, dark_theme: bool = False) -> QColor:
+    return group_color_for_index(2, dark_theme=dark_theme)
+
+
+# @ai(gpt-5, codex, refactor, 2026-03-10)
+def regression_validation_color(*, dark_theme: bool = False) -> QColor:
+    return group_color_for_index(3, dark_theme=dark_theme)
+
+
+# @ai(gpt-5, codex, refactor, 2026-03-10)
+def regression_test_color(*, dark_theme: bool = False) -> QColor:
+    return group_color_for_index(1, dark_theme=dark_theme)
+
+
+# @ai(gpt-5, codex, refactor, 2026-03-10)
+def regression_color_for_key(key: object, *, dark_theme: bool = False) -> QColor:
+    token = str(key or "").strip().lower()
+    if "actual" in token or token in {"reference", "observed"}:
+        return regression_actual_color(dark_theme=dark_theme)
+    if "validation" in token or "val" in token or "split" in token:
+        return regression_validation_color(dark_theme=dark_theme)
+    if "test" in token:
+        return regression_test_color(dark_theme=dark_theme)
+    return regression_train_color(dark_theme=dark_theme)
+
+
+# @ai(gpt-5, codex, refactor, 2026-03-10)
+def build_regression_palette(keys: Iterable[object], *, dark_theme: bool = False) -> dict[object, QColor]:
+    palette: dict[object, QColor] = {}
+    for key in keys:
+        if key in palette:
+            continue
+        palette[key] = regression_color_for_key(key, dark_theme=dark_theme)
     return palette
