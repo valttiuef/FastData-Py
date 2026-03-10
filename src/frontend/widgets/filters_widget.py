@@ -310,6 +310,7 @@ class FiltersWidget(CollapsibleSection):
         self._filters_batch_depth = 0
         self._filters_changed_pending = False
         self._pending_signal_names: set[str] = set()
+        self._last_emitted_filter_signal_key: tuple | None = None
         self._dependency_refresh_token = 0
         self._dependency_refresh_active = False
 
@@ -671,6 +672,7 @@ class FiltersWidget(CollapsibleSection):
         finally:
             for widget, was in reversed(previous_states):
                 widget.blockSignals(was)
+        self._emit_filter_change()
 
     def _begin_filters_batch(self) -> None:
         self._filters_batch_depth += 1
@@ -695,6 +697,20 @@ class FiltersWidget(CollapsibleSection):
         self._emit_filter_signals_now(valid_names)
 
     def _emit_filter_signals_now(self, signal_names: set[str]) -> None:
+        emit_key = (
+            tuple(sorted(signal_names)),
+            self.filter_state().get("start"),
+            self.filter_state().get("end"),
+            tuple(self.selected_systems()),
+            tuple(self.selected_datasets()),
+            tuple(self.selected_import_ids()),
+            tuple(self.selected_months()),
+            tuple(self.selected_group_ids()),
+            tuple(self.selected_tags()),
+        )
+        if emit_key == self._last_emitted_filter_signal_key:
+            return
+        self._last_emitted_filter_signal_key = emit_key
         for name in (
             "date_range_changed",
             "systems_changed",

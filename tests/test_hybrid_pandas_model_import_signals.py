@@ -23,6 +23,7 @@ class _ImportHarness:
         self.progress_events: list[tuple[str, int, int, str]] = []
         self.notify_features_changed_calls = 0
         self.refresh_calls = 0
+        self.reset_caches_calls = 0
 
         class _ProgressSignal:
             def __init__(self, outer):
@@ -39,6 +40,9 @@ class _ImportHarness:
     def refresh(self):
         self.refresh_calls += 1
 
+    def _reset_caches(self):
+        self.reset_caches_calls += 1
+
 
 def test_import_completion_notifies_feature_changes_without_database_refresh():
     from backend.models import ImportOptions
@@ -54,5 +58,6 @@ def test_import_completion_notifies_feature_changes_without_database_refresh():
     )
 
     assert harness.notify_features_changed_calls == 1
+    assert harness.reset_caches_calls == 1
     assert harness.refresh_calls == 0
     assert harness.db.calls == [("import_path", "a.csv"), ("import_path", "b.csv")]

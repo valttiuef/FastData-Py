@@ -405,19 +405,25 @@ class HybridPandasModel(DatabaseModel):
         )
 
     # ------------- External API -------------
-    def import_files(self, files: List[str], options: Optional[ImportOptions] = None, progress_callback=None) -> None:
+    # @ai(gpt-5, codex, fix, 2026-03-10)
+    def import_files(self, files: List[str], options: Optional[ImportOptions] = None, progress_callback=None) -> List[int]:
         """
         Import one or more data files into the database.
         
-        After all imports complete successfully, emits the database_changed signal
-        exactly once to notify all observers (charts, filters, etc.) to refresh.
+        After all imports complete successfully, clears stale in-memory caches
+        and emits feature/import metadata change notifications once so observers
+        can refresh against the updated data.
         
         Args:
             files: List of file paths to import
             options: ImportOptions for customizing the import behavior
             progress_callback: Optional callable(percent: int) for progress updates
+
+        Returns:
+            List of created import IDs.
         """
         opts = options or ImportOptions()
+        created_import_ids: list[int] = []
 
         def _cb(phase, cur, tot, msg):
             # always emit Qt signal
@@ -462,7 +468,7 @@ class HybridPandasModel(DatabaseModel):
                     len(files),
                     exc_info=True,
                 )
-            self.db.import_path(f, options=opts)
+            created_import_ids.extend(int(v) for v in (self.db.import_path(f, options=opts) or []))
             try:
                 self.progress.emit("file", i, len(files), f"Imported {f}")
             except Exception:
@@ -474,6 +480,11 @@ class HybridPandasModel(DatabaseModel):
                     exc_info=True,
                 )
         
+        # Importing changes the underlying measurement rows even when the
+        # feature list is unchanged, so drop the in-memory data caches before
+        # notifying the UI. The next fetch must hit the updated database.
+        self._reset_caches()
+
         # Signal that feature/import metadata changed so dependent widgets
         # refresh once. Do not emit database_changed here: the database path did
         # not change, and that extra signal causes duplicate UI refresh cycles.
@@ -484,6 +495,7 @@ class HybridPandasModel(DatabaseModel):
                 "File import completed, but model refresh/feature-change notification failed.",
                 exc_info=True,
             )
+        return created_import_ids
 
     def time_bounds(self, flt: DataFilters) -> Tuple[Optional[pd.Timestamp], Optional[pd.Timestamp]]:
         merged = self._merge_with_selection_filters(flt)

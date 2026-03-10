@@ -34,6 +34,59 @@ from backend.models import ImportOptions
 from ..tab_widget import TabWidget
 
 
+def _build_import_filter_state(
+    *,
+    current_state: dict | None,
+    import_options: ImportOptions,
+    import_ids: list[int] | None,
+    imports_frame: pd.DataFrame | None,
+) -> dict:
+    state = dict(current_state or {})
+    resolved_import_ids = [int(v) for v in (import_ids or [])]
+    resolved_systems: list[str] = []
+    resolved_datasets: list[str] = []
+
+    if imports_frame is not None and not imports_frame.empty and resolved_import_ids:
+        scoped = imports_frame.copy()
+        if "import_id" in scoped.columns:
+            scoped["import_id"] = pd.to_numeric(scoped["import_id"], errors="coerce")
+            scoped = scoped[scoped["import_id"].isin(resolved_import_ids)]
+        else:
+            scoped = scoped.iloc[0:0]
+        if not scoped.empty:
+            if "system" in scoped.columns:
+                resolved_systems = [
+                    str(value).strip()
+                    for value in scoped["system"].tolist()
+                    if str(value).strip()
+                ]
+            if "dataset" in scoped.columns:
+                resolved_datasets = [
+                    str(value).strip()
+                    for value in scoped["dataset"].tolist()
+                    if str(value).strip()
+                ]
+
+    if not resolved_systems:
+        system_name = str(import_options.system_name or "").strip()
+        if system_name:
+            resolved_systems = [system_name]
+
+    if not resolved_datasets:
+        dataset_name = str(import_options.dataset_name or "").strip()
+        if dataset_name and dataset_name != "__sheet__":
+            resolved_datasets = [dataset_name]
+
+    state["systems"] = list(dict.fromkeys(resolved_systems))
+    state["datasets"] = list(dict.fromkeys(resolved_datasets))
+    state["Datasets"] = list(state["datasets"])
+    # Keep the imported system/dataset selected, but do not pin the Imports
+    # filter to only the latest import batch. That would make reset/bounds
+    # operations ignore older imports in the same dataset.
+    state["import_ids"] = None
+    return state
+
+
 class DataTab(TabWidget):
     """
     Controller: keeps charts, sidebar and HybridPandasModel in sync.
@@ -86,6 +139,7 @@ class DataTab(TabWidget):
         self._last_import_warning_message: Optional[str] = None
         self._show_auto_timestep_status: bool = False
         self._initial_filter_timeframe_applied: bool = False
+        self._pending_post_import_filter_state: dict | None = None
 
         self._wire_signals()
 
@@ -190,6 +244,7 @@ class DataTab(TabWidget):
 
         selector_vm = self.sidebar.data_selector.view_model
         selector_vm.data_requirements_changed.connect(self._on_selector_data_requirements_changed)
+        self.sidebar.data_selector.filters_widget.filters_refreshed.connect(self._apply_pending_post_import_filters)
 
     def _on_selector_data_requirements_changed(self, _requirements: dict) -> None:
         requirements = _requirements if isinstance(_requirements, dict) else {}
@@ -209,6 +264,44 @@ class DataTab(TabWidget):
             return
         self._selection_sync_pending = False
         self._maybe_reload()
+
+    def _apply_pending_post_import_filters(self) -> None:
+        pending = self._pending_post_import_filter_state
+        if pending is None:
+            return
+        self._pending_post_import_filter_state = None
+        try:
+            preprocessing = self.sidebar.data_selector.preprocessing_widget.get_settings()
+        except Exception:
+            preprocessing = {}
+        self.sidebar.data_selector.apply_settings(
+            {
+                "filters": pending,
+                "preprocessing": preprocessing,
+            },
+            reload_features=True,
+        )
+
+    def _queue_post_import_scope_selection(self, *, import_options: ImportOptions, import_ids: list[int]) -> None:
+        try:
+            current_state = self.sidebar.data_selector.filters_widget.get_settings()
+        except Exception:
+            current_state = {}
+        try:
+            imports_frame = self._view_model.db.list_imports()
+        except Exception:
+            imports_frame = pd.DataFrame()
+        self._pending_post_import_filter_state = _build_import_filter_state(
+            current_state=current_state,
+            import_options=import_options,
+            import_ids=import_ids,
+            imports_frame=imports_frame,
+        )
+        try:
+            self.sidebar.data_selector.filters_widget.refresh_filters()
+        except Exception:
+            logger.warning("Failed to refresh filters after import; applying imported scope immediately.", exc_info=True)
+            self._apply_pending_post_import_filters()
 
     def _on_progress(self, phase: str, cur: int, tot: int, msg: str) -> None:
         """Handle progress updates from the view model (e.g., during data loading/import)."""
@@ -866,7 +959,11 @@ class DataTab(TabWidget):
                     tab_key="data",
                 )
                 # Delegate to model import; model will call the provided progress callback
-                self._view_model.import_files(files_list, options=options, progress_callback=progress_callback)
+                import_ids = self._view_model.import_files(
+                    files_list,
+                    options=options,
+                    progress_callback=progress_callback,
+                )
                 run_in_main_thread(futils.set_status_text, tr("Import finished."))
                 run_in_main_thread(
                     futils.toast_success,
@@ -875,7 +972,7 @@ class DataTab(TabWidget):
                     tab_key="data",
                 )
                 run_in_main_thread(futils.set_progress, None)
-                return True
+                return {"ok": True, "import_ids": list(import_ids or [])}
             except Exception as e:
                 run_in_main_thread(
                     futils.set_status_text,
@@ -888,7 +985,7 @@ class DataTab(TabWidget):
                     tab_key="data",
                 )
                 run_in_main_thread(futils.set_progress, None)
-                return False
+                return {"ok": False, "import_ids": []}
 
         # GUI progress handler (called from thread via signals)
         def _on_progress(percent: int):
@@ -896,12 +993,16 @@ class DataTab(TabWidget):
             run_in_main_thread(futils.set_progress, percent)
 
         def _on_result(result):
-            # result is True/False
-            if result:
-                run_in_main_thread(self._reload_now, force=True)
-            else:
-                # already set by worker
-                pass
+            payload = result if isinstance(result, dict) else {}
+            if not bool(payload.get("ok")):
+                return
+            import_ids = [int(v) for v in (payload.get("import_ids") or [])]
+            run_in_main_thread(
+                self._queue_post_import_scope_selection,
+                import_options=opts,
+                import_ids=import_ids,
+            )
+            run_in_main_thread(self._reload_now, force=True)
 
         def _on_error(msg: str):
             try:
