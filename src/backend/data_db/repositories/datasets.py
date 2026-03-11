@@ -53,6 +53,7 @@ class DatasetsRepository:
         """Delete dataset and cascade to related group_points/imports/measurements."""
         dataset_id = int(dataset_id)
         con.execute("DELETE FROM group_points WHERE dataset_id = ?;", [dataset_id])
+        con.execute("DELETE FROM group_label_scopes WHERE dataset_id = ?;", [dataset_id])
         import_rows = con.execute("SELECT id FROM imports WHERE dataset_id = ?;", [dataset_id]).fetchall()
         import_ids = [int(row[0]) for row in import_rows if row and row[0] is not None]
         if import_ids:

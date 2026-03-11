@@ -112,6 +112,14 @@ CREATE TABLE IF NOT EXISTS group_labels(
   UNIQUE(label, kind)
 );
 
+CREATE TABLE IF NOT EXISTS group_label_scopes(
+  group_id INTEGER NOT NULL,
+  system_id INTEGER NOT NULL,
+  dataset_id INTEGER NOT NULL,
+  import_id INTEGER NOT NULL,
+  PRIMARY KEY(group_id, system_id, dataset_id, import_id)
+);
+
 CREATE TABLE IF NOT EXISTS group_points(
   start_ts TIMESTAMP NOT NULL,
   end_ts   TIMESTAMP NOT NULL,

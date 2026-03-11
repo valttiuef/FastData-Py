@@ -4,6 +4,15 @@ All notable end-user changes are documented in this file.
 
 The format is based on Keep a Changelog, with entries grouped by release.
 
+## [Unreleased]
+
+### Changed
+- Data tab filter dependency flow now separates feature-affecting and data-affecting filter updates more clearly, and group/tag filter options are scoped to selected systems/datasets/imports.
+
+### Breaking
+- Data database schema now includes `group_label_scopes` for explicit group-to-system/dataset/import linking.
+- Existing databases must be recreated to fully use scoped group/tag filtering behavior.
+
 ## [0.1.1] - 2026-02-28
 
 ### Added

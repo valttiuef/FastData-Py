@@ -138,6 +138,8 @@ class DatabaseModel(QObject):
         self._datasets_cache: Optional[list[str]] = None
         self._tags_cache: Optional[list[str]] = None
         self._imports_cache: Optional[pd.DataFrame] = None
+        self._groups_cache: Optional[pd.DataFrame] = None
+        self._feature_group_kinds_cache: Optional[dict[int, set[str]]] = None
         self._selected_features_job_id: int = 0
 
     # @ai(gpt-5, codex-cli, refactor, 2026-03-10)
@@ -531,6 +533,8 @@ class DatabaseModel(QObject):
         self._datasets_cache = None
         self._tags_cache = None
         self._imports_cache = None
+        self._groups_cache = None
+        self._feature_group_kinds_cache = None
         self._features_cache_version += 1
         self._last_selected_features_key = None
 
@@ -573,6 +577,126 @@ class DatabaseModel(QObject):
             normalized[col] = pd.to_numeric(normalized[col], errors="coerce")
         self._imports_cache = normalized
         return normalized.copy()
+
+    # @ai(gpt-5, codex, feature, 2026-03-11)
+    def _all_groups_df(self) -> pd.DataFrame:
+        if self._groups_cache is not None:
+            return self._groups_cache.copy()
+        db = self._ensure_database()
+        try:
+            with db.connection() as con:
+                frame = con.execute(
+                    """
+                    SELECT
+                        gl.id AS group_id,
+                        gl.kind AS kind,
+                        gl.label AS label,
+                        sy.name AS system,
+                        ds.name AS dataset,
+                        gls.import_id AS import_id
+                    FROM group_labels gl
+                    LEFT JOIN group_label_scopes gls ON gls.group_id = gl.id
+                    LEFT JOIN datasets ds ON ds.id = gls.dataset_id
+                    LEFT JOIN systems sy ON sy.id = gls.system_id
+                    ORDER BY gl.kind, gl.label, gl.id
+                    """
+                ).df()
+        except Exception:
+            frame = pd.DataFrame(
+                columns=["group_id", "kind", "label", "system", "dataset", "import_id"]
+            )
+        if frame is None or frame.empty:
+            self._groups_cache = pd.DataFrame(
+                columns=["group_id", "kind", "label", "systems", "datasets", "import_ids"]
+            )
+            return self._groups_cache.copy()
+
+        normalized = frame.copy()
+        for col in ("kind", "label", "system", "dataset"):
+            if col not in normalized.columns:
+                normalized[col] = ""
+            normalized[col] = normalized[col].astype("string").fillna("").str.strip()
+        if "group_id" not in normalized.columns:
+            normalized["group_id"] = pd.NA
+        normalized["group_id"] = pd.to_numeric(normalized["group_id"], errors="coerce")
+        if "import_id" not in normalized.columns:
+            normalized["import_id"] = pd.NA
+        normalized["import_id"] = pd.to_numeric(normalized["import_id"], errors="coerce")
+
+        def _text_list(values: pd.Series) -> list[str]:
+            out: list[str] = []
+            seen: set[str] = set()
+            for value in values.tolist():
+                text = str(value or "").strip()
+                if not text or text in seen:
+                    continue
+                seen.add(text)
+                out.append(text)
+            return out
+
+        def _int_list(values: pd.Series) -> list[int]:
+            out: list[int] = []
+            seen: set[int] = set()
+            for value in values.tolist():
+                if value is None or pd.isna(value):
+                    continue
+                try:
+                    parsed = int(value)
+                except Exception:
+                    continue
+                if parsed in seen:
+                    continue
+                seen.add(parsed)
+                out.append(parsed)
+            return out
+
+        grouped = (
+            normalized.groupby(["group_id", "kind", "label"], dropna=False, as_index=False)
+            .agg(
+                systems=("system", _text_list),
+                datasets=("dataset", _text_list),
+                import_ids=("import_id", _int_list),
+            )
+            .sort_values(["kind", "label", "group_id"])
+            .reset_index(drop=True)
+        )
+        self._groups_cache = grouped
+        return grouped.copy()
+
+    # @ai(gpt-5, codex, feature, 2026-03-11)
+    def _feature_group_kinds_map(self) -> dict[int, set[str]]:
+        if self._feature_group_kinds_cache is not None:
+            return {fid: set(kinds) for fid, kinds in self._feature_group_kinds_cache.items()}
+        db = self._ensure_database()
+        cache: dict[int, set[str]] = {}
+        try:
+            with db.connection() as con:
+                rows = con.execute(
+                    """
+                    SELECT feature_id, group_kind AS kind
+                    FROM csv_group_columns
+                    WHERE group_kind IS NOT NULL AND trim(group_kind) <> ''
+                    UNION ALL
+                    SELECT feature_id, kind
+                    FROM group_value_aliases
+                    WHERE kind IS NOT NULL AND trim(kind) <> ''
+                    """
+                ).fetchall()
+            for row in rows or []:
+                if not row:
+                    continue
+                try:
+                    feature_id = int(row[0])
+                except Exception:
+                    continue
+                kind = str(row[1] or "").strip()
+                if not kind:
+                    continue
+                cache.setdefault(feature_id, set()).add(kind)
+        except Exception:
+            cache = {}
+        self._feature_group_kinds_cache = cache
+        return {fid: set(kinds) for fid, kinds in cache.items()}
 
     def notify_features_changed(
         self,
@@ -1194,32 +1318,61 @@ class DatabaseModel(QObject):
             return ""
         return " ".join(str(value).strip().split()).lower()
 
-    def groups_df(self, kind: Optional[str] = None, *, respect_selection: bool = True) -> pd.DataFrame:
+    # @ai(gpt-5, codex, refactor, 2026-03-11)
+    def groups_df(
+        self,
+        kind: Optional[str] = None,
+        *,
+        respect_selection: bool = True,
+        systems: Optional[Sequence[str]] = None,
+        datasets: Optional[Sequence[str]] = None,
+        import_ids: Optional[Sequence[int]] = None,
+    ) -> pd.DataFrame:
         """
         Return available groups (optionally for a specific kind).
         Columns: [group_id, kind, label]
         """
-        db = self._ensure_database()
-        try:
-            groups = db.list_group_labels(kind)
-        except Exception:
-            return pd.DataFrame(columns=["group_id", "kind", "label"])
+        groups = self._all_groups_df()
         if groups is None or groups.empty:
             return pd.DataFrame(columns=["group_id", "kind", "label"])
 
+        filtered = groups
+        if kind is not None and str(kind).strip():
+            kind_text = str(kind).strip()
+            filtered = filtered[filtered.get("kind", pd.Series(dtype=object)).astype(str) == kind_text]
+
+        scoped = self._apply_scope_filters(
+            filtered,
+            systems=systems,
+            datasets=datasets,
+            import_ids=import_ids,
+        )
+
         if not bool(respect_selection):
-            return groups
+            return (
+                scoped.loc[:, ["group_id", "kind", "label"]]
+                .drop_duplicates()
+                .reset_index(drop=True)
+            )
         selected_ids = sorted(int(fid) for fid in (self._selected_feature_ids or set()) if fid is not None)
         if not selected_ids:
-            return groups
-        try:
-            allowed_kinds = set(db.group_kinds_for_feature_ids(selected_ids))
-        except Exception:
-            allowed_kinds = set()
+            return (
+                scoped.loc[:, ["group_id", "kind", "label"]]
+                .drop_duplicates()
+                .reset_index(drop=True)
+            )
+        feature_kinds_map = self._feature_group_kinds_map()
+        allowed_kinds: set[str] = set()
+        for feature_id in selected_ids:
+            allowed_kinds.update(feature_kinds_map.get(int(feature_id), set()))
         if not allowed_kinds:
             return pd.DataFrame(columns=["group_id", "kind", "label"])
-        kinds = groups.get("kind", pd.Series(dtype=object)).astype(str).str.strip()
-        return groups.loc[kinds.isin(allowed_kinds)].reset_index(drop=True)
+        kinds = scoped.get("kind", pd.Series(dtype=object)).astype(str).str.strip()
+        return (
+            scoped.loc[kinds.isin(allowed_kinds), ["group_id", "kind", "label"]]
+            .drop_duplicates()
+            .reset_index(drop=True)
+        )
 
     def remove_group_by_id(self, group_id: int) -> dict[str, Any]:
         """Delete one group label and all related group points."""
@@ -1250,6 +1403,7 @@ class DatabaseModel(QObject):
             )
 
             db.group_points_repo.delete_by_ids(con, [gid])
+            con.execute("DELETE FROM group_label_scopes WHERE group_id = ?", [gid])
             con.execute("DELETE FROM group_labels WHERE id = ?", [gid])
             remaining_same_kind = int(
                 (con.execute(
@@ -1628,6 +1782,11 @@ class DatabaseModel(QObject):
                 ]
                 if existing_ids:
                     db.group_points_repo.delete_by_ids(con, existing_ids)
+                    placeholders_scope = ",".join(["?"] * len(existing_ids))
+                    con.execute(
+                        f"DELETE FROM group_label_scopes WHERE group_id IN ({placeholders_scope});",
+                        existing_ids,
+                    )
                     placeholders = ",".join(["?"] * len(existing_ids))
                     con.execute(
                         f"DELETE FROM group_labels WHERE id IN ({placeholders});",
@@ -1647,14 +1806,24 @@ class DatabaseModel(QObject):
                 how="inner",
                 validate="many_to_one",
             )
+            merged["import_id"] = pd.to_numeric(merged.get("import_id"), errors="coerce").fillna(-1).astype(int)
             merged = merged[
-                ["start_ts", "end_ts", "system_id", "dataset_id", "group_id"]
+                ["start_ts", "end_ts", "system_id", "dataset_id", "import_id", "group_id"]
             ].drop_duplicates()
             if merged.empty:
                 raise ValueError("No matching points were available for group labels")
 
-            con.register("new_group_points_from_model", merged)
+            con.register("new_group_points_from_model", merged[["start_ts", "end_ts", "dataset_id", "group_id"]])
             db.group_points_repo.insert_points_from_temp(con, "new_group_points_from_model")
+            scope_rows = merged[["group_id", "system_id", "dataset_id", "import_id"]].drop_duplicates()
+            con.register("new_group_label_scopes_from_model", scope_rows)
+            con.execute(
+                """
+                INSERT OR IGNORE INTO group_label_scopes(group_id, system_id, dataset_id, import_id)
+                SELECT group_id, system_id, dataset_id, import_id
+                FROM new_group_label_scopes_from_model
+                """
+            )
 
         self._emit_in_main_thread(self.features_list_changed)
         self._emit_in_main_thread(self.groups_changed)
@@ -1700,6 +1869,11 @@ class DatabaseModel(QObject):
                 ]
                 if existing_ids:
                     db.group_points_repo.delete_by_ids(con, existing_ids)
+                    placeholders_scope = ",".join(["?"] * len(existing_ids))
+                    con.execute(
+                        f"DELETE FROM group_label_scopes WHERE group_id IN ({placeholders_scope});",
+                        existing_ids,
+                    )
                     placeholders = ",".join(["?"] * len(existing_ids))
                     con.execute(
                         f"DELETE FROM group_labels WHERE id IN ({placeholders});",
@@ -2096,14 +2270,42 @@ class DatabaseModel(QObject):
                 continue
         return out
 
-    def list_feature_tags(self) -> list[str]:
-        """Return all distinct feature tags (cached)."""
-        if self._tags_cache is not None:
+    # @ai(gpt-5, codex, refactor, 2026-03-11)
+    def list_feature_tags(
+        self,
+        *,
+        systems: Optional[Sequence[str]] = None,
+        datasets: Optional[Sequence[str]] = None,
+        import_ids: Optional[Sequence[int]] = None,
+    ) -> list[str]:
+        """Return distinct feature tags, optionally scoped to current system/dataset/import filters."""
+        scoped = bool(systems is not None or datasets is not None or import_ids is not None)
+        if not scoped and self._tags_cache is not None:
             return list(self._tags_cache)
-        db = self._ensure_database()
         try:
-            result = list(db.list_feature_tags())
-            self._tags_cache = result
+            features = self._get_cached_features()
+            scoped_df = self._apply_scope_filters(
+                features,
+                systems=systems,
+                datasets=datasets,
+                import_ids=import_ids,
+            )
+            ensured = self._ensure_tags_column(scoped_df)
+            tags: list[str] = []
+            seen: set[str] = set()
+            for row_tags in ensured["tags"].tolist():
+                for tag in row_tags or []:
+                    text = " ".join(str(tag).strip().split())
+                    if not text:
+                        continue
+                    key = self._normalize_tag_text(text)
+                    if not key or key in seen:
+                        continue
+                    seen.add(key)
+                    tags.append(text)
+            result = sorted(tags, key=self._normalize_tag_text)
+            if not scoped:
+                self._tags_cache = result
             return result
         except Exception:
             return []

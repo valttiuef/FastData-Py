@@ -60,7 +60,14 @@ class FiltersWidgetViewModel(QObject):
             self._model.features_list_changed.connect(self._on_features_changed)
             self._model.groups_changed.connect(self._on_groups_changed)
 
-    def refresh_filters(self) -> None:
+    # @ai(gpt-5, codex, refactor, 2026-03-11)
+    def refresh_filters(
+        self,
+        *,
+        systems: Optional[list[str]] = None,
+        datasets: Optional[list[str]] = None,
+        import_ids: Optional[list[int]] = None,
+    ) -> None:
         model = self._model
 
         def _load():
@@ -79,11 +86,19 @@ class FiltersWidgetViewModel(QObject):
                 except Exception:
                     datasets = []
                 try:
-                    groups = model.groups_df()
+                    groups = model.groups_df(
+                        systems=systems_scope,
+                        datasets=datasets_scope,
+                        import_ids=import_ids_scope,
+                    )
                 except Exception:
                     groups = pd.DataFrame(columns=["group_id", "kind", "label"])
                 try:
-                    tags = model.list_feature_tags()
+                    tags = model.list_feature_tags(
+                        systems=systems_scope,
+                        datasets=datasets_scope,
+                        import_ids=import_ids_scope,
+                    )
                 except Exception:
                     tags = []
                 try:
@@ -106,6 +121,22 @@ class FiltersWidgetViewModel(QObject):
             self.tags_updated.emit(payload["tags"])
             self.imports_updated.emit(payload["imports"])
             self.filters_refreshed.emit()
+
+        systems_scope = (
+            [str(item).strip() for item in (systems or []) if str(item).strip()]
+            if systems is not None
+            else None
+        )
+        datasets_scope = (
+            [str(item).strip() for item in (datasets or []) if str(item).strip()]
+            if datasets is not None
+            else None
+        )
+        import_ids_scope = (
+            [int(item) for item in (import_ids or []) if item is not None]
+            if import_ids is not None
+            else None
+        )
 
         run_in_thread(
             _load,
@@ -145,24 +176,83 @@ class FiltersWidgetViewModel(QObject):
         items = [(str(name), str(name)) for name in datasets]
         self.datasets_updated.emit(items)
 
-    def _emit_groups(self) -> None:
+    def _emit_groups(
+        self,
+        *,
+        systems: Optional[list[str]] = None,
+        datasets: Optional[list[str]] = None,
+        import_ids: Optional[list[int]] = None,
+    ) -> None:
         df = pd.DataFrame(columns=["group_id", "kind", "label"])
         if self._model is not None:
             try:
-                df = self._model.groups_df()
+                df = self._model.groups_df(
+                    systems=systems,
+                    datasets=datasets,
+                    import_ids=import_ids,
+                )
             except Exception:
                 df = pd.DataFrame(columns=["group_id", "kind", "label"])
         self.groups_updated.emit(df)
 
-    def _emit_tags(self) -> None:
+    def _emit_tags(
+        self,
+        *,
+        systems: Optional[list[str]] = None,
+        datasets: Optional[list[str]] = None,
+        import_ids: Optional[list[int]] = None,
+    ) -> None:
         tags: Iterable[str] = []
         if self._model is not None:
             try:
-                tags = self._model.list_feature_tags()
+                tags = self._model.list_feature_tags(
+                    systems=systems,
+                    datasets=datasets,
+                    import_ids=import_ids,
+                )
             except Exception:
                 tags = []
         items = [(str(tag), str(tag)) for tag in tags]
         self.tags_updated.emit(items)
+
+    # @ai(gpt-5, codex, feature, 2026-03-11)
+    def refresh_groups_and_tags_sync(
+        self,
+        *,
+        systems: Optional[list[str]],
+        datasets: Optional[list[str]],
+        import_ids: Optional[list[int]],
+        on_result=None,
+    ) -> None:
+        model = self._model
+        groups = pd.DataFrame(columns=["group_id", "kind", "label"])
+        tags: Iterable[str] = []
+        if model is not None:
+            try:
+                groups = model.groups_df(
+                    systems=systems,
+                    datasets=datasets,
+                    import_ids=import_ids,
+                )
+            except Exception:
+                groups = pd.DataFrame(columns=["group_id", "kind", "label"])
+            try:
+                tags = model.list_feature_tags(
+                    systems=systems,
+                    datasets=datasets,
+                    import_ids=import_ids,
+                )
+            except Exception:
+                tags = []
+        payload = {
+            "groups": groups,
+            "tags": [(str(tag), str(tag)) for tag in tags],
+        }
+        if callable(on_result):
+            on_result(payload)
+            return
+        self.groups_updated.emit(payload["groups"])
+        self.tags_updated.emit(payload["tags"])
 
     def remove_group(self, group_id: int) -> None:
         if self._remove_running:
@@ -411,7 +501,7 @@ class FiltersWidget(CollapsibleSection):
         self.dt_to.dateTimeChanged.connect(lambda _dt: self._emit_filter_change("date_range_changed"))
         self.systems_combo.selection_changed.connect(self._on_systems_selection_changed)
         self.datasets_combo.selection_changed.connect(self._on_datasets_selection_changed)
-        self.imports_combo.selection_changed.connect(lambda: self._emit_filter_change("imports_changed"))
+        self.imports_combo.selection_changed.connect(self._on_imports_selection_changed)
         self.months_combo.selection_changed.connect(lambda: self._emit_filter_change("months_changed"))
         self.group_combo.selection_changed.connect(lambda: self._emit_filter_change("groups_changed"))
         self.tags_combo.selection_changed.connect(lambda: self._emit_filter_change("tags_changed"))
@@ -631,11 +721,15 @@ class FiltersWidget(CollapsibleSection):
 
     # @ai(gpt-5, codex, feature, 2026-03-10)
     def selected_datasets_for_data_scope(self) -> list[str]:
+        if not self.selected_systems():
+            return []
         values = self.datasets_combo.remembered_selected_values()
         return [str(v) for v in values if str(v).strip()]
 
     # @ai(gpt-5, codex, feature, 2026-03-10)
     def selected_import_ids_for_data_scope(self) -> list[int]:
+        if not self.selected_systems() or not self.selected_datasets():
+            return []
         out: list[int] = []
         for value in self.imports_combo.remembered_selected_values():
             try:
@@ -862,9 +956,10 @@ class FiltersWidget(CollapsibleSection):
                 empty_placeholder="No imports available",
                 default_placeholder="All imports",
             )
-            self._emit_filter_change("systems_changed")
-            self._dependency_refresh_active = False
-            self._end_filters_batch()
+            self._refresh_scoped_groups_and_tags(
+                signal_name="systems_changed",
+                token=token,
+            )
 
         self._filters_view_model.refresh_datasets_sync(
             self.selected_systems(),
@@ -892,14 +987,68 @@ class FiltersWidget(CollapsibleSection):
                 empty_placeholder="No imports available",
                 default_placeholder="All imports",
             )
-            self._emit_filter_change("datasets_changed")
-            self._dependency_refresh_active = False
-            self._end_filters_batch()
+            self._refresh_scoped_groups_and_tags(
+                signal_name="datasets_changed",
+                token=token,
+            )
 
         self._filters_view_model.refresh_imports_sync(
             self.selected_systems(),
             self.selected_datasets(),
             on_result=_apply_imports,
+        )
+
+    def _on_imports_selection_changed(self) -> None:
+        self._dependency_refresh_token += 1
+        token = self._dependency_refresh_token
+        if not self._dependency_refresh_active:
+            self._dependency_refresh_active = True
+            self._begin_filters_batch()
+        self._refresh_scoped_groups_and_tags(
+            signal_name="imports_changed",
+            token=token,
+        )
+
+    def _refresh_scoped_groups_and_tags(self, *, signal_name: str, token: int) -> None:
+        systems = self.selected_systems()
+        datasets = self.selected_datasets()
+        import_ids = self.selected_import_ids()
+
+        def _apply(payload: dict[str, Any]) -> None:
+            if token != self._dependency_refresh_token:
+                self._dependency_refresh_active = False
+                self._end_filters_batch()
+                return
+            groups_df = payload.get("groups") if isinstance(payload, dict) else None
+            tags = payload.get("tags") if isinstance(payload, dict) else []
+            if not isinstance(groups_df, pd.DataFrame):
+                groups_df = pd.DataFrame(columns=["group_id", "kind", "label"])
+            selected_group_ids = self.selected_group_ids()
+            self.set_groups(groups_df)
+            available_group_ids: set[int] = set()
+            for value in self._all_combo_values(self.group_combo):
+                try:
+                    parsed = int(value)
+                except Exception:
+                    continue
+                if parsed > 0:
+                    available_group_ids.add(parsed)
+            keep_group_ids = [gid for gid in selected_group_ids if gid in available_group_ids]
+            self.group_combo.set_selected_values(keep_group_ids)
+            selected_tags = self.selected_tags()
+            self.set_tags(tags if isinstance(tags, list) else [])
+            available_tags = {str(v) for v in self._all_combo_values(self.tags_combo) if str(v).strip()}
+            keep_tags = [tag for tag in selected_tags if str(tag) in available_tags]
+            self.tags_combo.set_selected_values(keep_tags)
+            self._emit_filter_change(signal_name)
+            self._dependency_refresh_active = False
+            self._end_filters_batch()
+
+        self._filters_view_model.refresh_groups_and_tags_sync(
+            systems=systems,
+            datasets=datasets,
+            import_ids=import_ids,
+            on_result=_apply,
         )
 
     # ------------------------------------------------------------------

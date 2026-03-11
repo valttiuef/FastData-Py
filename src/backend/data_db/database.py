@@ -420,6 +420,7 @@ class Database:
         self.csv_feature_columns_repo.delete_by_import_ids(con, [int(import_id)])
         self.csv_group_columns_repo.delete_by_import_ids(con, [int(import_id)])
         self.feature_scopes_repo.delete_by_import_ids(con, [int(import_id)])
+        con.execute("DELETE FROM group_label_scopes WHERE import_id = ?;", [int(import_id)])
         self.imports_repo.delete_by_ids(con, [int(import_id)])
         if dataset_id is not None:
             self.feature_scopes_repo.sync_dataset_scope(con, [dataset_id])
@@ -689,6 +690,7 @@ class Database:
                         s["kind"] = col
                         group_frames.append(s[["ts","label","kind"]])
 
+                    group_scope_ids: list[int] = []
                     if group_frames:
                         groups_long = pd.concat(group_frames, ignore_index=True).drop_duplicates()
                         labels = groups_long[["label","kind"]].drop_duplicates().copy()
@@ -711,6 +713,10 @@ class Database:
                             con.register("group_points_in", gp_out)
                             _temp_regs_to_cleanup.append("group_points_in")
                             self.group_points_repo.insert_points_from_temp(con, "group_points_in")
+                            group_scope_ids = [
+                                int(gid)
+                                for gid in gp_out["group_id"].dropna().astype(int).drop_duplicates().tolist()
+                            ]
                         self.log.info("Saved %d group point(s) across %d label(s) and %d kind(s).",
                                     len(gp_out), labels["label"].nunique(), labels["kind"].nunique())
                     else:
@@ -734,6 +740,14 @@ class Database:
                         header_rows=header_rows,
                         row_count=row_count,
                     )
+                    if group_scope_ids:
+                        self.upsert_group_label_scopes(
+                            con,
+                            group_ids=group_scope_ids,
+                            system_id=int(sys_id),
+                            dataset_id=int(dataset_id),
+                            import_id=int(new_import_id),
+                        )
 
                     scope_rows = tall2[["feature_id"]].dropna().drop_duplicates().copy()
                     if not scope_rows.empty:
@@ -1459,6 +1473,19 @@ class Database:
                                 con.register("csv_forced_group_labels", labels_df)
                                 _temp_regs_to_cleanup.append("csv_forced_group_labels")
                                 self.group_labels_repo.insert_new_labels(con, "csv_forced_group_labels")
+                                scoped_groups = self.group_labels_repo.label_map(con, "csv_forced_group_labels")
+                                if scoped_groups is not None and not scoped_groups.empty:
+                                    group_ids = [
+                                        int(gid)
+                                        for gid in scoped_groups["group_id"].dropna().astype(int).drop_duplicates().tolist()
+                                    ]
+                                    self.upsert_group_label_scopes(
+                                        con,
+                                        group_ids=group_ids,
+                                        system_id=int(sys_id),
+                                        dataset_id=int(dataset_id),
+                                        import_id=int(new_import_id),
+                                    )
                         if group_mapping_rows:
                             group_df = pd.DataFrame(group_mapping_rows)[
                                 ["import_id", "feature_id", "column_name", "group_kind"]
@@ -1681,12 +1708,89 @@ class Database:
             sanitized.append(text)
         return sanitized
 
-    def list_feature_tags(self) -> List[str]:
+    # @ai(gpt-5, codex, refactor, 2026-03-11)
+    def list_feature_tags(
+        self,
+        *,
+        systems: Optional[Sequence[str]] = None,
+        datasets: Optional[Sequence[str]] = None,
+        import_ids: Optional[Sequence[int]] = None,
+    ) -> List[str]:
+        systems_list = [str(item).strip() for item in (systems or []) if str(item).strip()]
+        datasets_list = [str(item).strip() for item in (datasets or []) if str(item).strip()]
+        import_ids_list = [int(item) for item in (import_ids or []) if item is not None]
         try:
             with self.connection() as con:
-                return self.feature_tags_repo.list_unique_tags(con)
+                if not systems_list and not datasets_list and not import_ids_list:
+                    return self.feature_tags_repo.list_unique_tags(con)
+                where: list[str] = []
+                params: list[object] = []
+                if systems_list:
+                    ph = ",".join(["?"] * len(systems_list))
+                    where.append(f"sy.name IN ({ph})")
+                    params.extend(systems_list)
+                if datasets_list:
+                    ph = ",".join(["?"] * len(datasets_list))
+                    where.append(f"ds.name IN ({ph})")
+                    params.extend(datasets_list)
+                if import_ids_list:
+                    ph = ",".join(["?"] * len(import_ids_list))
+                    where.append(f"fim.import_id IN ({ph})")
+                    params.extend(import_ids_list)
+                where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+                rows = con.execute(
+                    f"""
+                    SELECT DISTINCT ft.tag
+                    FROM feature_tags ft
+                    JOIN feature_import_map fim ON fim.feature_id = ft.feature_id
+                    JOIN datasets ds ON ds.id = fim.dataset_id
+                    JOIN systems sy ON sy.id = ds.system_id
+                    {where_sql}
+                    ORDER BY LOWER(ft.tag)
+                    """,
+                    params,
+                ).fetchall()
+                return [str(row[0]) for row in rows if row and row[0] is not None]
         except Exception:
             return []
+
+    # @ai(gpt-5, codex, feature, 2026-03-11)
+    def upsert_group_label_scopes(
+        self,
+        con: duckdb.DuckDBPyConnection,
+        *,
+        group_ids: Sequence[int],
+        system_id: int,
+        dataset_id: int,
+        import_id: int,
+    ) -> None:
+        ids = [int(gid) for gid in (group_ids or []) if gid is not None]
+        if not ids:
+            return
+        rows = pd.DataFrame(
+            {
+                "group_id": ids,
+                "system_id": int(system_id),
+                "dataset_id": int(dataset_id),
+                "import_id": int(import_id),
+            }
+        ).drop_duplicates()
+        if rows.empty:
+            return
+        con.register("new_group_label_scopes", rows)
+        try:
+            con.execute(
+                """
+                INSERT OR IGNORE INTO group_label_scopes(group_id, system_id, dataset_id, import_id)
+                SELECT group_id, system_id, dataset_id, import_id
+                FROM new_group_label_scopes
+                """
+            )
+        finally:
+            try:
+                con.unregister("new_group_label_scopes")
+            except Exception:
+                self.log.warning("Failed to unregister temp table new_group_label_scopes", exc_info=True)
 
     def list_features(
         self,
@@ -1892,6 +1996,8 @@ class Database:
                     orphan_group_ids = [int(row[0]) for row in group_rows if row and row[0] is not None]
                     if orphan_group_ids:
                         self.group_points_repo.delete_by_ids(con, orphan_group_ids)
+                        phs = ",".join(["?"] * len(orphan_group_ids))
+                        con.execute(f"DELETE FROM group_label_scopes WHERE group_id IN ({phs});", orphan_group_ids)
                         phg = ",".join(["?"] * len(orphan_group_ids))
                         con.execute(f"DELETE FROM group_labels WHERE id IN ({phg});", orphan_group_ids)
                     self.group_value_aliases_repo.delete_by_kinds(con, orphan_kinds)
@@ -3311,12 +3417,54 @@ class Database:
         except Exception:
             return []
 
-    def list_group_labels(self, kind: Optional[str] = None) -> pd.DataFrame:
+    # @ai(gpt-5, codex, refactor, 2026-03-11)
+    def list_group_labels(
+        self,
+        kind: Optional[str] = None,
+        *,
+        systems: Optional[Sequence[str]] = None,
+        datasets: Optional[Sequence[str]] = None,
+        import_ids: Optional[Sequence[int]] = None,
+    ) -> pd.DataFrame:
         """
         Returns columns: [group_id, kind, label]
         """
+        systems_list = [str(item).strip() for item in (systems or []) if str(item).strip()]
+        datasets_list = [str(item).strip() for item in (datasets or []) if str(item).strip()]
+        import_ids_list = [int(item) for item in (import_ids or []) if item is not None]
         with self.connection() as con:
-            return self.group_labels_repo.list_group_labels(con, kind)
+            if not systems_list and not datasets_list and not import_ids_list:
+                return self.group_labels_repo.list_group_labels(con, kind)
+            where: list[str] = []
+            params: list[object] = []
+            if kind:
+                where.append("gl.kind = ?")
+                params.append(str(kind))
+            if systems_list:
+                ph = ",".join(["?"] * len(systems_list))
+                where.append(f"sy.name IN ({ph})")
+                params.extend(systems_list)
+            if datasets_list:
+                ph = ",".join(["?"] * len(datasets_list))
+                where.append(f"ds.name IN ({ph})")
+                params.extend(datasets_list)
+            if import_ids_list:
+                ph = ",".join(["?"] * len(import_ids_list))
+                where.append(f"gls.import_id IN ({ph})")
+                params.extend(import_ids_list)
+            where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+            return con.execute(
+                f"""
+                SELECT DISTINCT gl.id AS group_id, gl.kind, gl.label
+                FROM group_labels gl
+                JOIN group_label_scopes gls ON gls.group_id = gl.id
+                LEFT JOIN datasets ds ON ds.id = gls.dataset_id
+                LEFT JOIN systems sy ON sy.id = gls.system_id
+                {where_sql}
+                ORDER BY gl.kind, gl.label
+                """,
+                params,
+            ).df()
 
     def group_points(
         self,

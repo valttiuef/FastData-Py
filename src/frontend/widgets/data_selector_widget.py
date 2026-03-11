@@ -965,20 +965,8 @@ class DataSelectorWidget(QGroupBox):
             return
         state = self.filters_widget.filter_state()
         data_scope = self._data_reload_filter_state(state)
-        data_state_key = (
-            data_scope.get("start"),
-            data_scope.get("end"),
-            tuple(data_scope.get("datasets") or []),
-            tuple(data_scope.get("import_ids") or []),
-            tuple(data_scope.get("months") or []),
-            tuple(data_scope.get("group_ids") or []),
-        )
-        feature_state_key = (
-            tuple(state.get("systems") or []),
-            tuple(state.get("datasets") or []),
-            tuple(state.get("import_ids") or []),
-            tuple(state.get("tags") or []),
-        )
+        data_state_key = DataSelectorWidget._data_state_key(data_scope)
+        feature_state_key = DataSelectorWidget._feature_state_key(state)
         data_changed = data_state_key != self._last_data_filters_state_key
         if feature_state_key != self._last_feature_filters_state_key:
             self._last_feature_filters_state_key = feature_state_key
@@ -987,6 +975,26 @@ class DataSelectorWidget(QGroupBox):
             self._last_data_filters_state_key = data_state_key
             self.filters_changed.emit(state)
             self._emit_data_requirements()
+
+    @staticmethod
+    def _feature_state_key(state: Mapping[str, Any]) -> tuple:
+        return (
+            tuple(state.get("systems") or []),
+            tuple(state.get("datasets") or []),
+            tuple(state.get("import_ids") or []),
+            tuple(state.get("tags") or []),
+        )
+
+    @staticmethod
+    def _data_state_key(data_scope: Mapping[str, Any]) -> tuple:
+        return (
+            data_scope.get("start"),
+            data_scope.get("end"),
+            tuple(data_scope.get("datasets") or []),
+            tuple(data_scope.get("import_ids") or []),
+            tuple(data_scope.get("months") or []),
+            tuple(data_scope.get("group_ids") or []),
+        )
 
     def _on_features_selection_changed(self, payloads: list[dict]) -> None:
         self._selected_features_count_cache = len(payloads or [])
