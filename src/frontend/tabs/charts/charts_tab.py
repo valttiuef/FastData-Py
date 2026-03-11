@@ -17,11 +17,12 @@ from ...localization import tr
 from . import MAX_FEATURES_SHOWN_LEGEND
 from ...models.hybrid_pandas_model import FeatureSelection, HybridPandasModel
 from .viewmodel import ChartsViewModel
+from ...threading import run_in_main_thread, run_in_thread
 
 from .chart_card import ChartCard
 from .charts_sidebar import ChartsSidebar
-from ...utils.exporting import export_dataframes, export_charts_excel
-from ...utils import set_status_text, toast_error, toast_info, toast_success, toast_warn
+from ...utils.exporting import execute_export_plan, prepare_charts_excel_export_plan, prepare_dataframes_export_plan
+from ...utils import set_status_text, toast_error, toast_file_saved, toast_info, toast_success, toast_warn
 from ...widgets.export_dialog import ExportOption, ExportSelectionDialog
 from ...widgets.panel import Panel
 from ..tab_widget import TabWidget
@@ -975,6 +976,7 @@ class ChartsTab(TabWidget):
 
         _fetch_next()
 
+    # @ai(gpt-5, codex, refactor, 2026-03-11)
     def _run_export_dialog(
         self,
         datasets: dict[str, pd.DataFrame],
@@ -1006,9 +1008,10 @@ class ChartsTab(TabWidget):
             return
         chosen = {name: datasets[name] for name in selected if name in datasets}
         selected_format = dialog.selected_format()
+        plan = None
         if selected_format == "excel":
             chosen_specs = {name: chart_specs.get(name, {}) for name in chosen}
-            ok, message = export_charts_excel(
+            plan = prepare_charts_excel_export_plan(
                 parent=self,
                 title=tr("Export charts"),
                 datasets=chosen,
@@ -1018,15 +1021,49 @@ class ChartsTab(TabWidget):
                 chart_first=True,
             )
         else:
-            ok, message = export_dataframes(
+            plan = prepare_dataframes_export_plan(
                 parent=self,
                 title=tr("Export charts"),
                 selected_format=selected_format,
                 datasets=chosen,
             )
-        if not message:
+        if plan is None:
             return
-        if ok:
-            toast_success(message, title=tr("Export complete"), tab_key="charts")
-        else:
-            toast_warn(message, title=tr("Export"), tab_key="charts")
+
+        export_button = getattr(self.sidebar, "btn_export", None)
+        if export_button is not None:
+            export_button.setEnabled(False)
+        set_status_text(tr("Exporting charts..."))
+        toast_info(tr("Exporting charts..."), title=tr("Charts"), tab_key="charts")
+
+        def _on_export_finished(outcome) -> None:
+            if export_button is not None:
+                export_button.setEnabled(True)
+            if not getattr(outcome, "message", ""):
+                return
+            if bool(getattr(outcome, "ok", False)):
+                set_status_text(tr("Chart export finished."))
+                toast_success(tr("Chart export finished."), title=tr("Charts"), tab_key="charts")
+                open_path = getattr(outcome, "open_path", None)
+                if open_path:
+                    toast_file_saved(open_path, title=tr("Export saved"), tab_key="charts")
+                return
+            set_status_text(tr("Chart export warning."))
+            toast_warn(str(outcome.message), title=tr("Export"), tab_key="charts")
+
+        def _on_export_error(message: str) -> None:
+            if export_button is not None:
+                export_button.setEnabled(True)
+            set_status_text(tr("Chart export failed."))
+            text = tr("Chart export failed: {error}").format(error=str(message or tr("Unknown error")))
+            toast_error(text, title=tr("Export failed"), tab_key="charts")
+
+        run_in_thread(
+            execute_export_plan,
+            on_result=lambda outcome: run_in_main_thread(_on_export_finished, outcome),
+            on_error=lambda message: run_in_main_thread(_on_export_error, message),
+            plan=plan,
+            owner=self,
+            key="charts_export",
+            cancel_previous=True,
+        )

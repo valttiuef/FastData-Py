@@ -1,5 +1,6 @@
 
 from __future__ import annotations
+from dataclasses import dataclass
 from pathlib import Path
 import re
 
@@ -25,19 +26,37 @@ def _sheet_name(value: str) -> str:
     return cleaned[:31]
 
 
-def export_dataframes(
+@dataclass(frozen=True)
+class ExportPlan:
+    kind: str
+    selected_format: str
+    destination: Path
+    datasets: dict[str, pd.DataFrame]
+    chart_specs: dict[str, dict[str, object]] | None = None
+    include_charts: bool = True
+    include_data: bool = True
+    chart_first: bool = True
+
+
+@dataclass(frozen=True)
+class ExportOutcome:
+    ok: bool
+    message: str
+    open_path: Path | None = None
+
+
+# @ai(gpt-5, codex, refactor, 2026-03-11)
+def prepare_dataframes_export_plan(
     *,
     parent: QWidget | None,
     title: str,
     selected_format: str,
     datasets: dict[str, pd.DataFrame],
-) -> tuple[bool, str]:
+) -> ExportPlan | None:
     if not datasets:
-        return False, tr("Nothing selected to export.")
-
+        return None
     clean = {name: (df if isinstance(df, pd.DataFrame) else pd.DataFrame(df)) for name, df in datasets.items()}
     mode = str(selected_format or "csv").lower()
-
     if mode == "excel":
         path, _ = QFileDialog.getSaveFileName(
             parent,
@@ -46,14 +65,11 @@ def export_dataframes(
             tr("Excel files (*.xlsx);;All files (*.*)"),
         )
         if not path:
-            return False, ""
+            return None
         dest = Path(path)
         if dest.suffix.lower() != ".xlsx":
             dest = dest.with_suffix(".xlsx")
-        with pd.ExcelWriter(dest, engine="openpyxl") as writer:
-            for name, frame in clean.items():
-                frame.to_excel(writer, sheet_name=_sheet_name(name), index=False)
-        return True, tr("Exported {count} dataset(s) to {path}.").format(count=len(clean), path=str(dest))
+        return ExportPlan(kind="dataframes", selected_format=mode, destination=dest, datasets=clean)
 
     path, _ = QFileDialog.getSaveFileName(
         parent,
@@ -62,15 +78,82 @@ def export_dataframes(
         tr("CSV files (*.csv);;All files (*.*)"),
     )
     if not path:
-        return False, ""
+        return None
+    dest = Path(path)
+    if dest.suffix.lower() != ".csv":
+        dest = dest.with_suffix(".csv")
+    return ExportPlan(kind="dataframes", selected_format=mode, destination=dest, datasets=clean)
 
-    base = Path(path)
-    if base.suffix.lower() != ".csv":
-        base = base.with_suffix(".csv")
 
+# @ai(gpt-5, codex, refactor, 2026-03-11)
+def prepare_charts_excel_export_plan(
+    *,
+    parent: QWidget | None,
+    title: str,
+    datasets: dict[str, pd.DataFrame],
+    chart_specs: dict[str, dict[str, object]] | None = None,
+    include_charts: bool = True,
+    include_data: bool = True,
+    chart_first: bool = True,
+) -> ExportPlan | None:
+    if not datasets:
+        return None
+    path, _ = QFileDialog.getSaveFileName(
+        parent,
+        title,
+        _slugify(title) + ".xlsx",
+        tr("Excel files (*.xlsx);;All files (*.*)"),
+    )
+    if not path:
+        return None
+    dest = Path(path)
+    if dest.suffix.lower() != ".xlsx":
+        dest = dest.with_suffix(".xlsx")
+    clean = {name: (df if isinstance(df, pd.DataFrame) else pd.DataFrame(df)) for name, df in datasets.items()}
+    return ExportPlan(
+        kind="charts_excel",
+        selected_format="excel",
+        destination=dest,
+        datasets=clean,
+        chart_specs=chart_specs or {},
+        include_charts=bool(include_charts),
+        include_data=bool(include_data),
+        chart_first=bool(chart_first),
+    )
+
+
+# @ai(gpt-5, codex, refactor, 2026-03-11)
+def execute_export_plan(plan: ExportPlan) -> ExportOutcome:
+    clean = {name: (df if isinstance(df, pd.DataFrame) else pd.DataFrame(df)) for name, df in plan.datasets.items()}
+    if not clean:
+        return ExportOutcome(ok=False, message=tr("Nothing selected to export."))
+
+    mode = str(plan.selected_format or "csv").lower()
+    if plan.kind == "charts_excel":
+        return _execute_chart_excel_export(clean=clean, plan=plan)
+    return _execute_dataframes_export(clean=clean, plan=plan, mode=mode)
+
+
+def _execute_dataframes_export(*, clean: dict[str, pd.DataFrame], plan: ExportPlan, mode: str) -> ExportOutcome:
+    if mode == "excel":
+        dest = plan.destination
+        with pd.ExcelWriter(dest, engine="openpyxl") as writer:
+            for name, frame in clean.items():
+                frame.to_excel(writer, sheet_name=_sheet_name(name), index=False)
+        return ExportOutcome(
+            ok=True,
+            message=tr("Exported {count} dataset(s) to {path}.").format(count=len(clean), path=str(dest)),
+            open_path=dest,
+        )
+
+    base = plan.destination
     if len(clean) == 1:
         next(iter(clean.values())).to_csv(base, index=False)
-        return True, tr("Exported data to {path}.").format(path=str(base))
+        return ExportOutcome(
+            ok=True,
+            message=tr("Exported data to {path}.").format(path=str(base)),
+            open_path=base,
+        )
 
     written = []
     stem = base.stem
@@ -81,42 +164,21 @@ def export_dataframes(
         frame.to_csv(dest, index=False)
         written.append(str(dest))
 
-    return True, tr("Exported {count} CSV files to {folder}.").format(
-        count=len(written), folder=str(parent_dir)
+    return ExportOutcome(
+        ok=True,
+        message=tr("Exported {count} CSV files to {folder}.").format(
+            count=len(written), folder=str(parent_dir)
+        ),
+        open_path=parent_dir,
     )
 
 
-def export_charts_excel(
-    *,
-    parent: QWidget | None,
-    title: str,
-    datasets: dict[str, pd.DataFrame],
-    chart_specs: dict[str, dict[str, object]] | None = None,
-    include_charts: bool = True,
-    include_data: bool = True,
-    chart_first: bool = True,
-) -> tuple[bool, str]:
-    if not datasets:
-        return False, tr("Nothing selected to export.")
-
-    path, _ = QFileDialog.getSaveFileName(
-        parent,
-        title,
-        _slugify(title) + ".xlsx",
-        tr("Excel files (*.xlsx);;All files (*.*)"),
-    )
-    if not path:
-        return False, ""
-
-    dest = Path(path)
-    if dest.suffix.lower() != ".xlsx":
-        dest = dest.with_suffix(".xlsx")
-
-    clean = {name: (df if isinstance(df, pd.DataFrame) else pd.DataFrame(df)) for name, df in datasets.items()}
-    specs = chart_specs or {}
-
-    include_charts = bool(include_charts)
-    include_data = bool(include_data)
+def _execute_chart_excel_export(*, clean: dict[str, pd.DataFrame], plan: ExportPlan) -> ExportOutcome:
+    dest = plan.destination
+    specs = plan.chart_specs or {}
+    include_charts = bool(plan.include_charts)
+    include_data = bool(plan.include_data)
+    chart_first = bool(plan.chart_first)
 
     with pd.ExcelWriter(dest, engine="openpyxl") as writer:
         for name, frame in clean.items():
@@ -139,7 +201,7 @@ def export_charts_excel(
                 try:
                     data_sheet.sheet_state = "hidden"
                 except Exception:
-                    logger.warning("Exception in export_charts_excel", exc_info=True)
+                    logger.warning("Exception in _execute_chart_excel_export", exc_info=True)
                 continue
 
             data_start_row = 1
@@ -163,7 +225,59 @@ def export_charts_excel(
                     chart_anchor=chart_anchor,
                 )
 
-    return True, tr("Exported {count} dataset(s) to {path}.").format(count=len(clean), path=str(dest))
+    return ExportOutcome(
+        ok=True,
+        message=tr("Exported {count} dataset(s) to {path}.").format(count=len(clean), path=str(dest)),
+        open_path=dest,
+    )
+
+
+def export_dataframes(
+    *,
+    parent: QWidget | None,
+    title: str,
+    selected_format: str,
+    datasets: dict[str, pd.DataFrame],
+) -> tuple[bool, str]:
+    if not datasets:
+        return False, tr("Nothing selected to export.")
+    plan = prepare_dataframes_export_plan(
+        parent=parent,
+        title=title,
+        selected_format=selected_format,
+        datasets=datasets,
+    )
+    if plan is None:
+        return False, ""
+    outcome = execute_export_plan(plan)
+    return outcome.ok, outcome.message
+
+
+def export_charts_excel(
+    *,
+    parent: QWidget | None,
+    title: str,
+    datasets: dict[str, pd.DataFrame],
+    chart_specs: dict[str, dict[str, object]] | None = None,
+    include_charts: bool = True,
+    include_data: bool = True,
+    chart_first: bool = True,
+) -> tuple[bool, str]:
+    if not datasets:
+        return False, tr("Nothing selected to export.")
+    plan = prepare_charts_excel_export_plan(
+        parent=parent,
+        title=title,
+        datasets=datasets,
+        chart_specs=chart_specs,
+        include_charts=include_charts,
+        include_data=include_data,
+        chart_first=chart_first,
+    )
+    if plan is None:
+        return False, ""
+    outcome = execute_export_plan(plan)
+    return outcome.ok, outcome.message
 
 
 def _add_excel_chart(
@@ -255,4 +369,12 @@ def _add_excel_chart(
     sheet.add_chart(chart, chart_anchor)
 
 
-__all__ = ["export_dataframes", "export_charts_excel"]
+__all__ = [
+    "ExportOutcome",
+    "ExportPlan",
+    "execute_export_plan",
+    "export_dataframes",
+    "export_charts_excel",
+    "prepare_charts_excel_export_plan",
+    "prepare_dataframes_export_plan",
+]

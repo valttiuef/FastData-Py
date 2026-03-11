@@ -32,9 +32,10 @@ from .som_details_dialog import SomDetailsDialog
 from .som_saved_maps_dialog import SomSavedMapsDialog
 from .timeline_cluster_groups_dialog import TimelineClusterGroupsDialog
 from ...utils.som_details import build_som_map_prompt, build_som_map_summary_text
-from ...utils.exporting import export_dataframes
+from ...utils.exporting import execute_export_plan, prepare_dataframes_export_plan
 from ...widgets.export_dialog import ExportOption, ExportSelectionDialog
-from ...utils import toast_error, toast_info, toast_success, toast_warn
+from ...utils import set_status_text, toast_error, toast_file_saved, toast_info, toast_success, toast_warn
+from ...threading import run_in_main_thread, run_in_thread
 from ...style.group_colors import group_color_for_label
 from ...viewmodels.help_viewmodel import get_help_viewmodel
 from ...viewmodels.log_view_model import get_log_view_model
@@ -786,6 +787,7 @@ class SomTab(TabWidget):
         self._sync_cluster_controls()
         self._update_timeline_cluster_map()
 
+    # @ai(gpt-5, codex, refactor, 2026-03-11)
     def _on_export_requested(self) -> None:
         if not self._result:
             toast_info(tr("Train a SOM model before exporting."), title=tr("SOM"), tab_key="som")
@@ -849,18 +851,51 @@ class SomTab(TabWidget):
             return
 
         chosen = {name: datasets[name] for name in selected if name in datasets}
-        ok, message = export_dataframes(
+        plan = prepare_dataframes_export_plan(
             parent=self,
             title=tr("Export SOM"),
             selected_format=dialog.selected_format(),
             datasets=chosen,
         )
-        if not message:
+        if plan is None:
             return
-        if ok:
-            toast_success(message, title=tr("Export complete"), tab_key="som")
-        else:
-            toast_warn(message, title=tr("Export"), tab_key="som")
+
+        if self.sidebar is not None:
+            self.sidebar.export_button.setEnabled(False)
+        set_status_text(tr("Exporting SOM results..."))
+        toast_info(tr("Exporting SOM results..."), title=tr("SOM"), tab_key="som")
+
+        def _on_export_finished(outcome) -> None:
+            if self.sidebar is not None:
+                self.sidebar.export_button.setEnabled(True)
+            if not getattr(outcome, "message", ""):
+                return
+            if bool(getattr(outcome, "ok", False)):
+                set_status_text(tr("SOM export finished."))
+                toast_success(tr("SOM export finished."), title=tr("SOM"), tab_key="som")
+                open_path = getattr(outcome, "open_path", None)
+                if open_path:
+                    toast_file_saved(open_path, title=tr("Export saved"), tab_key="som")
+                return
+            set_status_text(tr("SOM export warning."))
+            toast_warn(str(outcome.message), title=tr("Export"), tab_key="som")
+
+        def _on_export_error(message: str) -> None:
+            if self.sidebar is not None:
+                self.sidebar.export_button.setEnabled(True)
+            set_status_text(tr("SOM export failed."))
+            text = tr("SOM export failed: {error}").format(error=str(message or tr("Unknown error")))
+            toast_error(text, title=tr("Export failed"), tab_key="som")
+
+        run_in_thread(
+            execute_export_plan,
+            on_result=lambda outcome: run_in_main_thread(_on_export_finished, outcome),
+            on_error=lambda message: run_in_main_thread(_on_export_error, message),
+            plan=plan,
+            owner=self,
+            key="som_export",
+            cancel_previous=True,
+        )
 
     # -------------------------- generic tables/heatmaps (unchanged) -------
     def _on_neuron_clusters_updated(self, clusters) -> None:

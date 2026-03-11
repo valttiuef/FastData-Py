@@ -14,9 +14,9 @@ logger = logging.getLogger(__name__)
 from ...localization import tr
 
 from ...models.hybrid_pandas_model import HybridPandasModel
-from ...threading import run_in_main_thread
-from ...utils import clear_status_text, set_status_text, toast_error, toast_info, toast_success
-from ...utils.exporting import export_dataframes
+from ...threading import run_in_main_thread, run_in_thread
+from ...utils import clear_status_text, set_status_text, toast_error, toast_file_saved, toast_info, toast_success, toast_warn
+from ...utils.exporting import execute_export_plan, prepare_dataframes_export_plan
 from ...utils.model_details import build_model_details_prompt, build_regression_details_text
 from ...widgets.export_dialog import ExportOption, ExportSelectionDialog
 from ...widgets.model_details_dialog import ModelDetailsDialog
@@ -281,6 +281,7 @@ class RegressionTab(TabWidget):
         except Exception:
             logger.warning("Exception in _show_model_details_dialog", exc_info=True)
 
+    # @ai(gpt-5, codex, refactor, 2026-03-11)
     def _export_results(self) -> None:
         all_runs = self.results_panel.all_runs()
         if not all_runs:
@@ -350,18 +351,48 @@ class RegressionTab(TabWidget):
             toast_info(tr("No data available for selected export options."), title=tr("Export"), tab_key="regression")
             return
 
-        ok, message = export_dataframes(
+        plan = prepare_dataframes_export_plan(
             parent=self,
             title=tr("Export regression"),
             selected_format=export_mode,
             datasets=datasets,
         )
-        if not message:
+        if plan is None:
             return
-        if ok:
-            toast_success(message, title=tr("Export complete"), tab_key="regression")
-        else:
-            toast_error(message, title=tr("Export failed"), tab_key="regression")
+
+        self.sidebar.set_export_enabled(False)
+        set_status_text(tr("Exporting regression results..."))
+        toast_info(tr("Exporting regression results..."), title=tr("Regression"), tab_key="regression")
+
+        def _on_export_finished(outcome) -> None:
+            self.sidebar.set_export_enabled(True)
+            if not getattr(outcome, "message", ""):
+                return
+            if bool(getattr(outcome, "ok", False)):
+                set_status_text(tr("Regression export finished."))
+                toast_success(tr("Regression export finished."), title=tr("Regression"), tab_key="regression")
+                open_path = getattr(outcome, "open_path", None)
+                if open_path:
+                    toast_file_saved(open_path, title=tr("Export saved"), tab_key="regression")
+                return
+            set_status_text(tr("Regression export warning."))
+            toast_warn(str(outcome.message), title=tr("Export"), tab_key="regression")
+
+        def _on_export_error(message: str) -> None:
+            self.sidebar.set_export_enabled(True)
+            set_status_text(tr("Regression export failed."))
+            text = tr("Regression export failed: {error}").format(error=str(message or tr("Unknown error")))
+            toast_error(text, title=tr("Export failed"), tab_key="regression")
+
+        run_in_thread(
+            execute_export_plan,
+            on_result=lambda outcome: run_in_main_thread(_on_export_finished, outcome),
+            on_error=lambda message: run_in_main_thread(_on_export_error, message),
+            plan=plan,
+            owner=self,
+            key="regression_export",
+            cancel_previous=True,
+        )
 
     def _save_selected_runs(self) -> None:
         runs = self.results_panel.selected_runs()

@@ -6,8 +6,9 @@ from PySide6.QtWidgets import QWidget
 
 from ...models.database_model import DatabaseModel
 from ...localization import tr
-from ...utils import set_status_text, toast_error, toast_info, toast_success, toast_warn
-from ...utils.exporting import export_dataframes
+from ...threading import run_in_main_thread, run_in_thread
+from ...utils import set_status_text, toast_error, toast_file_saved, toast_info, toast_success, toast_warn
+from ...utils.exporting import execute_export_plan, prepare_dataframes_export_plan
 from ...widgets.export_dialog import ExportOption, ExportSelectionDialog
 from ...viewmodels.help_viewmodel import get_help_viewmodel
 from .viewmodel import StatisticsViewModel
@@ -180,18 +181,48 @@ class StatisticsTab(TabWidget):
             return
 
         chosen = {name: datasets[name] for name in selected if name in datasets}
-        ok, message = export_dataframes(
+        plan = prepare_dataframes_export_plan(
             parent=self,
             title=tr("Export statistics"),
             selected_format=dialog.selected_format(),
             datasets=chosen,
         )
-        if not message:
+        if plan is None:
             return
-        if ok:
-            toast_success(message, title=tr("Export complete"), tab_key="statistics")
-        else:
-            toast_warn(message, title=tr("Export"), tab_key="statistics")
+
+        self._sidebar.set_export_enabled(False)
+        set_status_text(tr("Exporting statistics..."))
+        toast_info(tr("Exporting statistics..."), title=tr("Statistics"), tab_key="statistics")
+
+        def _on_export_finished(outcome) -> None:
+            self._sidebar.set_export_enabled(True)
+            if not getattr(outcome, "message", ""):
+                return
+            if bool(getattr(outcome, "ok", False)):
+                set_status_text(tr("Statistics export finished."))
+                toast_success(tr("Statistics export finished."), title=tr("Statistics"), tab_key="statistics")
+                open_path = getattr(outcome, "open_path", None)
+                if open_path:
+                    toast_file_saved(open_path, title=tr("Export saved"), tab_key="statistics")
+                return
+            set_status_text(tr("Statistics export warning."))
+            toast_warn(str(outcome.message), title=tr("Export"), tab_key="statistics")
+
+        def _on_export_error(message: str) -> None:
+            self._sidebar.set_export_enabled(True)
+            set_status_text(tr("Statistics export failed."))
+            text = tr("Statistics export failed: {error}").format(error=str(message or tr("Unknown error")))
+            toast_error(text, title=tr("Export failed"), tab_key="statistics")
+
+        run_in_thread(
+            execute_export_plan,
+            on_result=lambda outcome: run_in_main_thread(_on_export_finished, outcome),
+            on_error=lambda message: run_in_main_thread(_on_export_error, message),
+            plan=plan,
+            owner=self,
+            key="statistics_export",
+            cancel_previous=True,
+        )
 
     def _on_save_requested(self) -> None:
         edited_preview = self._preview_panel.editable_preview_for_save()

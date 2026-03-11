@@ -12,7 +12,10 @@ applied when a window is registered.
 """
 
 import weakref
+from pathlib import Path
 from typing import Optional
+from PySide6.QtCore import QUrl
+from PySide6.QtGui import QDesktopServices
 from ..viewmodels.log_view_model import get_log_view_model
 
 # Weak reference to the main window
@@ -21,7 +24,7 @@ _main_window_ref: Optional[weakref.ref] = None
 # Pending values applied once a window is registered
 _pending_status: Optional[str] = ""
 _pending_progress: Optional[int] = None
-_pending_toasts: list[tuple[str, str, str, Optional[int], Optional[str], Optional[object]]] = []
+_pending_toasts: list[tuple[str, str, str, Optional[int], Optional[str], Optional[object], Optional[str]]] = []
 
 
 def _log_toast(kind: str, message: str, *, title: str = "", tab_key: Optional[str] = None) -> None:
@@ -83,8 +86,8 @@ def register_main_window(win) -> None:
     if _pending_toasts:
         pending = list(_pending_toasts)
         _pending_toasts.clear()
-        for kind, title, message, msec, tab_key, on_click in pending:
-            _dispatch_toast(kind, message, title=title, msec=msec, tab_key=tab_key, on_click=on_click)
+        for kind, title, message, msec, tab_key, on_click, icon_key in pending:
+            _dispatch_toast(kind, message, title=title, msec=msec, tab_key=tab_key, on_click=on_click, icon_key=icon_key)
 
 
 def unregister_main_window() -> None:
@@ -195,6 +198,7 @@ def _dispatch_toast(
     msec: Optional[int] = None,
     tab_key: Optional[str] = None,
     on_click=None,
+    icon_key: Optional[str] = None,
 ) -> None:
     w = _get_window()
     if w is None:
@@ -204,13 +208,41 @@ def _dispatch_toast(
         return
     try:
         if kind == "success":
-            manager.success(message, title=title or "Done", msec=msec, tab_key=tab_key, on_click=on_click)
+            manager.success(
+                message,
+                title=title or "Done",
+                msec=msec,
+                tab_key=tab_key,
+                on_click=on_click,
+                icon_key=icon_key,
+            )
         elif kind == "warn":
-            manager.warn(message, title=title or "Warning", msec=msec, tab_key=tab_key, on_click=on_click)
+            manager.warn(
+                message,
+                title=title or "Warning",
+                msec=msec,
+                tab_key=tab_key,
+                on_click=on_click,
+                icon_key=icon_key,
+            )
         elif kind == "error":
-            manager.error(message, title=title or "Error", msec=msec, tab_key=tab_key, on_click=on_click)
+            manager.error(
+                message,
+                title=title or "Error",
+                msec=msec,
+                tab_key=tab_key,
+                on_click=on_click,
+                icon_key=icon_key,
+            )
         else:
-            manager.info(message, title=title or "Info", msec=msec, tab_key=tab_key, on_click=on_click)
+            manager.info(
+                message,
+                title=title or "Info",
+                msec=msec,
+                tab_key=tab_key,
+                on_click=on_click,
+                icon_key=icon_key,
+            )
     except Exception:
         logger.warning("Exception in _dispatch_toast", exc_info=True)
 
@@ -222,14 +254,15 @@ def toast_info(
     msec: Optional[int] = None,
     tab_key: Optional[str] = None,
     on_click=None,
+    icon_key: Optional[str] = None,
 ) -> None:
     """Show a non-blocking toast (best-effort). Falls back to pending queue."""
     _log_toast("info", message, title=title, tab_key=tab_key)
     w = _get_window()
     if w is not None and getattr(w, "toast_manager", None) is not None:
-        _dispatch_toast("info", message, title=title, msec=msec, tab_key=tab_key, on_click=on_click)
+        _dispatch_toast("info", message, title=title, msec=msec, tab_key=tab_key, on_click=on_click, icon_key=icon_key)
         return
-    _pending_toasts.append(("info", title, str(message), msec, tab_key, on_click))
+    _pending_toasts.append(("info", title, str(message), msec, tab_key, on_click, icon_key))
     del _pending_toasts[:-10]
 
 
@@ -240,13 +273,14 @@ def toast_success(
     msec: Optional[int] = None,
     tab_key: Optional[str] = None,
     on_click=None,
+    icon_key: Optional[str] = None,
 ) -> None:
     _log_toast("success", message, title=title, tab_key=tab_key)
     w = _get_window()
     if w is not None and getattr(w, "toast_manager", None) is not None:
-        _dispatch_toast("success", message, title=title, msec=msec, tab_key=tab_key, on_click=on_click)
+        _dispatch_toast("success", message, title=title, msec=msec, tab_key=tab_key, on_click=on_click, icon_key=icon_key)
         return
-    _pending_toasts.append(("success", title, str(message), msec, tab_key, on_click))
+    _pending_toasts.append(("success", title, str(message), msec, tab_key, on_click, icon_key))
     del _pending_toasts[:-10]
 
 
@@ -257,13 +291,14 @@ def toast_warn(
     msec: Optional[int] = None,
     tab_key: Optional[str] = None,
     on_click=None,
+    icon_key: Optional[str] = None,
 ) -> None:
     _log_toast("warn", message, title=title, tab_key=tab_key)
     w = _get_window()
     if w is not None and getattr(w, "toast_manager", None) is not None:
-        _dispatch_toast("warn", message, title=title, msec=msec, tab_key=tab_key, on_click=on_click)
+        _dispatch_toast("warn", message, title=title, msec=msec, tab_key=tab_key, on_click=on_click, icon_key=icon_key)
         return
-    _pending_toasts.append(("warn", title, str(message), msec, tab_key, on_click))
+    _pending_toasts.append(("warn", title, str(message), msec, tab_key, on_click, icon_key))
     del _pending_toasts[:-10]
 
 
@@ -274,11 +309,45 @@ def toast_error(
     msec: Optional[int] = None,
     tab_key: Optional[str] = None,
     on_click=None,
+    icon_key: Optional[str] = None,
 ) -> None:
     _log_toast("error", message, title=title, tab_key=tab_key)
     w = _get_window()
     if w is not None and getattr(w, "toast_manager", None) is not None:
-        _dispatch_toast("error", message, title=title, msec=msec, tab_key=tab_key, on_click=on_click)
+        _dispatch_toast("error", message, title=title, msec=msec, tab_key=tab_key, on_click=on_click, icon_key=icon_key)
         return
-    _pending_toasts.append(("error", title, str(message), msec, tab_key, on_click))
+    _pending_toasts.append(("error", title, str(message), msec, tab_key, on_click, icon_key))
     del _pending_toasts[:-10]
+
+
+# @ai(gpt-5, codex, refactor, 2026-03-11)
+def toast_file_saved(
+    path: str | Path,
+    *,
+    title: str = "File saved",
+    tab_key: Optional[str] = None,
+    msec: Optional[int] = 6500,
+) -> None:
+    saved_path = Path(path)
+    message = f"{saved_path.name} saved. Click to open."
+    if saved_path.suffix == "":
+        message = f"Export location ready: {saved_path.name}. Click to open."
+
+    def _open_saved_path() -> None:
+        target = saved_path
+        if not target.exists():
+            toast_warn(f"Saved path not found: {target}", title="Open file", tab_key=tab_key)
+            return
+        url = QUrl.fromLocalFile(str(target))
+        opened = bool(QDesktopServices.openUrl(url))
+        if not opened:
+            toast_warn(f"Could not open: {target}", title="Open file", tab_key=tab_key)
+
+    toast_success(
+        message,
+        title=title,
+        tab_key=tab_key,
+        on_click=_open_saved_path,
+        msec=msec,
+        icon_key="open_file",
+    )

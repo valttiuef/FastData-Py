@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
+    QStyle,
     QVBoxLayout,
     QWidget,
 )
@@ -43,6 +44,7 @@ class _Toast(QWidget):
         max_width: Optional[int] = None,
         tab_key: Optional[str] = None,
         on_click: Optional[Callable[[], None]] = None,
+        icon_key: Optional[str] = None,
     ):
         super().__init__(parent)
         self._on_click = on_click
@@ -67,9 +69,27 @@ class _Toast(QWidget):
         accent.setFixedWidth(6)
 
         content = QWidget(bg)
-        content_lay = QVBoxLayout(content)
+        content_lay = QHBoxLayout(content)
         content_lay.setContentsMargins(18, 16, 18, 16)
-        content_lay.setSpacing(4)
+        content_lay.setSpacing(10)
+
+        icon_lbl: Optional[QLabel] = None
+        if icon_key:
+            icon_lbl = QLabel(content)
+            icon_lbl.setObjectName("icon")
+            icon_lbl.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
+            icon_lbl.setFixedWidth(20)
+            icon = self._resolve_icon(icon_key)
+            if icon is not None:
+                icon_lbl.setPixmap(icon.pixmap(16, 16))
+            else:
+                icon_lbl.setText(">")
+            content_lay.addWidget(icon_lbl, 0)
+
+        text_wrap = QWidget(content)
+        text_lay = QVBoxLayout(text_wrap)
+        text_lay.setContentsMargins(0, 0, 0, 0)
+        text_lay.setSpacing(4)
 
         title_lbl = QLabel(title)
         title_lbl.setObjectName("title")
@@ -80,8 +100,9 @@ class _Toast(QWidget):
         msg_lbl.setObjectName("msg")
         msg_lbl.setWordWrap(True)
 
-        content_lay.addWidget(title_lbl)
-        content_lay.addWidget(msg_lbl)
+        text_lay.addWidget(title_lbl)
+        text_lay.addWidget(msg_lbl)
+        content_lay.addWidget(text_wrap, 1)
 
         lay = QHBoxLayout(bg)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -114,6 +135,7 @@ class _Toast(QWidget):
                     f"QWidget#accent {{ background-color: {accent_color.name()}; border-top-left-radius: 10px; border-bottom-left-radius: 10px; }}",
                     f"QLabel#title {{ color: {text_color.name()}; }}",
                     f"QLabel#msg {{ color: {text_color.name()}; }}",
+                    f"QLabel#icon {{ color: {text_color.name()}; }}",
                 ]
             )
         )
@@ -141,6 +163,23 @@ class _Toast(QWidget):
 
         # Auto close
         QTimer.singleShot(msec, self.close_animated)
+
+    def _resolve_icon(self, icon_key: str):
+        style = self.style()
+        if style is None:
+            return None
+        key = str(icon_key or "").strip().lower()
+        icon_map = {
+            "open_file": QStyle.StandardPixmap.SP_DialogOpenButton,
+        }
+        pixmap_key = icon_map.get(key)
+        if pixmap_key is None:
+            return None
+        try:
+            return style.standardIcon(pixmap_key)
+        except Exception:
+            logger.warning("Exception in _resolve_icon", exc_info=True)
+            return None
 
     def mousePressEvent(self, event):  # type: ignore[override]
         if self._on_click is not None:
@@ -200,6 +239,7 @@ class ToastManager:
         *,
         tab_key: Optional[str] = None,
         on_click: Optional[Callable[[], None]] = None,
+        icon_key: Optional[str] = None,
     ):
         title = title or tr("Info")
         self._show(
@@ -209,6 +249,7 @@ class ToastManager:
             "info",
             tab_key=tab_key,
             on_click=on_click,
+            icon_key=icon_key,
         )
 
     def success(
@@ -219,6 +260,7 @@ class ToastManager:
         *,
         tab_key: Optional[str] = None,
         on_click: Optional[Callable[[], None]] = None,
+        icon_key: Optional[str] = None,
     ):
         title = title or tr("Done")
         self._show(
@@ -228,6 +270,7 @@ class ToastManager:
             "success",
             tab_key=tab_key,
             on_click=on_click,
+            icon_key=icon_key,
         )
 
     def warn(
@@ -238,6 +281,7 @@ class ToastManager:
         *,
         tab_key: Optional[str] = None,
         on_click: Optional[Callable[[], None]] = None,
+        icon_key: Optional[str] = None,
     ):
         title = title or tr("Warning")
         self._show(
@@ -247,6 +291,7 @@ class ToastManager:
             "warn",
             tab_key=tab_key,
             on_click=on_click,
+            icon_key=icon_key,
         )
 
     def error(
@@ -257,6 +302,7 @@ class ToastManager:
         *,
         tab_key: Optional[str] = None,
         on_click: Optional[Callable[[], None]] = None,
+        icon_key: Optional[str] = None,
     ):
         title = title or tr("Error")
         self._show(
@@ -266,6 +312,7 @@ class ToastManager:
             "error",
             tab_key=tab_key,
             on_click=on_click,
+            icon_key=icon_key,
         )
 
     def _show(
@@ -277,6 +324,7 @@ class ToastManager:
         *,
         tab_key: Optional[str] = None,
         on_click: Optional[Callable[[], None]] = None,
+        icon_key: Optional[str] = None,
     ):
         if tab_key:
             self._close_tab_toasts(tab_key)
@@ -288,7 +336,8 @@ class ToastManager:
             if on_click is None:
                 on_click = activate
             else:
-                on_click = lambda: (activate(), on_click())
+                base_click = on_click
+                on_click = lambda: (activate(), base_click())
 
         toast = _Toast(
             title,
@@ -299,6 +348,7 @@ class ToastManager:
             max_width=max_width,
             tab_key=tab_key,
             on_click=on_click,
+            icon_key=icon_key,
         )
         toast.destroyed.connect(lambda *_: self._remove_toast(toast))
 
