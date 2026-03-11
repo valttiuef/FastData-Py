@@ -523,6 +523,7 @@ class MainWindow(QMainWindow):
         return fn or None
 
     def _run_db_task(
+        # @ai(gpt-5, codex, fix, 2026-03-11)
         self,
         *,
         worker,
@@ -534,11 +535,19 @@ class MainWindow(QMainWindow):
         success_title: str | None = None,
         start_kind: str = "info",
         on_success=None,
+        start_status: str | None = None,
+        success_status: str | None = None,
+        error_status_prefix: str | None = None,
+        clear_data_on_error: bool = False,
+        recovery_hint: str | None = None,
     ) -> None:
         if start_title is None:
             start_title = self.tr("Database")
         if success_title is None:
             success_title = self.tr("Done")
+        if start_status:
+            self.set_status_text(start_status)
+        self.set_progress(0)
         if start_message:
             try:
                 if start_kind == "warn":
@@ -563,6 +572,11 @@ class MainWindow(QMainWindow):
                     self.toast_manager.success(success_message, title=success_title)
                 except Exception:
                     logger.warning("Exception in _handle_success", exc_info=True)
+            self.clear_progress()
+            if success_status:
+                self.set_status_text(success_status)
+            else:
+                self.clear_status_text()
 
         def _handle_error(msg: str):
             message = f"{error_prefix}{msg}" if error_prefix else str(msg)
@@ -570,6 +584,18 @@ class MainWindow(QMainWindow):
                 self.toast_manager.error(message, title=error_title)
             except Exception:
                 logger.warning("Exception in _handle_error", exc_info=True)
+            if clear_data_on_error:
+                self._recover_after_database_failure()
+                if recovery_hint:
+                    try:
+                        self.toast_manager.warn(recovery_hint, title=self.tr("Database unavailable"))
+                    except Exception:
+                        logger.warning("Exception in _handle_error", exc_info=True)
+            self.clear_progress()
+            if error_status_prefix is not None:
+                self.set_status_text(f"{error_status_prefix}{msg}")
+            else:
+                self.clear_status_text()
 
         run_in_thread(
             worker,
@@ -578,6 +604,27 @@ class MainWindow(QMainWindow):
             owner=self,
             key="db_task",
         )
+
+    def _recover_after_database_failure(self) -> None:
+        try:
+            self._release_database_handles()
+        except Exception:
+            logger.warning("Exception in _recover_after_database_failure", exc_info=True)
+        try:
+            self.database_model._close_database()
+            self.database_model._invalidate_features_cache()
+        except Exception:
+            logger.warning("Exception in _recover_after_database_failure", exc_info=True)
+        for module in self._tab_modules:
+            tab = getattr(self, module.instance_attr, None)
+            if tab is None:
+                continue
+            reloader = getattr(tab, "reload_from_db", None)
+            if callable(reloader):
+                try:
+                    reloader(None)
+                except Exception:
+                    logger.warning("Exception in _recover_after_database_failure", exc_info=True)
 
     def new_database(self):
         start = str(get_dialog_directory(self, "database", Path(self.database_model.path).parent))
@@ -608,6 +655,11 @@ class MainWindow(QMainWindow):
             error_prefix=self.tr("Failed to create database: "),
             start_title=self.tr("Database"),
             success_title=self.tr("Database created"),
+            start_status=self.tr("Creating database..."),
+            success_status=self.tr("Database created."),
+            error_status_prefix=self.tr("Database creation failed: "),
+            clear_data_on_error=True,
+            recovery_hint=self.tr("Close other apps using the database file, then use Refresh Databases."),
         )
 
     def open_database(self):
@@ -639,6 +691,11 @@ class MainWindow(QMainWindow):
             error_prefix=self.tr("Failed to open database: "),
             start_title=self.tr("Database"),
             success_title=self.tr("Database loaded"),
+            start_status=self.tr("Loading database..."),
+            success_status=self.tr("Database loaded."),
+            error_status_prefix=self.tr("Database load failed: "),
+            clear_data_on_error=True,
+            recovery_hint=self.tr("Close other apps using the database file, then use Refresh Databases."),
         )
 
     def save_database_as(self):
@@ -671,6 +728,9 @@ class MainWindow(QMainWindow):
             error_prefix=self.tr("Failed to save database: "),
             start_title=self.tr("Database"),
             success_title=self.tr("Database saved"),
+            start_status=self.tr("Saving database..."),
+            success_status=self.tr("Database saved."),
+            error_status_prefix=self.tr("Database save failed: "),
         )
 
     def reset_database(self):
@@ -694,6 +754,11 @@ class MainWindow(QMainWindow):
             start_title=self.tr("Database reset"),
             success_title=self.tr("Database reset"),
             start_kind="warn",
+            start_status=self.tr("Resetting database..."),
+            success_status=self.tr("Database reset finished."),
+            error_status_prefix=self.tr("Database reset failed: "),
+            clear_data_on_error=True,
+            recovery_hint=self.tr("Close other apps using the database file, then use Refresh Databases."),
         )
 
     def open_selection_settings_database(self):
@@ -784,36 +849,44 @@ class MainWindow(QMainWindow):
         )
 
     def refresh_databases(self) -> None:
-        """Reload measurement, selection settings, and log databases."""
+        """Reload measurement, selection settings, and log databases asynchronously."""
         try:
-            self.toast_manager.info(self.tr("Refreshing databases..."), title=self.tr("Refreshing"))
+            preferred = self.log_view_model.enabled_logger_names()
         except Exception:
-            logger.warning("Exception in refresh_databases", exc_info=True)
+            preferred = []
         try:
             self._release_database_handles()
         except Exception:
             logger.warning("Exception in refresh_databases", exc_info=True)
-        try:
+
+        def _worker():
             self.database_model.refresh_selection_database()
-        except Exception:
-            logger.warning("Exception in refresh_databases", exc_info=True)
-        try:
             self.database_model.refresh()
-        except Exception:
-            logger.warning("Exception in refresh_databases", exc_info=True)
-        try:
             self.database_model.load_selection_state()
-        except Exception:
-            logger.warning("Exception in refresh_databases", exc_info=True)
-        try:
-            preferred = self.log_view_model.enabled_logger_names()
-            self.log_view_model.reload_from_storage(preferred_loggers=preferred)
-        except Exception:
-            logger.warning("Exception in refresh_databases", exc_info=True)
-        try:
-            self.toast_manager.success(self.tr("Databases refreshed."), title=self.tr("Done"))
-        except Exception:
-            logger.warning("Exception in refresh_databases", exc_info=True)
+            db = self.database_model.create_connection()
+            with db.connection() as con:
+                con.execute("SELECT 1").fetchone()
+            return list(preferred)
+
+        def _on_success(result) -> None:
+            names = list(result or [])
+            self.log_view_model.reload_from_storage(preferred_loggers=names)
+
+        self._run_db_task(
+            worker=_worker,
+            start_message=self.tr("Refreshing databases..."),
+            success_message=self.tr("Databases refreshed."),
+            error_title=self.tr("Database refresh failed"),
+            error_prefix=self.tr("Failed to refresh databases: "),
+            start_title=self.tr("Refreshing"),
+            success_title=self.tr("Done"),
+            on_success=_on_success,
+            start_status=self.tr("Refreshing databases..."),
+            success_status=self.tr("Databases refreshed."),
+            error_status_prefix=self.tr("Database refresh failed: "),
+            clear_data_on_error=True,
+            recovery_hint=self.tr("Close other apps using the database file, then use Refresh Databases."),
+        )
 
     def _release_database_handles(self) -> None:
         for module in self._tab_modules:

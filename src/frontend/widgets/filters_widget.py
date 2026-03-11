@@ -583,6 +583,11 @@ class FiltersWidget(CollapsibleSection):
         was = self.systems_combo.blockSignals(True)
         try:
             self.systems_combo.set_items(items, check_all=check_all)
+            if check_all and items and not self.systems_combo.selected_values():
+                values = [value for _label, value in items]
+                self.systems_combo.set_selected_values(values)
+                if self.systems_combo.preserve_missing_selected_values():
+                    self.systems_combo.set_remembered_selected_values(values)
         finally:
             self.systems_combo.blockSignals(was)
 
@@ -596,6 +601,11 @@ class FiltersWidget(CollapsibleSection):
                 default_placeholder="All datasets",
             )
             self.datasets_combo.set_items(items, check_all=check_all)
+            if check_all and items and not self.datasets_combo.selected_values():
+                values = [value for _label, value in items]
+                self.datasets_combo.set_selected_values(values)
+                if self.datasets_combo.preserve_missing_selected_values():
+                    self.datasets_combo.set_remembered_selected_values(values)
         finally:
             self.datasets_combo.blockSignals(was)
 
@@ -609,6 +619,11 @@ class FiltersWidget(CollapsibleSection):
                 default_placeholder="All imports",
             )
             self.imports_combo.set_items(items, check_all=check_all)
+            if check_all and items and not self.imports_combo.selected_values():
+                values = [value for _label, value in items]
+                self.imports_combo.set_selected_values(values)
+                if self.imports_combo.preserve_missing_selected_values():
+                    self.imports_combo.set_remembered_selected_values(values)
         finally:
             self.imports_combo.blockSignals(was)
 
@@ -721,15 +736,11 @@ class FiltersWidget(CollapsibleSection):
 
     # @ai(gpt-5, codex, feature, 2026-03-10)
     def selected_datasets_for_data_scope(self) -> list[str]:
-        if not self.selected_systems():
-            return []
         values = self.datasets_combo.remembered_selected_values()
         return [str(v) for v in values if str(v).strip()]
 
     # @ai(gpt-5, codex, feature, 2026-03-10)
     def selected_import_ids_for_data_scope(self) -> list[int]:
-        if not self.selected_systems() or not self.selected_datasets():
-            return []
         out: list[int] = []
         for value in self.imports_combo.remembered_selected_values():
             try:

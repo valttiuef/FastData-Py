@@ -207,6 +207,7 @@ class MultiCheckCombo(QComboBox):
                 out.append(it.data(Qt.ItemDataRole.UserRole))
         return out
 
+    # @ai(gpt-5, codex, fix, 2026-03-11)
     def set_selected_values(self, values: Iterable[Any]):
         vs = set(values or [])
         m: QStandardItemModel = self.model()  # type: ignore[assignment]
@@ -224,7 +225,8 @@ class MultiCheckCombo(QComboBox):
             self._internal_change = False
 
         if self._preserve_missing_selected_values:
-            ordered = [value for value in self._remembered_selected_values if value in vs]
+            remembered = list(self._remembered_selected_values or [])
+            ordered = [value for value in remembered if value in vs]
             extras = [value for value in values or [] if value in vs and value not in ordered]
             self._remembered_selected_values = ordered + extras
         else:

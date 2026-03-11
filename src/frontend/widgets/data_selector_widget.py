@@ -196,10 +196,13 @@ class DataSelectorViewModel(QObject):
                 logger.warning("Exception in refresh_from_model", exc_info=True)
 
     def _on_database_changed(self, *_args) -> None:
+        # @ai(gpt-5, codex, fix, 2026-03-11)
         if self._selection_refresh_pending:
             self._finish_selection_refresh()
-        # Keep current selection IDs so feature reload can restore any rows that
-        # still exist after import/refresh. Missing rows are naturally dropped.
+        try:
+            self.refresh_from_model()
+        except Exception:
+            logger.warning("Exception in _on_database_changed", exc_info=True)
 
     def _on_selection_state_changed(self) -> None:
         """Apply saved selection filters/preprocessing and refresh affected widgets."""
@@ -685,6 +688,8 @@ class DataSelectorViewModel(QObject):
         numeric = frame.loc[:, data_cols].apply(pd.to_numeric, errors="coerce")
         target_series = numeric[target_col]
         valid_target = target_series.notna()
+        if int(valid_target.sum()) == 0:
+            raise RuntimeError("Target feature contains only missing values for current filters.")
         if int(valid_target.sum()) < 3:
             raise RuntimeError("Target feature has insufficient data for correlation analysis.")
 
@@ -696,6 +701,19 @@ class DataSelectorViewModel(QObject):
 
         y2 = y * y
         columns = [str(col) for col in matrix.columns]
+        comparison_cols = [col for col in columns if col != target_col]
+        if not comparison_cols:
+            raise RuntimeError("No comparable feature columns were found.")
+        comparison_matrix = matrix.loc[:, comparison_cols]
+        if int(comparison_matrix.notna().sum().sum()) == 0:
+            raise RuntimeError("Comparison features contain only missing values for current filters.")
+        pair_counts = comparison_matrix.notna().sum(axis=0)
+        if int((pair_counts >= 3).sum()) == 0:
+            raise RuntimeError("Comparison features have insufficient data for correlation analysis.")
+        varying_counts = comparison_matrix.nunique(dropna=True)
+        if int(((pair_counts >= 3) & (varying_counts >= 2)).sum()) == 0:
+            raise RuntimeError("Comparison features are static for current filters.")
+
         total_checked = max(0, len(columns) - 1)
         checked = 0
         block_size = 128
@@ -747,12 +765,13 @@ class DataSelectorViewModel(QObject):
                 progress_callback(int((checked * 100) / total_checked))
 
         if not entries:
-            raise RuntimeError("Unable to calculate correlations for this feature.")
+            raise RuntimeError("No valid correlations were found for current filters.")
 
         entries.sort(key=lambda entry: abs(float(entry["correlation"])), reverse=True)
         return entries[: max(1, int(limit))], total_checked
 
     # @ai(gpt-5, codex, refactor, 2026-02-28)
+    # @ai(gpt-5, codex, fix, 2026-03-11)
     def find_top_correlations(
         self,
         *,
@@ -800,18 +819,25 @@ class DataSelectorViewModel(QObject):
         def _work(progress_callback=None) -> dict[str, object]:
             model.load_base(filters, **params)
             frame = model.base_dataframe().copy()
-
-            entries, checked_total = self._compute_correlation_entries(
-                frame=frame,
-                target_feature=target_feature,
-                features=features,
-                limit=limit,
-                progress_callback=lambda value: (
-                    progress_callback(min(99, max(2, int(value))))
-                    if callable(progress_callback)
-                    else None
-                ),
-            )
+            try:
+                entries, checked_total = self._compute_correlation_entries(
+                    frame=frame,
+                    target_feature=target_feature,
+                    features=features,
+                    limit=limit,
+                    progress_callback=lambda value: (
+                        progress_callback(min(99, max(2, int(value))))
+                        if callable(progress_callback)
+                        else None
+                    ),
+                )
+            except RuntimeError as exc:
+                return {
+                    "error": str(exc),
+                    "target_feature": target_feature,
+                    "entries": [],
+                    "checked_total": 0,
+                }
             if callable(progress_callback):
                 progress_callback(100)
             return {
@@ -820,13 +846,18 @@ class DataSelectorViewModel(QObject):
                 "checked_total": int(checked_total),
             }
 
+        def _on_thread_result(payload: dict[str, object]) -> None:
+            error = str(payload.get("error") or "").strip() if isinstance(payload, dict) else ""
+            if error:
+                if callable(on_error):
+                    run_in_main_thread(on_error, error)
+                return
+            if callable(on_result):
+                run_in_main_thread(on_result, payload)
+
         run_in_thread(
             _work,
-            on_result=(
-                (lambda payload: run_in_main_thread(on_result, payload))
-                if callable(on_result)
-                else None
-            ),
+            on_result=_on_thread_result,
             on_error=(
                 (lambda message: run_in_main_thread(on_error, str(message)))
                 if callable(on_error)

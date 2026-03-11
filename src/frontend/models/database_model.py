@@ -311,6 +311,17 @@ class DatabaseModel(QObject):
             return _Database(path)
         return Database(path)
 
+    def _validate_database_access(self, path: Path) -> None:
+        db = self._instantiate_database(path)
+        try:
+            with db.connection() as con:
+                con.execute("SELECT 1").fetchone()
+        finally:
+            try:
+                db.close()
+            except Exception:
+                logger.warning("Exception in _validate_database_access", exc_info=True)
+
     def _ensure_database(self) -> Database:
         if self._database is None:
             with self._database_lock:
@@ -387,11 +398,13 @@ class DatabaseModel(QObject):
         self._emit_in_main_thread(self.selection_database_changed, self._selection_db_path)
 
     def use_database(self, path: Path | str) -> None:
+        # @ai(gpt-5, codex, fix, 2026-03-11)
         """Switch to an existing database file."""
         old_path = self._path
         new_path = Path(path)
         if not new_path.exists():
             raise FileNotFoundError(f"Database file does not exist: {new_path}")
+        self._validate_database_access(new_path)
         self._settings.set_database_path(new_path)
         if new_path == old_path:
             self.refresh()
@@ -416,10 +429,14 @@ class DatabaseModel(QObject):
             self.refresh()
 
     def save_database_as(self, destination: Path | str) -> None:
-        """Save the current database to a new file."""
+        # @ai(gpt-5, codex, fix, 2026-03-11)
+        """Save the current database to a new file and switch to it."""
         old_path = self._path
         dest = Path(destination)
         dest.parent.mkdir(parents=True, exist_ok=True)
+        if dest == old_path:
+            self.refresh()
+            return
         # Close the active DB before copying to avoid Windows file locks.
         self._close_database()
         try:
@@ -436,8 +453,6 @@ class DatabaseModel(QObject):
                 logger.warning("Exception in save_database_as", exc_info=True)
             raise
         self._settings.set_database_path(dest)
-        if dest == old_path:
-            self.refresh()
 
     def reset_database(self) -> None:
         """Reset to the default database path (recreate if necessary)."""

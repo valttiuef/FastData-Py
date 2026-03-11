@@ -203,3 +203,14 @@ def test_data_scope_selection_preserves_remembered_values_when_scope_items_disap
     assert widget.selected_import_ids() == []
     assert widget.selected_datasets_for_data_scope() == ["Dataset A"]
     assert widget.selected_import_ids_for_data_scope() == [1]
+
+
+def test_scope_refresh_selects_available_systems_when_previous_selection_disappears():
+    _qapp()
+    widget = FiltersWidget(model=_StubDatabaseModel())
+    widget.set_systems([("System A", "System A")], check_all=False)
+    widget.systems_combo.set_selected_values(["System A"])
+
+    widget.set_systems([("System B", "System B")], check_all=True)
+
+    assert widget.selected_systems() == ["System B"]
