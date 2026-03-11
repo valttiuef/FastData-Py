@@ -118,14 +118,14 @@ class StatisticsSidebar(SidebarWidget):
         self._mode_form = QFormLayout(mode_group)
         self._mode_combo = QComboBox(mode_group)
         self._mode_combo.addItem(tr("Time based"), "time")
-        self._mode_combo.addItem(tr("Group by column"), "column")
+        self._mode_combo.addItem(tr("Group based"), "column")
         self._mode_form.addRow(tr("Aggregation:"), self._wrap_with_help(self._mode_combo, "controls.statistics.mode"))
 
         self._column_combo = QComboBox(mode_group)
         for key, label in view_model.available_group_columns():
             self._column_combo.addItem(label, key)
         self._column_row = self._wrap_with_help(self._column_combo, "controls.statistics.group_column")
-        self._mode_form.addRow(tr("Group column:"), self._column_row)
+        self._mode_form.addRow(tr("Group:"), self._column_row)
 
         self._separate_timeframes_checkbox = QCheckBox(tr("Group by separate timeframes"), mode_group)
         self._separate_timeframes_row = self._wrap_with_help(
@@ -208,6 +208,7 @@ class StatisticsSidebar(SidebarWidget):
             return
         systems = filters.systems or None
         Datasets = filters.datasets or None
+        import_ids = filters.import_ids or None
         group_ids = filters.group_ids or None
         months = filters.months or None
         start = filters.start
@@ -221,6 +222,11 @@ class StatisticsSidebar(SidebarWidget):
         stats_preprocessing = dict(preprocessing)
         stats_preprocessing.pop("stats_period", None)
         stats_preprocessing.pop("separate_timeframes", None)
+        requested_group_kinds: list[str] = []
+        if mode == "column" and isinstance(group_column, str) and group_column.startswith("group:"):
+            group_kind = str(group_column.split(":", 1)[1]).strip()
+            if group_kind:
+                requested_group_kinds.append(group_kind)
 
         self._run_button.setEnabled(False)
         set_status_text(tr("Fetching statistics data..."))
@@ -242,6 +248,7 @@ class StatisticsSidebar(SidebarWidget):
                     feature_payloads=payloads,
                     systems=systems,
                     datasets=Datasets,
+                    import_ids=import_ids,
                     group_ids=group_ids,
                     start=start,
                     end=end,
@@ -267,6 +274,7 @@ class StatisticsSidebar(SidebarWidget):
 
         started = self.data_selector.fetch_base_dataframe_token_async(
             preprocessing_override=stats_preprocessing,
+            group_kinds=requested_group_kinds or None,
             on_result=_on_fetch_result,
             on_error=_on_fetch_error,
             owner=self,

@@ -1,13 +1,19 @@
 """Tests for the preprocessing service."""
 from pathlib import Path
 import sys
+import tempfile
+import uuid
 
 import pandas as pd
 import numpy as np
 
 sys.path.insert(0, str((Path(__file__).parent.parent / "src").resolve()))
 
+from backend.data_db.database import Database
+from backend.models import ImportOptions
 from backend.services.statistics_service import StatisticsService, available_statistics
+from frontend.models.hybrid_pandas_model import FeatureSelection
+from frontend.tabs.statistics.viewmodel import StatisticsViewModel
 
 
 class StubDatabase:
@@ -67,6 +73,67 @@ class StubDatabase:
         if end is not None:
             out = out[out["start_ts"] < pd.Timestamp(end)]
         return out.reset_index(drop=True)
+
+
+def _build_imported_groups_context() -> dict[str, object]:
+    test_imports_dir = Path(__file__).parent / "test_data" / "imports"
+    token = uuid.uuid4().hex
+    tmpdir = tempfile.TemporaryDirectory()
+    db_path = Path(tmpdir.name) / f"stats_groups_{token}.duckdb"
+    db = Database(db_path)
+    try:
+        opts_a = ImportOptions(
+            system_name=f"SysStats_{token}",
+            dataset_name=f"DatasetA_{token}",
+            csv_header_rows=1,
+            auto_detect_datetime=False,
+            date_column="Time",
+            csv_delimiter=",",
+            use_duckdb_csv_import=True,
+            force_meta_columns=["Material"],
+        )
+        opts_b = ImportOptions(
+            system_name=f"SysStats_{token}",
+            dataset_name=f"DatasetB_{token}",
+            csv_header_rows=1,
+            auto_detect_datetime=False,
+            date_column="Time",
+            csv_delimiter=",",
+            use_duckdb_csv_import=True,
+            force_meta_columns=["Material"],
+        )
+        ids_a = db.import_file(test_imports_dir / "csv_regression_groups_complete.csv", opts_a)
+        ids_b = db.import_file(test_imports_dir / "csv_regression_groups.csv", opts_b)
+        assert len(ids_a) == 1 and len(ids_b) == 1
+        features = db.list_features(
+            systems=[opts_a.system_name],
+            datasets=[opts_a.dataset_name, opts_b.dataset_name],
+        )
+        assert not features.empty
+        input_rows = features[features["name"] == "Input"]
+        assert not input_rows.empty
+        input_feature_id = int(input_rows.iloc[0]["feature_id"])
+        return {
+            "tmpdir": tmpdir,
+            "db": db,
+            "system": opts_a.system_name,
+            "datasets": [opts_a.dataset_name, opts_b.dataset_name],
+            "import_ids": [int(ids_a[0]), int(ids_b[0])],
+            "feature_id": input_feature_id,
+        }
+    except Exception:
+        db.close()
+        tmpdir.cleanup()
+        raise
+
+
+def _dispose_imported_groups_context(context: dict[str, object]) -> None:
+    db = context.get("db")
+    if isinstance(db, Database):
+        db.close()
+    tmpdir = context.get("tmpdir")
+    if isinstance(tmpdir, tempfile.TemporaryDirectory):
+        tmpdir.cleanup()
 
 
 def test_available_statistics():
@@ -249,6 +316,66 @@ def test_preprocessing_with_preprocessing_params():
     # Should have daily aggregations
     days = result.preview["t"].dt.date.nunique()
     assert days > 0
+
+
+def test_notes_use_short_agg_and_period_labels():
+    data = pd.DataFrame(
+        {
+            "t": pd.date_range("2024-01-01 00:00:00", periods=24, freq="h"),
+            "v": np.linspace(0, 23, 24),
+            "feature_id": [1] * 24,
+            "system": ["System1"] * 24,
+            "Dataset": ["Dataset1"] * 24,
+            "base_name": ["Temperature"] * 24,
+            "source": ["stream1"] * 24,
+            "unit": ["C"] * 24,
+            "type": [None] * 24,
+            "feature_label": ["Temperature"] * 24,
+        }
+    )
+    service = StatisticsService(StubDatabase())
+
+    result = service.compute(
+        frame=data,
+        statistics=["avg"],
+        mode="time",
+        preprocessing={"stats_period": 86400},
+    )
+
+    assert not result.preview.empty
+    notes = set(result.preview["notes"].dropna().astype(str).tolist())
+    assert notes == {"agg=time, period=daily"}
+
+
+def test_notes_use_short_group_name_without_prefix():
+    data = pd.DataFrame(
+        {
+            "t": pd.date_range("2024-01-01 00:00:00", periods=4, freq="h"),
+            "v": [1.0, 2.0, 3.0, 4.0],
+            "feature_id": [1, 1, 1, 1],
+            "feature_label": ["Temperature"] * 4,
+            "system": ["System1"] * 4,
+            "Dataset": ["Dataset1"] * 4,
+            "base_name": ["Temperature"] * 4,
+            "source": ["stream1"] * 4,
+            "unit": ["C"] * 4,
+            "type": [None] * 4,
+            "import_id": [1, 1, 1, 1],
+            "Material": ["A", "A", "B", "B"],
+        }
+    )
+    service = StatisticsService(StubDatabase())
+
+    result = service.compute(
+        frame=data,
+        statistics=["avg"],
+        mode="column",
+        group_column="group:Material",
+    )
+
+    assert not result.preview.empty
+    notes = set(result.preview["notes"].dropna().astype(str).tolist())
+    assert notes == {"agg=group, group=Material"}
 
 
 def test_group_kind_bucket_matching_uses_timestep():
@@ -471,3 +598,175 @@ def test_outliers_returns_percentage_and_counts():
     assert float(row["value"]) == 100.0 / 101.0
     assert int(row["sample_count"]) == 101
     assert int(row["outlier_count"]) == 1
+
+
+def test_group_kind_prefixed_uses_existing_group_column_in_frame():
+    data = pd.DataFrame(
+        {
+            "t": pd.date_range("2024-01-01 00:00:00", periods=6, freq="h"),
+            "v": [1.0, 2.0, 3.0, 10.0, 11.0, 12.0],
+            "feature_id": [1] * 6,
+            "feature_label": ["Temperature"] * 6,
+            "system": ["System1"] * 6,
+            "Dataset": ["Dataset1"] * 6,
+            "base_name": ["Temperature"] * 6,
+            "source": ["stream1"] * 6,
+            "unit": ["C"] * 6,
+            "type": [None] * 6,
+            "import_id": [100] * 6,
+            "ActionGroup": ["Idle", "Idle", "Idle", "Load", "Load", "Load"],
+        }
+    )
+    service = StatisticsService(StubDatabase())
+
+    result = service.compute(
+        frame=data,
+        statistics=["count"],
+        mode="column",
+        group_column="group:ActionGroup",
+    )
+
+    assert not result.preview.empty
+    groups = set(result.preview["group_value"].dropna().astype(str).tolist())
+    assert groups == {"Idle", "Load"}
+
+
+def test_group_by_dataset_and_import_columns():
+    data = pd.DataFrame(
+        {
+            "t": pd.to_datetime(
+                [
+                    "2024-01-01 00:00:00",
+                    "2024-01-01 01:00:00",
+                    "2024-01-01 00:00:00",
+                    "2024-01-01 01:00:00",
+                ]
+            ),
+            "v": [1.0, 2.0, 10.0, 20.0],
+            "feature_id": [1, 1, 1, 1],
+            "feature_label": ["Temperature"] * 4,
+            "system": ["System1"] * 4,
+            "Dataset": ["Dataset A", "Dataset A", "Dataset B", "Dataset B"],
+            "base_name": ["Temperature"] * 4,
+            "source": ["stream1"] * 4,
+            "unit": ["C"] * 4,
+            "type": [None] * 4,
+            "import_id": [101, 101, 202, 202],
+            "import_name": ["A.csv", "A.csv", "B.csv", "B.csv"],
+        }
+    )
+    service = StatisticsService(StubDatabase())
+
+    by_dataset = service.compute(
+        frame=data,
+        statistics=["avg"],
+        mode="column",
+        group_column="Dataset",
+    )
+    by_import = service.compute(
+        frame=data,
+        statistics=["avg"],
+        mode="column",
+        group_column="import_id",
+    )
+
+    assert set(by_dataset.preview["group_value"].dropna().astype(str).tolist()) == {"Dataset A", "Dataset B"}
+    assert set(by_import.preview["group_value"].dropna().astype(str).tolist()) == {"A.csv", "B.csv"}
+
+
+def test_wide_to_long_uses_payload_dataset_and_import_metadata():
+    frame = pd.DataFrame(
+        {
+            "t": pd.to_datetime(["2024-01-01 00:00:00", "2024-01-01 01:00:00"]),
+            "temperature_col": [1.0, 2.0],
+            "pressure_col": [3.0, 4.0],
+        }
+    )
+    features = [
+        FeatureSelection(feature_id=1, label="Temperature", base_name="Temperature", source="sensor", unit="C"),
+        FeatureSelection(feature_id=2, label="Pressure", base_name="Pressure", source="sensor", unit="bar"),
+    ]
+    payloads = [
+        {"datasets": ["Dataset A"], "import_ids": [101], "systems": ["System1"]},
+        {"datasets": ["Dataset B"], "import_ids": [202], "systems": ["System1"]},
+    ]
+
+    long_df = StatisticsViewModel._wide_to_long_statistics_frame(
+        frame,
+        features,
+        feature_payloads=payloads,
+        systems=None,
+        datasets=None,
+        import_ids=None,
+    )
+
+    assert not long_df.empty
+    temperature_rows = long_df[long_df["base_name"] == "Temperature"]
+    pressure_rows = long_df[long_df["base_name"] == "Pressure"]
+    assert set(temperature_rows["Dataset"].dropna().astype(str).tolist()) == {"Dataset A"}
+    assert set(pressure_rows["Dataset"].dropna().astype(str).tolist()) == {"Dataset B"}
+    assert set(pd.to_numeric(temperature_rows["import_id"], errors="coerce").dropna().astype(int).tolist()) == {101}
+    assert set(pd.to_numeric(pressure_rows["import_id"], errors="coerce").dropna().astype(int).tolist()) == {202}
+
+
+def test_statistics_group_kind_material_after_real_csv_import():
+    context = _build_imported_groups_context()
+    try:
+        db = context["db"]
+        service = StatisticsService(db)
+        frame = db.query_raw(
+            feature_ids=[int(context["feature_id"])],
+            systems=[str(context["system"])],
+            datasets=[str(name) for name in context["datasets"]],
+            import_ids=[int(value) for value in context["import_ids"]],
+        )
+        assert not frame.empty
+
+        result = service.compute(
+            frame=frame,
+            statistics=["count"],
+            mode="column",
+            group_column="group:Material",
+        )
+
+        assert not result.preview.empty
+        groups = set(result.preview["group_value"].dropna().astype(str).tolist())
+        assert {"A", "B", "C"}.issubset(groups)
+    finally:
+        _dispose_imported_groups_context(context)
+
+
+def test_statistics_group_by_dataset_and_import_after_real_csv_import():
+    context = _build_imported_groups_context()
+    try:
+        db = context["db"]
+        service = StatisticsService(db)
+        frame = db.query_raw(
+            feature_ids=[int(context["feature_id"])],
+            systems=[str(context["system"])],
+            datasets=[str(name) for name in context["datasets"]],
+            import_ids=[int(value) for value in context["import_ids"]],
+        )
+        assert not frame.empty
+
+        by_dataset = service.compute(
+            frame=frame,
+            statistics=["count"],
+            mode="column",
+            group_column="Dataset",
+        )
+        by_import = service.compute(
+            frame=frame,
+            statistics=["count"],
+            mode="column",
+            group_column="import_id",
+        )
+
+        dataset_values = set(by_dataset.preview["group_value"].dropna().astype(str).tolist())
+        import_values = set(
+            pd.to_numeric(by_import.preview["group_value"], errors="coerce").dropna().astype(int).tolist()
+        )
+        assert dataset_values == set(str(name) for name in context["datasets"])
+        assert import_values == set(int(value) for value in context["import_ids"])
+    finally:
+        _dispose_imported_groups_context(context)

@@ -216,42 +216,58 @@ class StatisticsService:
             if group_column.startswith(_GROUP_PREFIX):
                 # It's a database group kind - join by saved group timeframes.
                 group_kind = group_column[len(_GROUP_PREFIX):]
-                if separate_timeframes:
-                    timeframe_groups = self._estimate_timeframe_group_count(
-                        group_kind=group_kind,
-                        start=df["t"].min() if "t" in df.columns else None,
-                        end=df["t"].max() if "t" in df.columns else None,
-                    )
-                    if timeframe_groups > int(self._MAX_SEPARATE_TIMEFRAME_GROUPS):
-                        effective_separate_timeframes = False
-                        warnings.append(
-                            "Separate timeframes disabled for this run: "
-                            f"{int(timeframe_groups)} groups exceeds limit "
-                            f"{int(self._MAX_SEPARATE_TIMEFRAME_GROUPS)}."
+                existing_group_column = self._resolve_existing_group_kind_column(df, group_kind)
+                if existing_group_column is not None and not df[existing_group_column].dropna().empty:
+                    actual_group_column = existing_group_column
+                else:
+                    if separate_timeframes:
+                        timeframe_groups = self._estimate_timeframe_group_count(
+                            group_kind=group_kind,
+                            start=df["t"].min() if "t" in df.columns else None,
+                            end=df["t"].max() if "t" in df.columns else None,
                         )
-                df = self._join_group_points(
-                    df,
-                    group_kind,
-                    match_freq=freq,
-                    separate_timeframes=effective_separate_timeframes,
-                )
-                actual_group_column = f"group_{group_kind}"
-                if actual_group_column not in df.columns or df[actual_group_column].dropna().empty:
-                    raise ValueError(f"No group data found for kind '{group_kind}'")
-            elif group_column not in df.columns:
-                raise ValueError(f"Column '{group_column}' is not available for grouping")
+                        if timeframe_groups > int(self._MAX_SEPARATE_TIMEFRAME_GROUPS):
+                            effective_separate_timeframes = False
+                            warnings.append(
+                                "Separate timeframes disabled for this run: "
+                                f"{int(timeframe_groups)} groups exceeds limit "
+                                f"{int(self._MAX_SEPARATE_TIMEFRAME_GROUPS)}."
+                            )
+                    df = self._join_group_points(
+                        df,
+                        group_kind,
+                        match_freq=freq,
+                        separate_timeframes=effective_separate_timeframes,
+                    )
+                    if f"group_{group_kind}" not in df.columns or df[f"group_{group_kind}"].dropna().empty:
+                        df = self._join_group_points_from_csv_kind(
+                            df,
+                            group_kind,
+                            match_freq=freq,
+                        )
+                    actual_group_column = f"group_{group_kind}"
+                    if actual_group_column not in df.columns or df[actual_group_column].dropna().empty:
+                        raise ValueError(f"No group data found for kind '{group_kind}'")
+            else:
+                resolved_group_column = self._resolve_existing_column_name(df, group_column)
+                if resolved_group_column is None:
+                    raise ValueError(f"Column '{group_column}' is not available for grouping")
+                actual_group_column = resolved_group_column
         else:
             actual_group_column = None
 
         group_keys = ["feature_id"]
-        if "import_id" in df.columns:
-            group_keys.append("import_id")
-        if actual_group_column:
-            group_keys.append(actual_group_column)
+        if mode == "column":
+            if actual_group_column:
+                group_keys.append(actual_group_column)
+        else:
+            if "import_id" in df.columns:
+                group_keys.append("import_id")
 
         # Prepare metadata columns to carry over
         metadata_cols = {
             "import_id",
+            "import_name",
             "feature_label",
             "system",
             "Dataset",
@@ -307,10 +323,14 @@ class StatisticsService:
                 for col, value in meta_dict.items():
                     stat_df[col] = value
                 group_value = meta_dict.get(actual_group_column) if actual_group_column else None
+                if actual_group_column == "import_id":
+                    import_name = str(meta_dict.get("import_name") or "").strip()
+                    if import_name:
+                        group_value = import_name
                 if actual_group_column:
                     stat_df["group_value"] = group_value
                 stat_df["original_qualifier"] = meta_dict.get("type")
-                qualifier_group_value = None
+                qualifier_group_value = group_value
                 stat_df["new_qualifier"] = stat_df.apply(
                     lambda row, gc=actual_group_column: self._build_qualifier(
                         row.get("original_qualifier"),
@@ -346,6 +366,172 @@ class StatisticsService:
             warnings=warnings,
             separate_timeframes_used=effective_separate_timeframes,
         )
+
+    @staticmethod
+    def _resolve_existing_column_name(df: pd.DataFrame, requested: Optional[str]) -> Optional[str]:
+        name = str(requested or "").strip()
+        if not name:
+            return None
+        if name in df.columns:
+            return name
+        requested_folded = name.casefold()
+        for col in df.columns:
+            if str(col).strip().casefold() == requested_folded:
+                return str(col)
+        return None
+
+    @classmethod
+    def _resolve_existing_group_kind_column(cls, df: pd.DataFrame, group_kind: str) -> Optional[str]:
+        kind = str(group_kind or "").strip()
+        if not kind:
+            return None
+        for candidate in (kind, f"group_{kind}"):
+            resolved = cls._resolve_existing_column_name(df, candidate)
+            if resolved is not None:
+                return resolved
+        return None
+
+    def _join_group_points_from_csv_kind(
+        self,
+        df: pd.DataFrame,
+        group_kind: str,
+        *,
+        match_freq: Optional[str] = None,
+    ) -> pd.DataFrame:
+        if df is None or df.empty or self._db is None:
+            return df
+        query_csv = getattr(self._db, "query_csv_group_points_by_feature", None)
+        list_features = getattr(self._db, "list_features", None)
+        if not callable(query_csv) or not callable(list_features):
+            return df
+
+        kind = str(group_kind or "").strip()
+        if not kind:
+            return df
+        frame = df.copy()
+        frame["t"] = ensure_series_naive(pd.to_datetime(frame["t"], errors="coerce"))
+        frame = frame.dropna(subset=["t"])
+        if frame.empty:
+            return frame
+
+        systems = sorted(
+            {
+                str(v).strip()
+                for v in frame.get("system", pd.Series(dtype=object)).tolist()
+                if not pd.isna(v) and str(v).strip()
+            }
+        )
+        datasets = sorted(
+            {
+                str(v).strip()
+                for v in frame.get("Dataset", pd.Series(dtype=object)).tolist()
+                if not pd.isna(v) and str(v).strip()
+            }
+        )
+        import_ids = sorted(
+            {
+                int(v)
+                for v in pd.to_numeric(frame.get("import_id"), errors="coerce").dropna().astype(int).tolist()
+            }
+        )
+        try:
+            features_df = list_features(
+                systems=systems or None,
+                datasets=datasets or None,
+                import_ids=import_ids or None,
+            )
+        except Exception:
+            return frame
+        if features_df is None or features_df.empty:
+            return frame
+
+        wanted = kind.casefold()
+        candidate_ids: list[int] = []
+        for row in features_df.itertuples(index=False):
+            name = str(getattr(row, "name", "") or "").strip()
+            notes = str(getattr(row, "notes", "") or "").strip()
+            if name.casefold() != wanted and notes.casefold() != wanted:
+                continue
+            try:
+                candidate_ids.append(int(getattr(row, "feature_id")))
+            except Exception:
+                continue
+        if not candidate_ids:
+            return frame
+
+        start_ts = frame["t"].min()
+        end_ts = frame["t"].max()
+        end_inclusive = pd.Timestamp(end_ts) + pd.Timedelta(seconds=1) if end_ts is not None else None
+
+        label_frames: list[pd.DataFrame] = []
+        for fid in candidate_ids:
+            try:
+                labels_df = query_csv(
+                    feature_id=int(fid),
+                    group_kind=kind,
+                    start=start_ts,
+                    end=end_inclusive,
+                )
+            except Exception:
+                continue
+            if labels_df is None or labels_df.empty:
+                continue
+            if "t" not in labels_df.columns or "v" not in labels_df.columns:
+                continue
+            piece = labels_df.copy()
+            piece["t"] = ensure_series_naive(pd.to_datetime(piece["t"], errors="coerce"))
+            piece["v"] = piece["v"].astype("string").fillna("").str.strip()
+            piece = piece.dropna(subset=["t"])
+            piece = piece[piece["v"] != ""]
+            if piece.empty:
+                continue
+            keep_cols = ["t", "v"]
+            if "import_id" in piece.columns:
+                keep_cols.append("import_id")
+            label_frames.append(piece.loc[:, keep_cols])
+        if not label_frames:
+            return frame
+
+        labels = pd.concat(label_frames, ignore_index=True, sort=False)
+        labels["t"] = ensure_series_naive(pd.to_datetime(labels["t"], errors="coerce"))
+        labels = labels.dropna(subset=["t"])
+        if labels.empty:
+            return frame
+        if match_freq:
+            labels["t_match"] = labels["t"].dt.floor(match_freq)
+            frame["t_match"] = frame["t"].dt.floor(match_freq)
+        else:
+            labels["t_match"] = labels["t"]
+            frame["t_match"] = frame["t"]
+
+        group_col_name = f"group_{kind}"
+        frame_import_ids = pd.to_numeric(frame.get("import_id"), errors="coerce") if "import_id" in frame.columns else pd.Series(dtype="float64")
+        frame_has_import_id = bool(not frame_import_ids.dropna().empty)
+        if "import_id" in labels.columns and "import_id" in frame.columns and frame_has_import_id:
+            labels["import_id"] = pd.to_numeric(labels["import_id"], errors="coerce")
+            frame["import_id"] = pd.to_numeric(frame["import_id"], errors="coerce")
+            labels = (
+                labels.sort_values(["t_match"])
+                .drop_duplicates(subset=["t_match", "import_id"], keep="last")
+                .rename(columns={"v": group_col_name})
+            )
+            merged = frame.merge(
+                labels.loc[:, ["t_match", "import_id", group_col_name]],
+                on=["t_match", "import_id"],
+                how="left",
+            )
+        else:
+            labels = (
+                labels.sort_values(["t_match"])
+                .drop_duplicates(subset=["t_match"], keep="last")
+                .rename(columns={"v": group_col_name})
+            )
+            merged = frame.merge(
+                labels.loc[:, ["t_match", group_col_name]],
+                on=["t_match"],
+                how="left",
+            )
+        return merged.drop(columns=["t_match"], errors="ignore")
 
     # ------------------------------------------------------------------
     def save(self, result: StatisticsResult) -> int:
@@ -436,15 +622,37 @@ class StatisticsService:
         group_column: Optional[str],
         stats_period: Optional[object],
     ) -> str:
-        agg = str(mode or "time")
-        if agg == "column":
-            group = str(group_column or "").strip() or "unknown"
-            return f"aggregation={agg}, group_column={group}"
+        agg = "group" if str(mode or "").strip().lower() == "column" else "time"
+        if agg == "group":
+            group = StatisticsService._format_group_note_name(group_column)
+            return f"agg={agg}, group={group}"
+        period = StatisticsService._format_period_note(stats_period)
+        return f"agg={agg}, period={period}"
+
+    @staticmethod
+    def _format_group_note_name(group_column: Optional[str]) -> str:
+        text = str(group_column or "").strip()
+        if not text:
+            return "unknown"
+        if text.startswith("group:"):
+            text = text.split(":", 1)[1].strip()
+        return text or "unknown"
+
+    @staticmethod
+    def _format_period_note(stats_period: Optional[object]) -> str:
         if stats_period is None or str(stats_period).strip() == "":
-            period = "default"
-        else:
-            period = str(stats_period)
-        return f"aggregation={agg}, period={period}"
+            return "default"
+        try:
+            seconds = int(float(stats_period))
+        except Exception:
+            return str(stats_period)
+        seconds_map = {
+            3600: "hourly",
+            86400: "daily",
+            604800: "weekly",
+            2592000: "monthly",
+        }
+        return seconds_map.get(seconds, f"{seconds}s")
 
     @staticmethod
     def _apply_value_filters_long(df: pd.DataFrame, value_filters: Sequence[dict]) -> pd.DataFrame:

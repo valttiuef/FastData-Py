@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 # @ai(gpt-5, codex, refactor, 2026-02-26)
+import re
 from typing import Optional
 
 import pandas as pd
@@ -266,6 +267,7 @@ class StatisticsPreview(Panel):
         self._select_default_row()
         self._update_chart_for_selection()
 
+    # @ai(gpt-5, codex, refactor, 2026-03-11)
     def _build_feature_summary(
         self,
         df: Optional[pd.DataFrame],
@@ -294,51 +296,35 @@ class StatisticsPreview(Panel):
 
         def _base_type_for_display(row: pd.Series) -> str:
             original = self._normalize_display_value(row.get("original_qualifier"))
-            if original:
-                return original
-
-            qualifier = self._normalize_display_value(row.get("new_qualifier"))
-            stat = self._normalize_display_value(row.get("statistic"))
-            if not qualifier or not stat:
-                return qualifier
-
-            q_lower = qualifier.lower()
-            s_lower = stat.lower()
-            for suffix in (f"_{s_lower}", f" {s_lower}", f"-{s_lower}"):
-                if q_lower.endswith(suffix):
-                    return qualifier[: -len(suffix)].strip(" _-")
-            if q_lower == s_lower:
-                return ""
-            return qualifier
+            return original
 
         def _merge_type_and_stat(row: pd.Series) -> str:
             base_type = _base_type_for_display(row)
             stat = self._normalize_display_value(row.get("statistic")).lower()
             if base_type and stat:
-                return f"{base_type} {stat}"
+                return f"{stat} ({base_type})"
             return base_type or stat
 
-        raw_columns = [
-            "label",
-            "statistic",
-            "base_name",
-            "source",
-            "unit",
-            "new_qualifier",
-            "notes",
-        ]
-        raw_present = [col for col in raw_columns if col in working.columns]
-        raw_summary = working[raw_present].drop_duplicates().reset_index(drop=True)
-        raw_rows = raw_summary.to_dict("records")
+        key_columns = ["base_name", "source", "unit", "original_qualifier", "statistic"]
+        for col in key_columns:
+            if col not in working.columns:
+                working[col] = pd.NA
+        group_summary = (
+            working.groupby(key_columns, dropna=False, sort=False)
+            .agg(notes=("notes", "first"), new_qualifier=("new_qualifier", "first"), label=("label", "first"))
+            .reset_index()
+        )
+        raw_rows = group_summary.to_dict("records")
 
         summary_columns: dict[str, pd.Series] = {
-            "Name": raw_summary.get("base_name", pd.Series(dtype=object)),
-            "Source": raw_summary.get("source", pd.Series(dtype=object)),
-            "Unit": raw_summary.get("unit", pd.Series(dtype=object)),
-            "Type": raw_summary.apply(
+            "Name": group_summary.get("base_name", pd.Series(dtype=object)),
+            "Source": group_summary.get("source", pd.Series(dtype=object)),
+            "Unit": group_summary.get("unit", pd.Series(dtype=object)),
+            "Type": group_summary.apply(
                 lambda row: _merge_type_and_stat(
                     pd.Series(
                         {
+                            "original_qualifier": row.get("original_qualifier"),
                             "new_qualifier": row.get("new_qualifier"),
                             "statistic": row.get("statistic"),
                         }
@@ -346,10 +332,10 @@ class StatisticsPreview(Panel):
                 ),
                 axis=1,
             )
-            if not raw_summary.empty
+            if not group_summary.empty
             else pd.Series(dtype=object),
         }
-        summary_columns["Notes"] = raw_summary.get("notes", pd.Series(dtype=object))
+        summary_columns["Notes"] = group_summary.get("notes", pd.Series(dtype=object))
         summary = pd.DataFrame(summary_columns)
         return summary, raw_rows
 
@@ -410,8 +396,6 @@ class StatisticsPreview(Panel):
         if not indexes:
             return None
         row = int(indexes[0].row())
-        if 0 <= row < len(self._feature_rows):
-            return dict(self._feature_rows[row] or {})
         row_payload = {}
         for col in range(model.columnCount()):
             header = model.headerData(col, Qt.Orientation.Horizontal, Qt.ItemDataRole.DisplayRole)
@@ -419,6 +403,9 @@ class StatisticsPreview(Panel):
                 continue
             value = model.data(model.index(row, col), Qt.ItemDataRole.DisplayRole)
             row_payload[str(header)] = value
+        parsed = self._selection_from_table_row(row_payload)
+        if parsed is not None:
+            return parsed
         resolved = self._resolve_selection_from_display(row_payload)
         if resolved is not None:
             return resolved
@@ -426,10 +413,37 @@ class StatisticsPreview(Panel):
             return row_payload
         return None
 
+    def _selection_from_table_row(self, row_payload: dict) -> Optional[dict]:
+        if not isinstance(row_payload, dict) or not row_payload:
+            return None
+        name = self._normalize_display_value(row_payload.get("Name"))
+        if not name:
+            return None
+        source = self._normalize_display_value(row_payload.get("Source"))
+        unit = self._normalize_display_value(row_payload.get("Unit"))
+        type_text = self._normalize_display_value(row_payload.get("Type"))
+        stat = type_text
+        original_qualifier: Optional[str] = None
+        match = re.fullmatch(r"\s*([^(]+?)\s*\((.+)\)\s*", type_text)
+        if match:
+            stat = str(match.group(1) or "").strip()
+            original_qualifier = str(match.group(2) or "").strip() or None
+        stat = stat.lower().strip()
+        if not stat:
+            return None
+        return {
+            "base_name": name,
+            "source": source,
+            "unit": unit,
+            "statistic": stat,
+            "original_qualifier": original_qualifier,
+        }
+
     def _resolve_selection_from_display(self, row_payload: dict) -> Optional[dict]:
         if not self._feature_rows:
             return None
         display_to_raw = {
+            "Name": "base_name",
             "Feature": "label",
             "Statistic": "statistic",
             "System": "system",
@@ -478,17 +492,43 @@ class StatisticsPreview(Panel):
         df = self._preview_df
         mask = pd.Series([True] * len(df), index=df.index)
 
-        label = selection.get("Feature") or selection.get("label")
-        if label is not None and "label" in df.columns:
-            mask &= df["label"] == label
+        def _normalize_selected(value: object) -> Optional[object]:
+            if value is None:
+                return None
+            try:
+                if pd.isna(value):
+                    return None
+            except Exception:
+                logger.warning("Exception in _normalize_selected", exc_info=True)
+            if isinstance(value, str):
+                text = value.strip()
+                return text if text else None
+            return value
 
-        stat = selection.get("Statistic") or selection.get("statistic")
+        base_name = _normalize_selected(selection.get("base_name"))
+        if base_name is not None and "base_name" in df.columns:
+            mask &= df["base_name"].astype(str) == str(base_name)
+
+        source = _normalize_selected(selection.get("source"))
+        if source is not None and "source" in df.columns:
+            source_mask = df["source"].astype(str) == str(source)
+            mask &= source_mask
+
+        unit = _normalize_selected(selection.get("unit"))
+        if unit is not None and "unit" in df.columns:
+            unit_mask = df["unit"].astype(str) == str(unit)
+            mask &= unit_mask
+
+        stat = _normalize_selected(selection.get("Statistic") or selection.get("statistic"))
         if stat is not None and "statistic" in df.columns:
-            mask &= df["statistic"] == stat
+            mask &= df["statistic"].astype(str) == str(stat)
 
-        import_id = selection.get("import_id")
-        if import_id is not None and "import_id" in df.columns:
-            mask &= df["import_id"] == import_id
+        original_qualifier = _normalize_selected(selection.get("original_qualifier"))
+        if "original_qualifier" in df.columns:
+            if original_qualifier is None:
+                mask &= df["original_qualifier"].isna() | (df["original_qualifier"].astype(str).str.strip() == "")
+            else:
+                mask &= df["original_qualifier"].astype(str) == str(original_qualifier)
 
         return df[mask].copy()
 
@@ -515,7 +555,7 @@ class StatisticsPreview(Panel):
 
     def _mask_for_raw_row(self, df: pd.DataFrame, raw: dict) -> pd.Series:
         mask = pd.Series([True] * len(df), index=df.index)
-        for key in ("label", "statistic", "import_id", "system", "Dataset", "source", "unit"):
+        for key in ("base_name", "source", "unit", "statistic", "original_qualifier"):
             if key not in df.columns:
                 continue
             wanted = raw.get(key)
@@ -532,6 +572,15 @@ class StatisticsPreview(Panel):
         if not text:
             return self._NO_GROUP_LABEL
         return text
+
+    def _selection_feature_name(self, selection_info: Optional[dict]) -> Optional[str]:
+        if not isinstance(selection_info, dict):
+            return None
+        for key in ("Name", "base_name", "Feature", "feature_label", "label"):
+            text = self._normalize_display_value(selection_info.get(key))
+            if text:
+                return text
+        return None
 
     def _update_chart_for_selection(self) -> None:
         selection = self._selected_row_info()
@@ -607,9 +656,7 @@ class StatisticsPreview(Panel):
                 agg["_order"] = agg["group_value_display"].map(lambda x: order_index.get(str(x), len(order_index)))
                 agg = agg.sort_values("_order", kind="stable").drop(columns=["_order"])
             
-            feature_name = None
-            if selection_info:
-                feature_name = selection_info.get("Feature") or selection_info.get("label")
+            feature_name = self._selection_feature_name(selection_info)
             title = f"Statistics by Group ({stat})"
             if feature_name:
                 title = f"{feature_name} ({stat})"
@@ -644,9 +691,7 @@ class StatisticsPreview(Panel):
                 pivot["_order"] = pivot["group_value_display"].map(lambda x: order_index.get(str(x), len(order_index)))
                 pivot = pivot.sort_values("_order", kind="stable").drop(columns=["_order"])
 
-            feature_name = selection_info.get("Feature") if selection_info else None
-            if selection_info and not feature_name:
-                feature_name = selection_info.get("label")
+            feature_name = self._selection_feature_name(selection_info)
             title = feature_name or "Statistics by Group"
             self.preview_chart.set_title(title or "Statistics by Group")
             self.preview_chart.set_multi_series(
@@ -718,9 +763,7 @@ class StatisticsPreview(Panel):
                 agg_spec["outlier_count"] = ("outlier_count", "sum")
             agg = stat_df.groupby("time_label", dropna=False).agg(**agg_spec).reset_index()
 
-            feature_name = None
-            if selection_info:
-                feature_name = selection_info.get("Feature") or selection_info.get("label")
+            feature_name = self._selection_feature_name(selection_info)
             title = f"Statistics over Time ({stat})"
             if feature_name:
                 title = f"{feature_name} ({stat})"
