@@ -687,6 +687,86 @@ def test_query_raw_group_ids_negative_one_selects_ungrouped_rows(temp_db: Databa
     assert target_ts not in set(pd.to_datetime(ungrouped["t"], errors="coerce"))
 
 
+def test_hybrid_load_base_group_ids_mixed_group_and_no_group_keeps_ungrouped_rows(
+    temp_db: Database,
+    tmp_path: Path,
+):
+    csv_path = tmp_path / "hybrid_group_and_ungrouped_filter.csv"
+    _write_csv(
+        csv_path,
+        [
+            ("2026-02-01 00:00:00", 1.0),
+            ("2026-02-01 00:01:00", 2.0),
+            ("2026-02-01 00:02:00", 3.0),
+        ],
+    )
+    opts = ImportOptions(
+        system_name="SysHybridGroupMix",
+        dataset_name="DataHybridGroupMix",
+        csv_header_rows=1,
+        auto_detect_datetime=False,
+        date_column="Time",
+    )
+    temp_db.import_file(csv_path, opts)
+    all_df = temp_db.query_raw(system="SysHybridGroupMix", dataset="DataHybridGroupMix")
+    assert len(all_df) == 3
+    target_ts = pd.Timestamp(all_df.sort_values("t").iloc[1]["t"])
+
+    with temp_db.write_transaction() as con:
+        con.execute(
+            "INSERT INTO group_labels (id, label, kind) VALUES (nextval('group_labels_id_seq'), ?, ?)",
+            ["Window", "ManualKind"],
+        )
+        group_id = int(
+            con.execute(
+                "SELECT id FROM group_labels WHERE label = ? AND kind = ? LIMIT 1",
+                ["Window", "ManualKind"],
+            ).fetchone()[0]
+        )
+        dataset_id = int(
+            con.execute(
+                """
+                SELECT ds.id
+                FROM datasets ds
+                JOIN systems sy ON sy.id = ds.system_id
+                WHERE sy.name = ? AND ds.name = ?
+                LIMIT 1
+                """,
+                ["SysHybridGroupMix", "DataHybridGroupMix"],
+            ).fetchone()[0]
+        )
+        con.execute(
+            """
+            INSERT INTO group_points (start_ts, end_ts, dataset_id, group_id)
+            VALUES (?, ?, ?, ?)
+            """,
+            [target_ts, target_ts, dataset_id, group_id],
+        )
+
+    settings = SettingsModel(organization="FastDataTests", application="FastDataHybridGroupMix")
+    settings.set_database_path(temp_db.path)
+    model = HybridPandasModel(settings)
+    try:
+        features = model.features_for_systems_datasets(
+            systems=["SysHybridGroupMix"],
+            datasets=["DataHybridGroupMix"],
+        )
+        assert not features.empty
+        payload = dict(features.iloc[0].to_dict())
+        filters = DataFilters(
+            features=[FeatureSelection.from_payload(payload)],
+            systems=["SysHybridGroupMix"],
+            datasets=["DataHybridGroupMix"],
+            group_ids=[int(group_id), -1],
+        )
+        model.load_base(filters, timestep="none", fill="none", agg="avg")
+        frame = model.base_dataframe()
+        values = pd.to_numeric(frame[payload["name"]], errors="coerce").dropna().tolist()
+        assert sorted(values) == [1.0, 2.0, 3.0]
+    finally:
+        model._close_database()
+
+
 def test_query_raw_group_ids_filters_linked_csv_values(temp_db: Database, tmp_path: Path):
     csv_path = tmp_path / "group_linked_filter.csv"
     _write_csv(
@@ -751,6 +831,57 @@ def test_query_raw_group_ids_filters_linked_csv_values(temp_db: Database, tmp_pa
     )
     assert len(linked_df) == 2
     assert set(linked_df["v"].astype(str).tolist()) == {"A"}
+
+
+def test_query_raw_group_ids_negative_one_excludes_rows_with_linked_csv_groups(
+    temp_db: Database,
+    tmp_path: Path,
+):
+    csv_path = tmp_path / "group_linked_ungrouped_only.csv"
+    csv_path.write_text(
+        "\n".join(
+            [
+                "Time,Temp,GroupCol",
+                "2026-02-01 00:00:00,1.0,A",
+                "2026-02-01 00:01:00,2.0,",
+                "2026-02-01 00:02:00,3.0,B",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    opts = ImportOptions(
+        system_name="SysGroupLinkedUngrouped",
+        dataset_name="DataGroupLinkedUngrouped",
+        csv_header_rows=1,
+        auto_detect_datetime=False,
+        date_column="Time",
+        use_duckdb_csv_import=True,
+    )
+    temp_db.import_file(csv_path, opts)
+    features = temp_db.list_features(
+        systems=["SysGroupLinkedUngrouped"],
+        datasets=["DataGroupLinkedUngrouped"],
+    )
+    assert not features.empty
+    name_col = "name" if "name" in features.columns else "base_name"
+    temp_feature = features.loc[features[name_col].astype(str) == "Temp"]
+    group_feature = features.loc[features[name_col].astype(str) == "GroupCol"]
+    assert not temp_feature.empty
+    assert not group_feature.empty
+    temp_feature_id = int(temp_feature.iloc[0]["feature_id"])
+    group_feature_id = int(group_feature.iloc[0]["feature_id"])
+
+    temp_db.mark_csv_feature_group_kind(feature_id=group_feature_id, group_kind="LinkedKind")
+
+    ungrouped = temp_db.query_raw(
+        systems=["SysGroupLinkedUngrouped"],
+        datasets=["DataGroupLinkedUngrouped"],
+        feature_ids=[temp_feature_id],
+        group_ids=[-1],
+    )
+    assert len(ungrouped) == 1
+    ts_values = set(pd.to_datetime(ungrouped["t"], errors="coerce"))
+    assert ts_values == {pd.Timestamp("2026-02-01 00:01:00")}
 
 
 def test_query_raw_group_ids_linked_labels_filter_other_feature_columns(temp_db: Database, tmp_path: Path):

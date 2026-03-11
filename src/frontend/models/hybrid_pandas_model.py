@@ -1098,6 +1098,7 @@ class HybridPandasModel(DatabaseModel):
 
 
     # --------- Updated loading strategy (BASE) ------------------------------------
+    # @ai(gpt-5, codex, fix, 2026-03-10)
     def load_base(
         self,
         flt: "DataFilters",
@@ -1309,9 +1310,15 @@ class HybridPandasModel(DatabaseModel):
         base_df = self._filter_frame_by_months(base_df, merged_filters.months)
 
         # --- GROUP POST-FILTER (postprocessed) ---
-        # If ALL groups selected, skip this; when UI means "all", prefer flt.group_ids=None.
-        if getattr(merged_filters, "group_ids", None):
-            gp = self.db.group_points(merged_filters.group_ids, start=merged_filters.start, end=merged_filters.end)
+        # Keep post-filtering for explicit positive group selections to prevent
+        # postprocess fill from leaking values outside selected ranges.
+        # When "No group" (<=0) is selected, skip this range-only post-filter so
+        # ungrouped rows returned by SQL-level filtering are preserved.
+        selected_group_ids = [int(gid) for gid in (getattr(merged_filters, "group_ids", None) or [])]
+        include_ungrouped = any(gid <= 0 for gid in selected_group_ids)
+        positive_group_ids = [gid for gid in selected_group_ids if gid > 0]
+        if positive_group_ids and not include_ungrouped:
+            gp = self.db.group_points(positive_group_ids, start=merged_filters.start, end=merged_filters.end)
             if gp is not None and not gp.empty:
                 base_df = self._filter_frame_by_group_ranges(base_df, gp, cadence)
 

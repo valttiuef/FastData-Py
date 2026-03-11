@@ -885,7 +885,8 @@ class DataSelectorWidget(QGroupBox):
         self._feature_reload_batch_depth = 0
         self._feature_reload_pending = False
         self._selected_features_count_cache = 0
-        self._last_filters_state_key: tuple | None = None
+        self._last_data_filters_state_key: tuple | None = None
+        self._last_feature_filters_state_key: tuple | None = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -955,6 +956,7 @@ class DataSelectorWidget(QGroupBox):
             reload=True,
         )
 
+    # @ai(gpt-5, codex, fix, 2026-03-10)
     def _on_filters_changed(self, *_args) -> None:
         """Handle all filter changes - emit signals and update data requirements."""
         if self.filters_widget is None:
@@ -962,23 +964,29 @@ class DataSelectorWidget(QGroupBox):
             self._emit_data_requirements()
             return
         state = self.filters_widget.filter_state()
-        state_key = (
-            state.get("start"),
-            state.get("end"),
+        data_scope = self._data_reload_filter_state(state)
+        data_state_key = (
+            data_scope.get("start"),
+            data_scope.get("end"),
+            tuple(data_scope.get("datasets") or []),
+            tuple(data_scope.get("import_ids") or []),
+            tuple(data_scope.get("months") or []),
+            tuple(data_scope.get("group_ids") or []),
+        )
+        feature_state_key = (
             tuple(state.get("systems") or []),
             tuple(state.get("datasets") or []),
             tuple(state.get("import_ids") or []),
-            tuple(state.get("months") or []),
-            tuple(state.get("group_ids") or []),
             tuple(state.get("tags") or []),
         )
-        if state_key == self._last_filters_state_key:
+        data_changed = data_state_key != self._last_data_filters_state_key
+        if feature_state_key != self._last_feature_filters_state_key:
+            self._last_feature_filters_state_key = feature_state_key
+            self._on_feature_affecting_filters_changed()
+        if data_changed:
+            self._last_data_filters_state_key = data_state_key
+            self.filters_changed.emit(state)
             self._emit_data_requirements()
-            return
-        self._last_filters_state_key = state_key
-        self._on_feature_affecting_filters_changed()
-        self.filters_changed.emit(state)
-        self._emit_data_requirements()
 
     def _on_features_selection_changed(self, payloads: list[dict]) -> None:
         self._selected_features_count_cache = len(payloads or [])

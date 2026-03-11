@@ -2095,6 +2095,7 @@ class Database:
             datasets=datasets,
         )
 
+    # @ai(gpt-5, codex, fix, 2026-03-10)
     def _csv_sql_from_and_params(
         self,
         *,
@@ -2169,6 +2170,7 @@ class Database:
         group_ids_list: list[int] = [gid for gid in group_ids_raw if gid > 0]
         linked_by_import: dict[int, list[tuple[str, list[str]]]] = {}
         import_feature_columns: dict[int, dict[int, str]] = {}
+        all_group_columns_by_import: dict[int, list[str]] = {}
         for map_row in mappings.itertuples(index=False):
             map_import_id = getattr(map_row, "import_id", None)
             map_feature_id = getattr(map_row, "feature_id", None)
@@ -2182,6 +2184,38 @@ class Database:
             if not col_name:
                 continue
             import_feature_columns.setdefault(import_key, {})[feature_key] = col_name
+        if include_ungrouped:
+            import_ids_for_group_cols = sorted(import_feature_columns.keys())
+            if import_ids_for_group_cols:
+                ph_imports = ",".join(["?"] * len(import_ids_for_group_cols))
+                all_group_links_df = con.execute(
+                    f"""
+                    SELECT import_id, column_name
+                    FROM csv_group_columns
+                    WHERE import_id IN ({ph_imports})
+                    """,
+                    import_ids_for_group_cols,
+                ).df()
+                if all_group_links_df is not None and not all_group_links_df.empty:
+                    for row in all_group_links_df.itertuples(index=False):
+                        try:
+                            import_id = int(getattr(row, "import_id"))
+                        except Exception:
+                            continue
+                        col_name = str(getattr(row, "column_name", "") or "").strip()
+                        if not col_name:
+                            continue
+                        all_group_columns_by_import.setdefault(import_id, []).append(col_name)
+                    for import_id, cols in list(all_group_columns_by_import.items()):
+                        deduped: list[str] = []
+                        seen: set[str] = set()
+                        for col in cols:
+                            norm = str(col or "").strip()
+                            if not norm or norm in seen:
+                                continue
+                            seen.add(norm)
+                            deduped.append(norm)
+                        all_group_columns_by_import[import_id] = deduped
         if per_feature_filters:
             filter_feature_ids = sorted(per_feature_filters.keys())
             filter_mappings = self.csv_feature_columns_repo.list_feature_mappings(
@@ -2398,7 +2432,7 @@ class Database:
                     params.append(int(import_id))
                     params.extend(group_ids_list)
                 if include_ungrouped:
-                    group_predicates.append(
+                    ungrouped_predicate = (
                         "NOT EXISTS ("
                         "SELECT 1 "
                         "FROM imports ii "
@@ -2409,6 +2443,19 @@ class Database:
                         ")"
                     )
                     params.append(int(import_id))
+                    linked_group_columns = all_group_columns_by_import.get(int(import_id), [])
+                    empty_checks: list[str] = []
+                    for linked_col in linked_group_columns:
+                        normalized_linked_col = _normalize_col(linked_col)
+                        if not normalized_linked_col:
+                            continue
+                        if table_cols and normalized_linked_col not in table_cols:
+                            continue
+                        linked_ref = _sql_quote_identifier(normalized_linked_col)
+                        empty_checks.append(f"coalesce(trim(cast({linked_ref} AS VARCHAR)), '') = ''")
+                    if empty_checks:
+                        ungrouped_predicate = f"({ungrouped_predicate} AND {' AND '.join(empty_checks)})"
+                    group_predicates.append(ungrouped_predicate)
 
                 linked_rules = linked_by_import.get(int(import_id), [])
                 for linked_col, labels in linked_rules:
