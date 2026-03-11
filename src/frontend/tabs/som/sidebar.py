@@ -477,6 +477,11 @@ class SomSidebar(SidebarWidget):
         if not selected_payloads:
             self._log(tr("Select one or more features to train the SOM before training."), level=logging.INFO)
             return
+        if len(selected_payloads) < 2:
+            message = tr("Select at least two features to train SOM.")
+            set_status_text(message)
+            self._log(message, level=logging.WARNING)
+            return
 
         # Keep timeline overlay feature payloads in sync with the features used for training.
         try:

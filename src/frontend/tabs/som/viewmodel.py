@@ -957,6 +957,8 @@ class SomViewModel(QObject):
     ) -> SomResult:
         if not feature_labels:
             raise ValueError("Select at least one feature")
+        if len(feature_labels) < 2:
+            raise ValueError("Select at least two features to train SOM.")
 
         self._ensure_data_model()
 
@@ -1030,6 +1032,8 @@ class SomViewModel(QObject):
 
         if not feature_cols:
             raise ValueError("All selected features were dropped by training rules (>95% missing or static values).")
+        if len(feature_cols) < 2:
+            raise ValueError("SOM needs at least two non-static features with enough data.")
 
         feature_cols_set = set(feature_cols)
         filtered_feature_payloads = [
@@ -1198,32 +1202,38 @@ class SomViewModel(QObject):
         def _run(stop_event=None, progress_callback=None, status_callback=None):
             self.training_started.emit()
             try:
-                result = self.train_from_labels(
-                    feature_labels,
-                    feature_payloads=feature_payloads,
-                    start=start,
-                    end=end,
-                    systems=systems,
-                    datasets=datasets,
-                    group_ids=group_ids,
-                    months=months,
-                    preprocessing=preprocessing,
-                    map_shape=map_shape,
-                    sigma=sigma,
-                    learning_rate=learning_rate,
-                    epochs=epochs,
-                    normalisation=normalisation,
-                    training_mode=training_mode,
-                    stop_event=stop_event,
-                    progress_callback=progress_callback,
-                    status_callback=status_callback,
-                    data_frame=data_frame,
-                )
-                return result
+                try:
+                    result = self.train_from_labels(
+                        feature_labels,
+                        feature_payloads=feature_payloads,
+                        start=start,
+                        end=end,
+                        systems=systems,
+                        datasets=datasets,
+                        group_ids=group_ids,
+                        months=months,
+                        preprocessing=preprocessing,
+                        map_shape=map_shape,
+                        sigma=sigma,
+                        learning_rate=learning_rate,
+                        epochs=epochs,
+                        normalisation=normalisation,
+                        training_mode=training_mode,
+                        stop_event=stop_event,
+                        progress_callback=progress_callback,
+                        status_callback=status_callback,
+                        data_frame=data_frame,
+                    )
+                    return result
+                except ValueError as exc:
+                    return {"validation_error": str(exc)}
             finally:
                 run_in_main_thread(partial(self._reset_status, preserve_text=True))
 
         def _on_finished(result: SomResult):
+            if isinstance(result, dict) and result.get("validation_error"):
+                _on_error(str(result.get("validation_error")))
+                return
             self._training_running = False
             self.status_changed.emit("SOM training finished.")
             self.training_finished.emit(result)

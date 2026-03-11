@@ -431,26 +431,25 @@ class RegressionSidebar(SidebarWidget):
 
         input_features = self.selected_input_payloads()
         target_features = self.selected_target_payloads()
-        missing: list[str] = []
+        setup_instructions: list[str] = []
         if not input_features:
-            missing.append("input features")
+            setup_instructions.append("Select at least one input feature.")
         if not target_features:
-            missing.append("target feature(s)")
+            setup_instructions.append("Select at least one target feature.")
 
         model_keys = self.selected_model_keys()
         if not model_keys:
-            missing.append("regression model")
+            setup_instructions.append("Select at least one regression model.")
 
         selector_keys = self.selected_selector_keys()
         if not selector_keys:
-            missing.append("feature selection method")
+            setup_instructions.append("Select at least one feature selection method.")
 
-        if missing:
-            missing_text = ", ".join(missing)
-            message = f"Cannot run regression: missing {missing_text}."
-            set_status_text(message)
+        if setup_instructions:
+            set_status_text("Complete regression setup.")
+            message = " ".join(setup_instructions)
             try:
-                toast_error(message, title="Regression failed", tab_key="regression")
+                toast_error(message, title="Regression", tab_key="regression")
             except Exception:
                 logger.warning("Exception in _on_run_clicked", exc_info=True)
             return

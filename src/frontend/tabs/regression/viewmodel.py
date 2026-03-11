@@ -571,6 +571,9 @@ class RegressionViewModel(QObject):
         input_payloads = [dict(p) for p in input_features]
         stratify_payload = dict(stratify_feature) if stratify_feature else None
 
+        if not input_payloads:
+            raise ValueError("Select at least one input feature")
+
         targets = [dict(t) for t in target_features if t]
         if not targets:
             raise ValueError("Select at least one target feature")
@@ -655,8 +658,10 @@ class RegressionViewModel(QObject):
             target_failures.append(f"{target_label}: no runs produced")
 
         if not all_runs:
-            detail = "; ".join(target_failures[:3]) if target_failures else "No runs were produced."
-            raise RuntimeError(f"Regression run produced no successful models. {detail}")
+            raise RuntimeError(
+                "Regression could not train any models. "
+                "Check your selected input and target features and verify data is available."
+            )
         return RegressionSummary(runs=all_runs)
 
     # ------------------------------------------------------------------
@@ -804,9 +809,10 @@ class RegressionViewModel(QObject):
             except Exception:
                 logger.warning("Exception in _handle_run_error", exc_info=True)
         else:
-            status_text = f"Regression failed: {text}"
+            user_text = self._friendly_error_text(text)
+            status_text = f"Regression failed: {user_text}"
             try:
-                toast_error(text, title="Regression failed", tab_key="regression")
+                toast_error(user_text, title="Regression failed", tab_key="regression")
             except Exception:
                 logger.warning("Exception in _handle_run_error", exc_info=True)
         self._handle_status_update(status_text)
@@ -872,6 +878,23 @@ class RegressionViewModel(QObject):
             get_log_view_model().log_message(message, level=lvl, origin="regression")
         except Exception:
             logger.warning("Exception in _log", exc_info=True)
+
+    @staticmethod
+    def _friendly_error_text(message: str) -> str:
+        text = str(message or "").strip()
+        if not text:
+            return "Review regression setup and try again."
+
+        lowered = text.lower()
+        if "at least one input feature" in lowered:
+            return "Select at least one input feature."
+        if "at least one target feature" in lowered:
+            return "Select at least one target feature."
+        if "no successful models" in lowered or "could not train any models" in lowered:
+            return "Adjust selected features or filters, then run regression again."
+        if "no data" in lowered or "data unavailable" in lowered:
+            return "Adjust filters or feature selections so regression data is available."
+        return text
 
     def _ensure_context_labels(self, run: RegressionRunResult, context: dict[str, object]) -> dict[str, object]:
         context = dict(context)
