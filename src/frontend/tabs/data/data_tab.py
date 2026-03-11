@@ -27,6 +27,7 @@ from frontend.utils.feature_details import (
 from ...widgets.panel import Panel
 from ...models.hybrid_pandas_model import DataFilters, HybridPandasModel
 from ...viewmodels.help_viewmodel import get_help_viewmodel
+from ...utils.file_dialog_history import get_dialog_directory, remember_dialog_path
 from .sidebar import Sidebar
 from .viewmodel import DataViewModel
 
@@ -954,14 +955,16 @@ class DataTab(TabWidget):
         self._import_dialog_active = True
         try:
             parent_win = self.window() or self
+            start_dir = str(get_dialog_directory(parent_win, "import", Path.cwd()))
             files, _ = QFileDialog.getOpenFileNames(
                 parent_win,
                 tr("Import data (CSV/XLSX)"),
-                str(Path.cwd()),
+                start_dir,
                 tr("Data files (*.csv *.xlsx *.xls);;All files (*.*)"),
             )
             if not files:
                 return
+            remember_dialog_path(parent_win, "import", files[0])
 
             base_opts = ImportOptions(system_name="DefaultSystem", dataset_name="DefaultDataset")
             try:

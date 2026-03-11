@@ -144,6 +144,16 @@ class SettingsModel(QObject):
         return self._settings_manager.default_log_db_path()
 
     # ------------------------------------------------------------------
+    # @ai(gpt-5, codex-cli, feature, 2026-03-11)
+    def get_file_dialog_directory(self, scope: str, fallback: Path | str | None = None) -> Path:
+        fallback_path = Path(fallback) if fallback is not None else None
+        return self._settings_manager.get_file_dialog_directory(scope, fallback_path)
+
+    # @ai(gpt-5, codex-cli, feature, 2026-03-11)
+    def set_file_dialog_directory(self, scope: str, path: Path | str) -> None:
+        self._settings_manager.set_file_dialog_directory(scope, path)
+
+    # ------------------------------------------------------------------
     @property
     def log_sources(self) -> list[str]:
         return list(self._log_sources)

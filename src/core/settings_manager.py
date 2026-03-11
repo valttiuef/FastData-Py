@@ -147,6 +147,22 @@ class SettingsManager:
     def set_language(self, language: str) -> None:
         code = str(language or "en").lower()
         self.settings.setValue("language", code if code in {"en", "fi"} else "en")
+
+    # @ai(gpt-5, codex-cli, feature, 2026-03-11)
+    def get_file_dialog_directory(self, scope: str, fallback: Path | None = None) -> Path:
+        key = f"file_dialog_dir/{str(scope or 'default').strip().lower() or 'default'}"
+        value = self.settings.value(key, "")
+        if value:
+            return Path(str(value))
+        return Path(fallback) if fallback is not None else Path.cwd()
+
+    # @ai(gpt-5, codex-cli, feature, 2026-03-11)
+    def set_file_dialog_directory(self, scope: str, path: Path | str) -> None:
+        candidate = Path(path)
+        directory = candidate if candidate.is_dir() else candidate.parent
+        key = f"file_dialog_dir/{str(scope or 'default').strip().lower() or 'default'}"
+        self.settings.setValue(key, str(directory))
+
     def get_openai_api_key(self) -> str:
         return load_secret(self._secret_service, "openai_api_key") or ""
 

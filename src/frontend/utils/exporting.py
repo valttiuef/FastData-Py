@@ -10,6 +10,7 @@ from openpyxl.chart import BarChart, LineChart, Reference, ScatterChart, Series
 from openpyxl.chart.marker import Marker
 
 from ..localization import tr
+from .file_dialog_history import get_dialog_directory, remember_dialog_path
 import logging
 
 logger = logging.getLogger(__name__)
@@ -58,10 +59,11 @@ def prepare_dataframes_export_plan(
     clean = {name: (df if isinstance(df, pd.DataFrame) else pd.DataFrame(df)) for name, df in datasets.items()}
     mode = str(selected_format or "csv").lower()
     if mode == "excel":
+        suggested = get_dialog_directory(parent, "export", Path.cwd()) / f"{_slugify(title)}.xlsx"
         path, _ = QFileDialog.getSaveFileName(
             parent,
             title,
-            _slugify(title) + ".xlsx",
+            str(suggested),
             tr("Excel files (*.xlsx);;All files (*.*)"),
         )
         if not path:
@@ -69,12 +71,14 @@ def prepare_dataframes_export_plan(
         dest = Path(path)
         if dest.suffix.lower() != ".xlsx":
             dest = dest.with_suffix(".xlsx")
+        remember_dialog_path(parent, "export", dest)
         return ExportPlan(kind="dataframes", selected_format=mode, destination=dest, datasets=clean)
 
+    suggested = get_dialog_directory(parent, "export", Path.cwd()) / f"{_slugify(title)}.csv"
     path, _ = QFileDialog.getSaveFileName(
         parent,
         title,
-        _slugify(title) + ".csv",
+        str(suggested),
         tr("CSV files (*.csv);;All files (*.*)"),
     )
     if not path:
@@ -82,6 +86,7 @@ def prepare_dataframes_export_plan(
     dest = Path(path)
     if dest.suffix.lower() != ".csv":
         dest = dest.with_suffix(".csv")
+    remember_dialog_path(parent, "export", dest)
     return ExportPlan(kind="dataframes", selected_format=mode, destination=dest, datasets=clean)
 
 
@@ -98,10 +103,11 @@ def prepare_charts_excel_export_plan(
 ) -> ExportPlan | None:
     if not datasets:
         return None
+    suggested = get_dialog_directory(parent, "export", Path.cwd()) / f"{_slugify(title)}.xlsx"
     path, _ = QFileDialog.getSaveFileName(
         parent,
         title,
-        _slugify(title) + ".xlsx",
+        str(suggested),
         tr("Excel files (*.xlsx);;All files (*.*)"),
     )
     if not path:
@@ -109,6 +115,7 @@ def prepare_charts_excel_export_plan(
     dest = Path(path)
     if dest.suffix.lower() != ".xlsx":
         dest = dest.with_suffix(".xlsx")
+    remember_dialog_path(parent, "export", dest)
     clean = {name: (df if isinstance(df, pd.DataFrame) else pd.DataFrame(df)) for name, df in datasets.items()}
     return ExportPlan(
         kind="charts_excel",

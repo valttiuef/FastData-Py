@@ -52,6 +52,7 @@ from ..tabs import add_tab_with_help
 from ..tabs.tab_modules import get_runtime_tab_modules
 from ..threading import run_in_main_thread, run_in_thread, stop_all_worker_threads
 from ..utils import register_main_window, unregister_main_window
+from ..utils.file_dialog_history import get_dialog_directory, remember_dialog_path
 from .log_window import LogWindow
 from .chat_window import ChatWindow
 from .about_window import AboutWindow
@@ -495,22 +496,30 @@ class MainWindow(QMainWindow):
 
     def _ask_for_db_file(self, caption: str = "Select database file") -> str | None:
         caption = self.tr(caption)
+        fallback_dir = Path(self.database_model.path).parent
+        start_dir = str(get_dialog_directory(self, "database", fallback_dir))
         fn, _f = QFileDialog.getOpenFileName(
             self,
             caption,
-            "",
+            start_dir,
             self.tr("Measurement data files (*.duckdb *.db *.duckdb3);;All Files (*)"),
         )
+        if fn:
+            remember_dialog_path(self, "database", fn)
         return fn or None
 
     def _ask_for_selection_db_file(self, caption: str = "Select selection settings file") -> str | None:
         caption = self.tr(caption)
+        fallback_dir = Path(self.database_model.selection_settings_path).parent
+        start_dir = str(get_dialog_directory(self, "database", fallback_dir))
         fn, _f = QFileDialog.getOpenFileName(
             self,
             caption,
-            "",
+            start_dir,
             self.tr("Database Files (*.db);;All Files (*)"),
         )
+        if fn:
+            remember_dialog_path(self, "database", fn)
         return fn or None
 
     def _run_db_task(
@@ -571,7 +580,7 @@ class MainWindow(QMainWindow):
         )
 
     def new_database(self):
-        start = str(self.database_model.path)
+        start = str(get_dialog_directory(self, "database", Path(self.database_model.path).parent))
         path, _ = QFileDialog.getSaveFileName(
             self,
             self.tr("Create new database"),
@@ -580,6 +589,7 @@ class MainWindow(QMainWindow):
         )
         if not path:
             return
+        remember_dialog_path(self, "database", path)
         target = Path(path)
         try:
             self._release_database_handles()
@@ -633,7 +643,7 @@ class MainWindow(QMainWindow):
 
     def save_database_as(self):
         curp = Path(self.database_model.path)
-        start = str(curp)
+        start = str(get_dialog_directory(self, "database", curp.parent))
         dest, _ = QFileDialog.getSaveFileName(
             self,
             self.tr("Save database as"),
@@ -642,6 +652,7 @@ class MainWindow(QMainWindow):
         )
         if not dest:
             return
+        remember_dialog_path(self, "database", dest)
         destp = Path(dest)
         try:
             self._release_database_handles()
@@ -714,7 +725,7 @@ class MainWindow(QMainWindow):
 
     def save_selection_settings_database_as(self):
         curp = Path(self.database_model.selection_settings_path)
-        start = str(curp)
+        start = str(get_dialog_directory(self, "database", curp.parent))
         dest, _ = QFileDialog.getSaveFileName(
             self,
             self.tr("Save selection settings as"),
@@ -723,6 +734,7 @@ class MainWindow(QMainWindow):
         )
         if not dest:
             return
+        remember_dialog_path(self, "database", dest)
         destp = Path(dest)
 
         def _worker():

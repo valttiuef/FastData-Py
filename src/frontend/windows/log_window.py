@@ -28,6 +28,7 @@ from ..localization import tr
 from ..models.log_model import LogEvent
 from ..models.settings_model import SettingsModel
 from ..viewmodels import LogViewModel
+from ..utils.file_dialog_history import get_dialog_directory, remember_dialog_path
 from ..widgets.collapsible_section import CollapsibleSection
 from ..widgets.multi_check_combo import MultiCheckCombo
 
@@ -275,7 +276,13 @@ class LogWindow(QWidget):
         self._reset_log_database()
 
     def _load_log_database(self) -> None:
-        start_dir = str(self._settings_model.log_database_path)
+        start_dir = str(
+            get_dialog_directory(
+                self,
+                "database",
+                Path(self._settings_model.log_database_path).parent,
+            )
+        )
         path_str, _ = QFileDialog.getOpenFileName(
             self,
             tr("Open log database"),
@@ -289,6 +296,7 @@ class LogWindow(QWidget):
             self._prepare_for_storage_change()
             target = Path(path_str)
             self._view_model.set_log_database(target)
+            remember_dialog_path(self, "database", target)
         except Exception as exc:  # pragma: no cover - UI guard
             self._show_storage_error(tr("Failed to load log database"), exc)
             return
@@ -299,7 +307,13 @@ class LogWindow(QWidget):
         )
 
     def _save_log_database_as(self) -> None:
-        start_dir = str(self._settings_model.log_database_path)
+        start_dir = str(
+            get_dialog_directory(
+                self,
+                "database",
+                Path(self._settings_model.log_database_path).parent,
+            )
+        )
         path_str, _ = QFileDialog.getSaveFileName(
             self,
             tr("Save log database as"),
@@ -313,6 +327,7 @@ class LogWindow(QWidget):
             self._prepare_for_storage_change()
             target = Path(path_str)
             new_path = self._view_model.save_log_database_as(target)
+            remember_dialog_path(self, "database", new_path)
         except Exception as exc:  # pragma: no cover - UI guard
             self._show_storage_error(tr("Failed to save log database"), exc)
             return
