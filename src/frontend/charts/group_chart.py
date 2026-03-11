@@ -1,5 +1,6 @@
 from __future__ import annotations
 import logging
+import math
 
 logger = logging.getLogger(__name__)
 # frontend/charts/group_chart.py
@@ -9,8 +10,8 @@ from typing import List, Optional
 
 import pandas as pd
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QPainter, QPen, QBrush, QColor, QCursor, QPalette
+from PySide6.QtCore import Qt, Signal, QMargins
+from PySide6.QtGui import QPainter, QPen, QBrush, QColor, QCursor, QPalette, QFont, QFontMetrics
 from PySide6.QtCharts import (
     QChart, QChartView, QBarSeries, QBarSet, QBarCategoryAxis, QValueAxis
 )
@@ -19,6 +20,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QVBoxLayout,
     QToolTip,
+    QGraphicsSimpleTextItem,
 )
 from ..localization import tr
 
@@ -128,6 +130,9 @@ class GroupBarChart(QFrame):
         # State
         self._categories: List[str] = []
         self._values: List[float] = []
+        self._axis_categories_raw: List[str] = []
+        self._axis_label_items: List[QGraphicsSimpleTextItem] = []
+        self._hover_cursor_enabled: bool = False
         self._hover_idx: Optional[int] = None
         self._connected_barsets = set()
         self._single_series_name: str = tr("Value")
@@ -152,6 +157,10 @@ class GroupBarChart(QFrame):
 
         # Connect hover/click signals
         self._connect_signals()
+        try:
+            self.chart.plotAreaChanged.connect(self._refresh_sparse_axis_label_overlays)
+        except Exception:
+            logger.warning("Failed to connect plot-area change handler for group chart labels.", exc_info=True)
 
     def _on_theme_changed(self, theme_name: str):
         self._current_theme = theme_name
@@ -167,6 +176,12 @@ class GroupBarChart(QFrame):
         self._chart_colors = colors
         self._dark_theme = is_dark_color(colors.plot_bg)
         apply_chart_background(self.chart, colors)
+        # Reserve extra room for custom sparse X-label overlays so they align
+        # visually with timeline axis labels and do not sit against the bottom edge.
+        try:
+            self.chart.setMargins(QMargins(6, 6, 6, 24))
+        except Exception:
+            logger.warning("Failed to set custom chart margins for group chart.", exc_info=True)
         style_axis(self.axis_x, colors)
         style_axis(self.axis_y, colors)
         style_legend(self.chart.legend(), colors)
@@ -219,6 +234,7 @@ class GroupBarChart(QFrame):
             bar_set.setPen(QPen(QColor(color).darker(110 if not self._dark_theme else 140)))
 
         self.axis_x.setLabelsAngle(-45)
+        self._refresh_sparse_axis_label_overlays()
 
         try:
             scene = self.chart.scene()
@@ -265,6 +281,8 @@ class GroupBarChart(QFrame):
         self.axis_y.setRange(0.0, 1.0)
         self._categories.clear()
         self._values.clear()
+        self._axis_categories_raw.clear()
+        self._clear_sparse_axis_label_overlays()
         self._tooltip_overrides.clear()
         if request_repaint:
             try:
@@ -327,13 +345,7 @@ class GroupBarChart(QFrame):
 
         # Set categories
         self.axis_x.setVisible(True)
-        self.axis_x.append([_short_label(c, 20) for c in self._categories])
-        try:
-            self.axis_x.setLabelsVisible(True)
-            self.axis_x.setGridLineVisible(True)
-            self.axis_x.setMinorGridLineVisible(True)
-        except Exception:
-            logger.warning("Failed to restore X-axis visibility while rendering group chart data.", exc_info=True)
+        self._set_axis_categories(self._categories)
 
         # Set Y range
         if self._values:
@@ -456,13 +468,7 @@ class GroupBarChart(QFrame):
         
         # Set categories
         self.axis_x.setVisible(True)
-        self.axis_x.append([_short_label(c, 20) for c in self._categories])
-        try:
-            self.axis_x.setLabelsVisible(True)
-            self.axis_x.setGridLineVisible(True)
-            self.axis_x.setMinorGridLineVisible(True)
-        except Exception:
-            logger.warning("Failed to restore X-axis visibility while rendering multi-series group chart.", exc_info=True)
+        self._set_axis_categories(self._categories)
         
         # Update Y range
         all_values = []
@@ -497,6 +503,117 @@ class GroupBarChart(QFrame):
         """Get a list of colors for multiple series."""
         return group_color_cycle(count, dark_theme=self._dark_theme)
 
+    # @ai(gpt-5, codex, ui-fix, 2026-03-11)
+    def set_hover_cursor_enabled(self, enabled: bool) -> None:
+        """Enable hand-cursor feedback on hover for clickable bar charts."""
+        self._hover_cursor_enabled = bool(enabled)
+        if not self._hover_cursor_enabled:
+            try:
+                self.view.setCursor(Qt.CursorShape.ArrowCursor)
+            except Exception:
+                logger.warning("Failed to reset chart-view cursor while disabling hover cursor.", exc_info=True)
+            try:
+                self.view.viewport().setCursor(Qt.CursorShape.ArrowCursor)
+            except Exception:
+                logger.warning("Failed to reset chart viewport cursor while disabling hover cursor.", exc_info=True)
+
+    def _set_chart_cursor(self, shape: Qt.CursorShape) -> None:
+        """Apply cursor to both chart view and viewport for reliable updates."""
+        if not self._hover_cursor_enabled:
+            return
+        try:
+            self.view.setCursor(shape)
+        except Exception:
+            logger.warning("Failed to set chart-view cursor shape.", exc_info=True)
+        try:
+            self.view.viewport().setCursor(shape)
+        except Exception:
+            logger.warning("Failed to set chart viewport cursor shape.", exc_info=True)
+
+    def _set_axis_categories(self, categories: List[str]) -> None:
+        self._axis_categories_raw = [str(c) for c in categories]
+        self.axis_x.clear()
+        self.axis_x.append([_short_label(c, 20) for c in self._axis_categories_raw])
+        try:
+            # Hide dense native labels and render sparse overlays to keep
+            # category indexing stable for hover/click interactions.
+            self.axis_x.setLabelsVisible(False)
+            self.axis_x.setGridLineVisible(True)
+            self.axis_x.setMinorGridLineVisible(True)
+        except Exception:
+            logger.warning("Failed to set group chart axis categories.", exc_info=True)
+        self._refresh_sparse_axis_label_overlays()
+
+    def _clear_sparse_axis_label_overlays(self) -> None:
+        scene = self.chart.scene()
+        for item in self._axis_label_items:
+            try:
+                if scene is not None:
+                    scene.removeItem(item)
+            except Exception:
+                logger.warning("Failed to remove sparse axis label overlay item.", exc_info=True)
+        self._axis_label_items = []
+
+    def _refresh_sparse_axis_label_overlays(self, *_args) -> None:
+        self._clear_sparse_axis_label_overlays()
+        categories = self._axis_categories_raw
+        if not categories:
+            return
+        scene = self.chart.scene()
+        if scene is None:
+            return
+        plot = self.chart.plotArea()
+        if not plot.isValid() or plot.width() <= 1:
+            return
+
+        count = len(categories)
+        if count <= 0:
+            return
+        plot_width = float(plot.width())
+
+        longest_label = max((len(str(c)) for c in categories), default=1)
+        target_px_per_label = max(42.0, min(150.0, 14.0 + longest_label * 6.0))
+        max_visible_labels = max(1, int(plot_width / target_px_per_label))
+        stride = max(1, int(math.ceil(count / max_visible_labels)))
+        compact_len = 14 if stride > 1 else 20
+
+        text_color = QColor(self._chart_colors.text) if self._chart_colors is not None else QColor(110, 110, 110)
+        try:
+            font = QFont(self.axis_x.labelsFont())
+        except Exception:
+            font = QFont()
+        if font.pointSizeF() <= 0:
+            font.setPointSize(9)
+        metrics = QFontMetrics(font)
+        label_height = float(max(10, metrics.height()))
+        viewport_h = float(max(16, self.view.viewport().height()))
+        bottom_padding_px = 6.0
+        y = float(min(plot.bottom() + 8.0, viewport_h - label_height - bottom_padding_px))
+        min_label_gap_px = 4.0
+        last_label_right = float("-inf")
+
+        for idx, category in enumerate(categories):
+            show = (idx % stride == 0) or ((idx == count - 1) and max_visible_labels > 1)
+            if not show:
+                continue
+            label = _short_label(category, compact_len)
+            item = QGraphicsSimpleTextItem(label)
+            item.setFont(font)
+            item.setBrush(QBrush(text_color))
+            # Keep overlays visual-only so they never intercept hover/click on bars.
+            item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+            item.setAcceptHoverEvents(False)
+            bounds = item.boundingRect()
+            center_x = float(plot.left() + (idx + 0.5) * (plot.width() / max(1, count)))
+            x = center_x - bounds.width() / 2.0
+            x = max(float(plot.left()), min(float(plot.right() - bounds.width()), x))
+            if x <= (last_label_right + min_label_gap_px):
+                continue
+            item.setPos(x, y)
+            scene.addItem(item)
+            self._axis_label_items.append(item)
+            last_label_right = x + float(bounds.width())
+
     def _make_click_handler(self, series_name: str):
         """Create a click handler for a specific series."""
         def handler(index: int):
@@ -522,10 +639,7 @@ class GroupBarChart(QFrame):
         def handler(status: bool, index: int):
             if not status:
                 QToolTip.hideText()
-                try:
-                    self.view.setCursor(Qt.CursorShape.ArrowCursor)
-                except Exception:
-                    logger.warning("Failed to display tooltip while handling group-bar hover.", exc_info=True)
+                self._set_chart_cursor(Qt.CursorShape.ArrowCursor)
                 return
 
             if index < 0 or index >= len(categories):
@@ -533,10 +647,7 @@ class GroupBarChart(QFrame):
 
             category = categories[index]
             value = values[index] if index < len(values) else 0.0
-            try:
-                self.view.setCursor(Qt.CursorShape.PointingHandCursor)
-            except Exception:
-                logger.warning("Failed to emit bar-click signal for group chart.", exc_info=True)
+            self._set_chart_cursor(Qt.CursorShape.PointingHandCursor)
             extra = self._tooltip_overrides.get((str(series_key), str(category)), "")
             try:
                 QToolTip.showText(
@@ -557,7 +668,7 @@ class GroupBarChart(QFrame):
     def _on_set_hovered(self, status: bool, index: int):
         """Handle bar hover events."""
         self._hover_idx = index if status else None
-        self.view.setCursor(Qt.CursorShape.PointingHandCursor if status else Qt.CursorShape.ArrowCursor)
+        self._set_chart_cursor(Qt.CursorShape.PointingHandCursor if status else Qt.CursorShape.ArrowCursor)
         
         if not status:
             QToolTip.hideText()

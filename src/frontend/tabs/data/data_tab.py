@@ -437,9 +437,14 @@ class DataTab(TabWidget):
             self._view_model.set_view_window(start_ts, end_ts)
             series_df = self._view_model.series_for_chart()
             self.timeseries_chart.set_dataframe(series_df)
+            try:
+                display_end = self._chart_display_end(pd.Timestamp(start_ts), pd.Timestamp(end_ts))
+                self.timeseries_chart.set_x_range(pd.Timestamp(start_ts), display_end)
+            except Exception:
+                logger.warning("Failed to apply exclusive-end viewport for hourly bucket selection.", exc_info=True)
             flt = self._build_filters()
             if flt:
-                self._set_monthly_chart_title(flt)
+                self._set_monthly_chart_title(flt.clone_with_range(start_ts, end_ts))
                 self.data_info.setText(
                     self._build_data_info_text(flt, start_ts, end_ts, rows=len(series_df))
                 )
@@ -526,6 +531,7 @@ class DataTab(TabWidget):
         # info line
         flt = self._build_filters()
         if flt:
+            self._set_monthly_chart_title(flt.clone_with_range(start_ts, end_ts))
             self.data_info.setText(
                 self._build_data_info_text(flt, start_ts, end_ts, rows=len(series_df))
             )
@@ -567,6 +573,27 @@ class DataTab(TabWidget):
         s_qdt = _to_qdt(s)
         e_qdt = _to_qdt(e)
         self.sidebar.set_date_range_controls(s_qdt, e_qdt)
+
+    def _chart_display_end(self, start_ts: pd.Timestamp, end_ts: pd.Timestamp) -> pd.Timestamp:
+        """Return a chart-only right edge that respects exclusive filter end bounds."""
+        try:
+            s = pd.Timestamp(start_ts)
+            e = pd.Timestamp(end_ts)
+        except Exception:
+            return pd.Timestamp(end_ts)
+        if e <= s:
+            return e
+        is_midnight = (
+            e.hour == 0
+            and e.minute == 0
+            and e.second == 0
+            and e.microsecond == 0
+        )
+        if is_midnight and (e - s) >= pd.Timedelta(days=1):
+            # Keep data/query end exclusive (< end) and avoid showing next-day
+            # midnight as the last X-axis label for full-day/month ranges.
+            return e - pd.Timedelta(milliseconds=1)
+        return e
 
     # --- reload plumbing
     def _maybe_reload(self, *args):
@@ -862,7 +889,8 @@ class DataTab(TabWidget):
         self.timeseries_chart.set_dataframe(series_df)
         if effective_start is not None and effective_end is not None:
             try:
-                self.timeseries_chart.set_x_range(pd.Timestamp(effective_start), pd.Timestamp(effective_end))
+                display_end = self._chart_display_end(pd.Timestamp(effective_start), pd.Timestamp(effective_end))
+                self.timeseries_chart.set_x_range(pd.Timestamp(effective_start), display_end)
             except Exception:
                 logger.warning("Failed to restore requested X-range after reload.", exc_info=True)
         title_filters = flt.clone_with_range(effective_start, effective_end)

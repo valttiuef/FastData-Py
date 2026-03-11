@@ -1448,15 +1448,15 @@ class DataSelectorWidget(QGroupBox):
             display_start = None
             display_end = None
             if model is not None and filters is not None:
-                try:
-                    # Show the true data bounds for the selected features, regardless of UI time filters.
-                    bounds_filters = filters.clone_with_range(None, None)
-                    display_start, display_end = model.time_bounds(bounds_filters)
-                except Exception:
-                    display_start, display_end = None, None
+                # Keep details timeframe aligned with the active data selection/view.
+                display_start = filters.start
+                display_end = filters.end
                 if display_start is None and display_end is None:
-                    display_start = filters.start
-                    display_end = filters.end
+                    try:
+                        bounds_filters = filters.clone_with_range(None, None)
+                        display_start, display_end = model.time_bounds(bounds_filters)
+                    except Exception:
+                        display_start, display_end = None, None
                 try:
                     return prefix + _build_feature_summary_text(
                         model,

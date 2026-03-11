@@ -70,6 +70,7 @@ class MonthlyBarChart(GroupBarChart):
         self._zero_line_item = None
         self._multi_mode = False
         super().__init__(title=title, parent=parent, y_label="Value")
+        self.set_hover_cursor_enabled(True)
         # keep a base title so we can append timeframe info when aggregation changes
         self._base_title = title
         self._append_timeframe_to_title = True
@@ -265,6 +266,8 @@ class MonthlyBarChart(GroupBarChart):
                 # above to avoid calling disconnect unnecessarily.
                 logger.warning("Failed to disconnect hover handler while clearing monthly chart bars.", exc_info=True)
             self.series.remove(s)
+        self._axis_categories_raw = []
+        self._clear_sparse_axis_label_overlays()
         self.axis_x.clear()
         if reset_axes:
             self.axis_x.setVisible(False)
@@ -289,10 +292,7 @@ class MonthlyBarChart(GroupBarChart):
         self._multi_categories = []
         self._multi_category_bounds = {}
         self._multi_current_agg = None
-        try:
-            self.view.setCursor(Qt.CursorShape.ArrowCursor)
-        except Exception:
-            logger.warning("Failed to reset cursor while clearing monthly chart.", exc_info=True)
+        self._set_chart_cursor(Qt.CursorShape.ArrowCursor)
         try:
             QToolTip.hideText()
         except Exception:
@@ -504,13 +504,7 @@ class MonthlyBarChart(GroupBarChart):
             bar.hovered.connect(self._on_set_hovered)
 
             self.axis_x.setVisible(True)
-            self.axis_x.append(self._cats)
-            try:
-                self.axis_x.setLabelsVisible(True)
-                self.axis_x.setGridLineVisible(True)
-                self.axis_x.setMinorGridLineVisible(True)
-            except Exception:
-                logger.warning("Failed to show X-axis labels after rendering monthly bars.", exc_info=True)
+            self._set_axis_categories(self._cats)
 
             # Y range
             if self._vals:
@@ -597,13 +591,7 @@ class MonthlyBarChart(GroupBarChart):
             )
 
             self.axis_x.setVisible(True)
-            self.axis_x.append(categories)
-            try:
-                self.axis_x.setLabelsVisible(True)
-                self.axis_x.setGridLineVisible(True)
-                self.axis_x.setMinorGridLineVisible(True)
-            except Exception:
-                logger.warning("Failed to show X-axis labels after rendering multi-series monthly bars.", exc_info=True)
+            self._set_axis_categories(categories)
 
             features = list(pivot.columns)
             colors = self._multi_bar_colors(len(features))
@@ -645,20 +633,14 @@ class MonthlyBarChart(GroupBarChart):
     def _on_multi_bar_hovered_factory(self, feature: str, values: list[float]):
         def handler(status: bool, index: int):
             if not status:
-                try:
-                    self.view.setCursor(Qt.CursorShape.ArrowCursor)
-                except Exception:
-                    logger.warning("Failed to reset cursor while handling multi-bar hover leave.", exc_info=True)
+                self._set_chart_cursor(Qt.CursorShape.ArrowCursor)
                 QToolTip.hideText()
                 return
             if index < 0 or index >= len(self._multi_categories):
                 return
             category = self._multi_categories[index]
             value = values[index] if index < len(values) else 0.0
-            try:
-                self.view.setCursor(Qt.CursorShape.PointingHandCursor)
-            except Exception:
-                logger.warning("Failed to display tooltip while handling multi-bar hover.", exc_info=True)
+            self._set_chart_cursor(Qt.CursorShape.PointingHandCursor)
             try:
                 QToolTip.showText(
                     QCursor.pos(),
@@ -739,7 +721,7 @@ class MonthlyBarChart(GroupBarChart):
         if self._multi_mode:
             return
         self._hover_idx = idx
-        self.view.setCursor(Qt.CursorShape.PointingHandCursor if idx is not None else Qt.CursorShape.ArrowCursor)
+        self._set_chart_cursor(Qt.CursorShape.PointingHandCursor if idx is not None else Qt.CursorShape.ArrowCursor)
         self._update_highlight()
         if idx is None:
             QToolTip.hideText(); return

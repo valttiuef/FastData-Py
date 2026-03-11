@@ -189,6 +189,7 @@ class ChartCard(Panel):
         elif chart_type == "correlation_bar":
             self._chart_widget = GroupBarChart(title=tr("Feature correlations"), parent=self, y_label=tr("Correlation"))
             if isinstance(self._chart_widget, GroupBarChart):
+                self._chart_widget.set_hover_cursor_enabled(True)
                 self._chart_widget.category_selected.connect(self._on_group_bar_category_selected)
         elif chart_type == "scatter2d":
             self._chart_widget = ScatterChart(parent=self)
