@@ -2186,13 +2186,39 @@ class DatabaseModel(QObject):
                             fallback_frame = mapped[mapped["import_id"].isna()][["ts", "value"]].copy()
 
             if fallback_frame is not None and not fallback_frame.empty:
-                # If some rows are already mapped to source imports, write unmapped rows
-                # once to a synthetic import tied to the first target dataset.
-                fallback_targets = import_targets if not measurement_parts else [import_targets[0]]
-                for system_id, dataset_id in fallback_targets:
+                def _get_or_create_predictions_import_id(*, dataset_id: int, row_count: int) -> int:
+                    existing = con.execute(
+                        """
+                        SELECT id
+                        FROM imports
+                        WHERE dataset_id = ?
+                          AND file_path = 'predictions'
+                          AND file_name = 'predictions'
+                          AND sheet_name IS NULL
+                        ORDER BY id ASC
+                        LIMIT 1
+                        """,
+                        [int(dataset_id)],
+                    ).fetchone()
+                    if existing and existing[0] is not None:
+                        import_id = int(existing[0])
+                        count = int(row_count)
+                        con.execute(
+                            """
+                            UPDATE imports
+                            SET row_count = CASE
+                                WHEN row_count IS NULL OR row_count < ? THEN ?
+                                ELSE row_count
+                            END
+                            WHERE id = ?;
+                            """,
+                            [count, count, import_id],
+                        )
+                        return import_id
+
                     new_import_id = db.imports_repo.next_id(con)
                     synthetic_sha = hashlib.sha256(
-                        f"predictions|{feature_id}|{dataset_id}|{new_import_id}".encode("utf-8")
+                        f"predictions|{int(dataset_id)}".encode("utf-8")
                     ).hexdigest()
                     db.imports_repo.insert(
                         con,
@@ -2203,12 +2229,22 @@ class DatabaseModel(QObject):
                         sheet_name=None,
                         dataset_id=int(dataset_id),
                         header_rows=0,
+                        row_count=int(row_count),
+                    )
+                    return int(new_import_id)
+
+                # If some rows are already mapped to source imports, write unmapped rows
+                # once to a synthetic import tied to the first target dataset.
+                fallback_targets = import_targets if not measurement_parts else [import_targets[0]]
+                for system_id, dataset_id in fallback_targets:
+                    predictions_import_id = _get_or_create_predictions_import_id(
+                        dataset_id=int(dataset_id),
                         row_count=int(len(fallback_frame)),
                     )
                     part = fallback_frame.copy()
                     part["dataset_id"] = int(dataset_id)
                     part["feature_id"] = int(feature_id)
-                    part["import_id"] = int(new_import_id)
+                    part["import_id"] = int(predictions_import_id)
                     measurement_parts.append(
                         part[["dataset_id", "ts", "feature_id", "value", "import_id"]]
                     )
@@ -2218,7 +2254,7 @@ class DatabaseModel(QObject):
                                 {
                                     "system_id": int(system_id),
                                     "dataset_id": int(dataset_id),
-                                    "import_id": int(new_import_id),
+                                    "import_id": int(predictions_import_id),
                                 }
                             ]
                         )

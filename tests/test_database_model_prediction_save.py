@@ -154,3 +154,62 @@ def test_save_feature_with_measurements_inherits_source_import_scope(tmp_path: P
         assert new_feature_id in set(scoped_features["feature_id"].astype(int).tolist())
     finally:
         model._close_database()
+
+
+def test_save_feature_with_measurements_reuses_predictions_import(tmp_path: Path) -> None:
+    database_path = tmp_path / "prediction-reuse-import.duckdb"
+    settings = SettingsModel(
+        organization="FastDataTests",
+        application="FastDataPredictionImportReuse",
+    )
+    settings.set_database_path(database_path)
+    model = DatabaseModel(settings)
+    try:
+        rows_a = pd.DataFrame(
+            {
+                "ts": pd.to_datetime(["2026-01-01 00:00:00", "2026-01-01 01:00:00"]),
+                "value": [1.0, 2.0],
+            }
+        )
+        result_a = model.save_feature_with_measurements(
+            feature={"name": "predictions_a", "source": "regression"},
+            measurements=rows_a,
+        )
+        feature_a = int(result_a["feature"]["feature_id"])
+
+        rows_b = pd.DataFrame(
+            {
+                "ts": pd.to_datetime(["2026-01-01 02:00:00", "2026-01-01 03:00:00"]),
+                "value": [3.0, 4.0],
+            }
+        )
+        result_b = model.save_feature_with_measurements(
+            feature={"name": "predictions_b", "source": "regression"},
+            measurements=rows_b,
+        )
+        feature_b = int(result_b["feature"]["feature_id"])
+
+        with model.db.connection() as con:
+            import_rows = con.execute(
+                """
+                SELECT id
+                FROM imports
+                WHERE file_path = 'predictions' AND file_name = 'predictions'
+                ORDER BY id ASC
+                """
+            ).fetchall()
+            mapped_rows = con.execute(
+                """
+                SELECT DISTINCT import_id
+                FROM feature_import_map
+                WHERE feature_id IN (?, ?)
+                ORDER BY import_id ASC
+                """,
+                [feature_a, feature_b],
+            ).fetchall()
+    finally:
+        model._close_database()
+
+    assert len(import_rows) == 1
+    assert len(mapped_rows) == 1
+    assert int(mapped_rows[0][0]) == int(import_rows[0][0])
