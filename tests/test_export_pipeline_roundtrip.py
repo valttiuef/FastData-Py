@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+from openpyxl import Workbook, load_workbook
 
 SRC_DIR = Path(__file__).parent.parent / "src"
 if str(SRC_DIR) not in sys.path:
@@ -13,7 +14,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from backend.data_db.database import Database
 from backend.models import ImportOptions
-from frontend.utils.exporting import ExportPlan, execute_export_plan
+import frontend.utils.exporting as exporting_module
+from frontend.utils.exporting import ExportPlan, _add_excel_chart, execute_export_plan
 
 
 def test_execute_export_plan_writes_split_csv_files(tmp_path: Path) -> None:
@@ -99,3 +101,209 @@ def test_import_to_export_pipeline_roundtrip_keeps_selected_values(tmp_path: Pat
         assert float(loaded["Value"].mean()) == pytest.approx(float(export_frame["Value"].mean()))
     finally:
         db.close()
+
+
+def test_chart_export_unsupported_specs_fall_back_to_data_without_offset(tmp_path: Path) -> None:
+    destination = tmp_path / "charts_fallback.xlsx"
+    frame = pd.DataFrame(
+        {
+            "X": [1.0, 2.0],
+            "Y": [3.0, 4.0],
+            "Z": [5.0, 6.0],
+        }
+    )
+    plan = ExportPlan(
+        kind="charts_excel",
+        selected_format="excel",
+        destination=destination,
+        datasets={"Scatter 3D": frame},
+        chart_specs={},
+        include_charts=True,
+        include_data=True,
+        chart_first=True,
+    )
+    outcome = execute_export_plan(plan)
+
+    assert outcome.ok
+    loaded = pd.read_excel(destination, sheet_name="Scatter 3D")
+    assert list(loaded.columns) == ["X", "Y", "Z"]
+    assert len(loaded.index) == 2
+
+
+def test_add_excel_monthly_chart_sets_non_overlay_title_and_negative_fill_behavior() -> None:
+    frame = pd.DataFrame(
+        {
+            "Period": ["2026-01", "2026-02"],
+            "Value": [12.0, -4.0],
+        }
+    )
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Chart"
+    sheet.append(["Period", "Value"])
+    sheet.append(["2026-01", 12.0])
+    sheet.append(["2026-02", -4.0])
+
+    _add_excel_chart(
+        sheet,
+        frame,
+        {
+            "type": "monthly",
+            "x_column": "Period",
+            "y_columns": ["Value"],
+            "title": "Monthly",
+        },
+        data_sheet=sheet,
+        data_start_row=1,
+        chart_anchor="A1",
+    )
+
+    assert len(sheet._charts) == 1
+    chart = sheet._charts[0]
+    assert getattr(chart.title, "overlay", None) is False
+    assert chart.legend is not None
+    assert chart.legend.position == "r"
+    assert chart.legend.overlay is False
+    assert bool(chart.series)
+    assert chart.series[0].invertIfNegative is False
+
+
+def test_add_excel_time_series_chart_sets_non_overlay_right_legend() -> None:
+    frame = pd.DataFrame(
+        {
+            "t": pd.to_datetime(["2026-01-01", "2026-01-02"]),
+            "A": [1.0, 2.0],
+            "B": [3.0, 4.0],
+        }
+    )
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Series"
+    sheet.append(["t", "A", "B"])
+    sheet.append([pd.Timestamp("2026-01-01"), 1.0, 3.0])
+    sheet.append([pd.Timestamp("2026-01-02"), 2.0, 4.0])
+
+    _add_excel_chart(
+        sheet,
+        frame,
+        {
+            "type": "time_series",
+            "x_column": "t",
+            "y_columns": ["A", "B"],
+            "title": "Series",
+        },
+        data_sheet=sheet,
+        data_start_row=1,
+        chart_anchor="A1",
+    )
+
+    assert len(sheet._charts) == 1
+    chart = sheet._charts[0]
+    assert getattr(chart.title, "overlay", None) is False
+    assert chart.legend is not None
+    assert chart.legend.position == "r"
+    assert chart.legend.overlay is False
+
+
+def test_add_excel_scatter_chart_hides_legend() -> None:
+    frame = pd.DataFrame(
+        {
+            "X": [1.0, 2.0, 3.0],
+            "Y": [2.0, 3.0, 4.0],
+        }
+    )
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Scatter"
+    sheet.append(["X", "Y"])
+    sheet.append([1.0, 2.0])
+    sheet.append([2.0, 3.0])
+    sheet.append([3.0, 4.0])
+
+    _add_excel_chart(
+        sheet,
+        frame,
+        {
+            "type": "scatter",
+            "x_column": "X",
+            "y_columns": ["Y"],
+            "title": "Scatter",
+        },
+        data_sheet=sheet,
+        data_start_row=1,
+        chart_anchor="A1",
+    )
+
+    assert len(sheet._charts) == 1
+    chart = sheet._charts[0]
+    assert chart.legend is None
+
+
+def test_chart_export_supported_specs_keep_chart_first_data_offset(tmp_path: Path) -> None:
+    destination = tmp_path / "charts_supported.xlsx"
+    frame = pd.DataFrame(
+        {
+            "Period": ["2026-01", "2026-02"],
+            "Value": [1.0, 2.0],
+        }
+    )
+    plan = ExportPlan(
+        kind="charts_excel",
+        selected_format="excel",
+        destination=destination,
+        datasets={"Monthly": frame},
+        chart_specs={
+            "Monthly": {
+                "type": "monthly",
+                "x_column": "Period",
+                "y_columns": ["Value"],
+                "title": "Monthly",
+            }
+        },
+        include_charts=True,
+        include_data=True,
+        chart_first=True,
+    )
+    outcome = execute_export_plan(plan)
+
+    assert outcome.ok
+    workbook = load_workbook(destination)
+    sheet = workbook["Monthly"]
+    assert sheet["A1"].value is None
+    assert sheet["A20"].value == "Period"
+    assert len(sheet._charts) == 1
+
+
+def test_execute_export_plan_reports_file_in_use_cleanly(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    destination = tmp_path / "locked.xlsx"
+    frame = pd.DataFrame({"A": [1.0]})
+    plan = ExportPlan(
+        kind="dataframes",
+        selected_format="excel",
+        destination=destination,
+        datasets={"Data": frame},
+    )
+
+    monkeypatch.setattr(exporting_module, "_is_destination_writable", lambda _path: False)
+    outcome = execute_export_plan(plan)
+
+    assert not outcome.ok
+    assert "currently in use" in str(outcome.message).lower()
+
+
+def test_excel_export_autosizes_columns_for_long_headers(tmp_path: Path) -> None:
+    destination = tmp_path / "autosize.xlsx"
+    long_header = "Temperature sensor very long feature name"
+    frame = pd.DataFrame({long_header: [1.0, 2.0], "Short": [3.0, 4.0]})
+    plan = ExportPlan(
+        kind="dataframes",
+        selected_format="excel",
+        destination=destination,
+        datasets={"Data": frame},
+    )
+    outcome = execute_export_plan(plan)
+
+    assert outcome.ok
+    workbook = load_workbook(destination)
+    sheet = workbook["Data"]
+    assert float(sheet.column_dimensions["A"].width or 0.0) >= 20.0

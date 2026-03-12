@@ -1,32 +1,50 @@
 # FastData-Py – Industrial Process Data Analysis Desktop Application
 
+Full documentation:
+https://valttiuef.github.io/FastData-Py/
+
+Download latest release:
+https://github.com/valttiuef/FastData-Py/releases
+
+---
+
 <img src="resources/images/splash.png" width="150" alt="FastData-Py splash screen">
 
-**FastData-Py** is a Python-based desktop application for industrial process data analysis, visualization, and machine learning.  
-It is designed for engineers, researchers, and data scientists working with manufacturing, plant, and process datasets who require secure, local-first analytics without cloud dependency.
+FastData-Py is a Python-based desktop application for industrial process data analysis, visualization, and machine learning.
 
-Developed by Valtteri Tiitta at the University of Eastern Finland (UEF) as part of the project *Materials Solutions in the Green Transition – Visima* (co-financed by the European Union), FastData-Py modernizes and extends an earlier MATLAB-based workflow into a fully integrated Python environment.
+It is designed for engineers, researchers, and data scientists working with manufacturing, plant, and industrial process datasets who require secure, local-first analytics without cloud dependency.
+
+Developed by Valtteri Tiitta at the University of Eastern Finland (UEF) as part of the project
+Materials Solutions in the Green Transition – Visima (co-financed by the European Union), FastData-Py modernizes and extends an earlier MATLAB-based workflow into a fully integrated Python environment.
 
 The application combines:
 
 - Advanced statistical analysis (PCA, clustering, regression, time-series tools)
 - Self-Organizing Maps (SOM) for nonlinear process visualization
 - Interactive Qt (PySide6) desktop GUI
-- Embedded DuckDB/SQLite data storage
+- Embedded DuckDB / SQLite data storage
 - Optional large-language-model (LLM) assistance for contextual help
 
-## Local-First Architecture
+FastData-Py aims to provide a desktop-first alternative to cloud analytics tools for industrial environments where data confidentiality and security are critical.
 
-FastData-Py follows a **local-first architecture**:
+---
+
+# Local-First Architecture
+
+FastData-Py follows a local-first architecture:
 
 - All data storage, modeling, and visualization run on the user's machine.
 - No cloud backend is required.
 - Internet access is optional and only needed when using OpenAI as an LLM provider.
 - Fully offline usage is possible via local LLM backends such as Ollama.
 
-This makes FastData-Py suitable for industrial environments where data security, confidentiality, and compliance are critical.
+This makes FastData-Py suitable for industrial, research, and manufacturing environments where sensitive data cannot leave local infrastructure.
 
-## Typical Use Cases
+---
+
+# Typical Use Cases
+
+FastData-Py is designed for industrial and research data analysis workflows, including:
 
 - Industrial process monitoring and analysis
 - Manufacturing data exploration
@@ -35,73 +53,129 @@ This makes FastData-Py suitable for industrial environments where data security,
 - Self-Organizing Map visualization of complex systems
 - Local machine learning experimentation on sensitive datasets
 
-FastData-Py aims to provide a practical desktop alternative to cloud-based analytics platforms while maintaining modern data science capabilities in Python.
+The application focuses on interactive desktop analysis of process datasets while maintaining modern Python data science capabilities.
 
-## Key Capabilities
+---
 
-- **Process Data Management**  
-  Load CSV and Excel datasets and persist them into DuckDB or SQLite databases.  
-  Maintain a reproducible audit trail of analysis sessions through automatic logging.
+# Key Capabilities
 
-- **Statistical Analysis & Machine Learning**  
-  Perform PCA, clustering, regression, and time-series modeling using scikit-learn.  
-  Train and visualize Self-Organizing Maps (SOM) via MiniSom for nonlinear pattern discovery.
+## Process Data Management
 
-- **Interactive Desktop GUI**  
-  Modern PySide6 (Qt for Python) interface with tabs, dialogs, charts, theming, and contextual panels designed for desktop-first workflows.
+Load CSV and Excel datasets and persist them into DuckDB or SQLite databases.
 
-- **LLM Assist (Experimental)**  
-  Optional OpenAI or Ollama integration for contextual assistance and workflow guidance.  
-  Current implementation is lightweight and designed as a foundation for future dataset-aware LLM integration.
+FastData-Py maintains a reproducible audit trail of analysis sessions through automatic logging and structured data storage.
 
-- **Integrated Contextual Help System**  
-  Structured YAML/JSON help files (`resources/help`) rendered directly inside the application.  
-  Documentation can be generated from these files using `scripts/build_help_docs.py`.
+---
 
-## GUI
+## Statistical Analysis & Machine Learning
 
-### Data
+Perform statistical and machine learning analysis using scikit-learn, including:
+
+- PCA
+- clustering
+- regression
+- time-series modeling
+
+Self-Organizing Maps are implemented using MiniSom, enabling nonlinear visualization of complex industrial systems.
+
+---
+
+## Interactive Desktop GUI
+
+Modern PySide6 (Qt for Python) desktop interface with:
+
+- tabs and dialogs
+- interactive charts
+- contextual panels
+- application theming
+
+The UI is designed specifically for desktop-first analytical workflows.
+
+---
+
+## LLM Assist (Experimental)
+
+Optional integration with:
+
+- OpenAI
+- Ollama (local models)
+
+The feature provides contextual help and workflow guidance.
+The current implementation is lightweight and designed as a foundation for future dataset-aware LLM integration.
+
+---
+
+## Integrated Contextual Help System
+
+Structured help files located in:
+
+resources/help
+
+These are rendered directly inside the application.
+
+Documentation pages can also be generated from these files using:
+
+scripts/build_help_docs.py
+
+The generated documentation is published here:
+
+https://valttiuef.github.io/FastData-Py/
+
+---
+
+# GUI
+
+## Data
+
 <img src="resources/screenshots/data.png" width="600" alt="Data screenshot">
 
-### Charts
+## Charts
+
 <img src="resources/screenshots/charts.png" width="600" alt="Charts screenshot">
 
-### Statistics
+## Statistics
+
 <img src="resources/screenshots/statistics.png" width="600" alt="Statistics screenshot">
 
-### SOM
+## SOM
+
 <img src="resources/screenshots/som.png" width="600" alt="SOM screenshot">
 <img src="resources/screenshots/som_features.png" width="600" alt="SOM features screenshot">
 <img src="resources/screenshots/som_timeline.png" width="600" alt="SOM timeline screenshot">
 
-### Regression
+## Regression
+
 <img src="resources/screenshots/regression.png" width="600" alt="Regression screenshot">
 
-### Chat / Help system
+## Chat / Help System
+
 <img src="resources/screenshots/chat.png" width="600" alt="Chat/Help system screenshot">
 
-## Installation
+---
+
+# Installation
 
 FastData-Py can be installed using the official Windows installer (recommended) or run from source for development purposes.
 
 ---
 
-### Option 1 – Install via Windows Installer (Recommended)
+## Option 1 – Install via Windows Installer (Recommended)
 
-1. Go to the latest release page:  
-   https://github.com/valttiuef/FastData-Py/releases
+1. Go to the latest release page:
 
-2. Download the installer from the newest version (e.g. `v0.1.1`).
+https://github.com/valttiuef/FastData-Py/releases
+
+2. Download the installer from the newest version (for example v0.1.1).
 
 3. Run the installer and follow the setup instructions.
 
-4. Launch **FastData-Py** from the Start Menu.
+4. Launch FastData-Py from the Windows Start Menu.
 
-This is the recommended option for most users working with industrial or research data.
+This is the recommended option for most users working with industrial or research datasets.
 
 ---
 
-### System Requirements
+## System Requirements
 
 - Windows 10 or newer
 - 64-bit system
@@ -109,105 +183,124 @@ This is the recommended option for most users working with industrial or researc
 
 ---
 
-### Option 2 – Run from Source (Developer Mode)
+## Option 2 – Run from Source (Developer Mode)
 
-1. **Set up Python 3.9+ and a virtual environment**
-   ```bash
-   python -m venv .venv
-   source .venv/bin/activate
-   python -m pip install --upgrade pip
-   ```
-2. **Install dependencies**
-   ```bash
-   pip install -e .
-   ```
-3. **Run the app**
-   ```bash
-   python src/app.py
-   ```
-   For VS Code users, you can also use the existing tasks: *Activate venv + Install* then *Run app* or press **F5**.
+1. Set up Python 3.9+ and a virtual environment
 
-## Dependencies and licenses
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
 
-The application itself is released under the **MIT License** (see [LICENSE](LICENSE)).
+2. Install dependencies
+
+pip install -e .
+
+3. Run the application
+
+python src/app.py
+
+For VS Code users, you can also use the included tasks:
+
+- Activate venv + Install
+- Run app
+
+or simply press F5.
+
+---
+
+# Dependencies and Licenses
+
+The application itself is released under the MIT License (see LICENSE).
 
 This software depends on third-party libraries with the following licenses:
 
 | Library | Purpose | License |
-| --- | --- | --- |
-| PySide6 / PySide6-Addons | Qt-based desktop GUI | LGPL-3.0 (Qt libraries dynamically linked) |
+|---|---|---|
+| PySide6 / PySide6-Addons | Qt-based desktop GUI | LGPL-3.0 |
 | duckdb | Local analytics database | MIT |
 | SQLite (stdlib) | Embedded relational database | Public Domain |
 | pandas, numpy | Data wrangling | BSD-3-Clause |
 | scikit-learn | PCA, clustering, regression utilities | BSD-3-Clause |
-| sktime | Legacy forecasting reference service (not used by active app flow) | BSD-3-Clause |
+| sktime | Legacy forecasting reference service | BSD-3-Clause |
 | MiniSom | Self-Organizing Maps | MIT |
 | openai | OpenAI API integration | Apache-2.0 |
 | ollama | Local LLM connector | MIT |
 | openpyxl | Excel file reader | MIT |
 | PyYAML | Help/documentation parsing | MIT |
 
-A complete list of third-party licenses is available in
-`resources/third_party_licenses.html`.
+A complete list of third-party licenses is available in:
 
-### Qt / PySide6 notice
+resources/third_party_licenses.html
 
-This application uses PySide6 (Qt for Python) under the terms of the
-GNU Lesser General Public License v3.0 (LGPL-3.0).
+---
 
-PySide6 and the Qt libraries are used **unmodified** and are
-**dynamically linked**. Users may replace the Qt/PySide6 libraries with
-compatible versions in accordance with the LGPL.
+## Qt / PySide6 Notice
 
-The full LGPL-3.0 license text is provided in `resources/licenses/LGPL-3.0.txt`.
+This application uses PySide6 (Qt for Python) under the terms of the GNU Lesser General Public License v3.0 (LGPL-3.0).
+
+PySide6 and the Qt libraries are used unmodified and are dynamically linked. Users may replace the Qt/PySide6 libraries with compatible versions in accordance with the LGPL.
+
+The full LGPL-3.0 license text is provided in:
+
+resources/licenses/LGPL-3.0.txt
 
 Always review upstream licenses if you add or redistribute binaries.
 
-## TODO / Known Issues
+---
 
-- **Forecasting (`scikit-learn`)**
-  - Disabled until I figure out what is best way to implement this
-  - Active forecasting now uses `scikit-learn` models and manual time-based splits.
-  - The previous `sktime` implementation is preserved as a non-active reference in `src/backend/services/legacy_forecasting/forecasting_service_sktime.py`.
+# TODO / Known Issues
 
-- **Translations**
-  - Current translations are only examples and are incomplete.
-  - Proper translation files should be created if multilingual support is required.
+## Forecasting (scikit-learn)
 
-- **SQL schema**
-  - The current database schema has grown organically and may be confusing in places.
-  - A redesign and simplification of the schema should be considered.
+- Disabled until a suitable long-term implementation strategy is finalized.
+- Active forecasting currently uses scikit-learn models with manual time-based splits.
+- The previous sktime implementation is preserved as a reference:
 
-- **LLM integration**
-  - The current integration is basic and can be extended.
-  - Possible improvements:
-    - Add conversation history using saved logs
-    - Improve message structure for clearer interactions
-    - Provide better explanations of underlying models (e.g., decision trees, linear regression)
+src/backend/services/legacy_forecasting/forecasting_service_sktime.py
 
-- **Code quality / refactoring**
-  - A significant portion of the codebase was generated with LLM assistance.
-  - While functional, it would benefit from systematic cleanup and refactoring.
+---
 
-- **Database structure**
-  - Separate databases are currently used for logs, selections, and measurements.
-  - Consolidating everything into a single database as the primary source of truth may simplify usage and data sharing.
+## Translations
 
-- **Styling and language switching**
-  - Changing theme or language currently requires restarting the application.
-  - Dynamic switching would be preferable, but the current theme implementation needs performance improvements.
+- Current translations are only examples and incomplete.
+- Proper translation files should be created if multilingual support is required.
 
-- **Cross-platform compatibility**
-  - The application has only been tested on Windows.
-  - Cross-platform testing (Linux, macOS) is needed to ensure compatibility.
-  - OS-specific assumptions and dependencies should be reviewed.
+---
 
-- **Import freeze after mixed CSV/Excel sequence**
-  - In some sessions, importing a large Excel workbook right after a DuckDB CSV import can appear to stall around sheet/chunk progress (commonly near 40%).
-  - The import may continue only after additional UI interaction (for example clicking feature list/chart controls).
-  - Workarounds:
-    - Restart the app before importing the Excel workbook.
-    - Import the Excel workbook into a fresh/opened database first, then import CSV files.
+## LLM Integration
 
-## License
-This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
+The current integration is intentionally lightweight and can be extended.
+
+Possible improvements include:
+
+- conversation history using saved logs
+- improved message structure for clearer interactions
+- explanations of underlying models (decision trees, linear regression, etc.)
+
+---
+
+## Database Structure
+
+- Separate databases are currently used for logs, selections, and measurements.
+- Consolidating everything into a single database may simplify usage and data sharing.
+
+---
+
+## Cross-Platform Compatibility
+
+The application has primarily been tested on Windows.
+
+Additional testing is required for:
+
+- Linux
+- macOS
+
+OS-specific assumptions and dependencies should be reviewed to ensure full compatibility.
+
+---
+
+# License
+
+This project is licensed under the MIT License.
+
+See the LICENSE file for details.

@@ -1,44 +1,42 @@
 :root {
   color-scheme: light dark;
 
-  --bg: #f3f6fb;
-  --bg-gradient: radial-gradient(circle at top right, #e0ecff 0%, var(--bg) 36%, var(--bg) 100%);
+  --bg: #ffffff;
   --surface: #ffffff;
-  --surface-muted: #f8fafc;
-  --text: #0f172a;
-  --text-soft: #475569;
-  --heading: #1e293b;
-  --heading-strong: #0b1c49;
-  --line: #dbe4ef;
-  --accent: #2563eb;
-  --accent-soft: #dbeafe;
-  --code-bg: #eff6ff;
-  --code-line: #cfe2ff;
-  --nav-bg: rgba(255, 255, 255, 0.84);
-  --nav-link: #334155;
-  --nav-link-hover: #1d4ed8;
-  --shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+  --surface-muted: #f6f8fa;
+  --text: #1f2328;
+  --text-soft: #59636e;
+  --heading: #0f172a;
+  --heading-strong: #111827;
+  --line: #d0d7de;
+  --accent: #0969da;
+  --accent-soft: #ddf4ff;
+  --code-bg: #f6f8fa;
+  --code-line: #d8dee4;
+  --nav-bg: #f6f8fa;
+  --nav-link: #344054;
+  --nav-link-hover: #0969da;
+  --shadow: 0 8px 24px rgba(16, 24, 40, 0.06);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0b1220;
-    --bg-gradient: radial-gradient(circle at top right, #16213a 0%, var(--bg) 36%, var(--bg) 100%);
-    --surface: #0f172a;
-    --surface-muted: #111827;
-    --text: #e5edf8;
-    --text-soft: #94a3b8;
-    --heading: #f1f5f9;
-    --heading-strong: #dbeafe;
-    --line: #243041;
-    --accent: #60a5fa;
-    --accent-soft: #1e3a5f;
-    --code-bg: #172033;
-    --code-line: #2a3a55;
-    --nav-bg: rgba(15, 23, 42, 0.84);
-    --nav-link: #cbd5e1;
-    --nav-link-hover: #93c5fd;
-    --shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+    --bg: #0d1117;
+    --surface: #111827;
+    --surface-muted: #161b22;
+    --text: #e6edf3;
+    --text-soft: #9da7b3;
+    --heading: #f0f6fc;
+    --heading-strong: #ffffff;
+    --line: #30363d;
+    --accent: #58a6ff;
+    --accent-soft: #1f2a37;
+    --code-bg: #161b22;
+    --code-line: #30363d;
+    --nav-bg: #111827;
+    --nav-link: #c9d1d9;
+    --nav-link-hover: #58a6ff;
+    --shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
   }
 }
 
@@ -46,22 +44,28 @@
 
 html, body { margin: 0; padding: 0; }
 
+html {
+  background: var(--bg);
+}
+
 body {
   font-family: Inter, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   color: var(--text);
-  background: var(--bg-gradient);
+  background: var(--bg);
   line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 .layout {
   display: grid;
   grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
   min-height: 100vh;
+  background: var(--bg);
 }
 
 nav {
   background: var(--nav-bg);
-  backdrop-filter: blur(6px);
   border-right: 1px solid var(--line);
   padding: 24px 18px 28px;
   overflow-y: auto;
@@ -74,6 +78,12 @@ nav {
 main {
   max-width: 1100px;
   padding: 38px 54px;
+  background: var(--bg);
+}
+
+h1, h2, h3, h4, h5 {
+  color: var(--heading);
+  line-height: 1.25;
 }
 
 h1 {
@@ -92,7 +102,6 @@ h2 {
 h3 {
   margin-top: 30px;
   font-size: 1.25rem;
-  color: var(--heading);
 }
 
 h4 {
@@ -109,8 +118,14 @@ h5 {
   color: var(--heading-strong);
 }
 
-p, ul, ol { margin-top: 0.4rem; margin-bottom: 0.7rem; }
-ul, ol { padding-left: 1.25rem; }
+p, ul, ol {
+  margin-top: 0.4rem;
+  margin-bottom: 0.7rem;
+}
+
+ul, ol {
+  padding-left: 1.25rem;
+}
 
 code {
   background: var(--code-bg);
@@ -120,12 +135,28 @@ code {
   font-size: 0.92em;
 }
 
+pre {
+  background: var(--code-bg);
+  border: 1px solid var(--code-line);
+  border-radius: 10px;
+  padding: 14px 16px;
+  overflow-x: auto;
+}
+
+pre code {
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+
 a {
   color: var(--accent);
   text-decoration: none;
 }
 
-a:hover { text-decoration: underline; }
+a:hover {
+  text-decoration: underline;
+}
 
 .meta {
   color: var(--text-soft);
@@ -144,14 +175,17 @@ summary {
   color: var(--heading);
 }
 
-.nav-group { margin-left: 10px; }
+.nav-group {
+  margin-left: 10px;
+}
 
 .nav-page {
   display: block;
   margin: 5px 0 5px 10px;
-  padding: 3px 8px;
-  border-radius: 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
   color: var(--nav-link);
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
 
 .nav-page:hover {
@@ -179,7 +213,9 @@ main h4[id] {
 }
 
 @media (max-width: 960px) {
-  .layout { grid-template-columns: 1fr; }
+  .layout {
+    grid-template-columns: 1fr;
+  }
 
   nav {
     position: static;
@@ -188,5 +224,7 @@ main h4[id] {
     border-bottom: 1px solid var(--line);
   }
 
-  main { padding: 24px 18px 42px; }
+  main {
+    padding: 24px 18px 42px;
+  }
 }

@@ -21,7 +21,7 @@ from ...threading import run_in_main_thread, run_in_thread
 
 from .chart_card import ChartCard
 from .charts_sidebar import ChartsSidebar
-from ...utils.exporting import execute_export_plan, prepare_charts_excel_export_plan, prepare_dataframes_export_plan
+from ...utils.exporting import ExportPlan, execute_export_plan, prepare_charts_excel_export_plan, prepare_dataframes_export_plan
 from ...utils import set_status_text, toast_error, toast_file_saved, toast_info, toast_success, toast_warn
 from ...widgets.export_dialog import ExportOption, ExportSelectionDialog
 from ...widgets.panel import Panel
@@ -929,6 +929,7 @@ class ChartsTab(TabWidget):
         if "t" in out.columns:
             out["t"] = pd.to_datetime(out["t"], errors="coerce")
             out = out.dropna(subset=["t"]).sort_values("t", kind="stable")
+            out = out.rename(columns={"t": tr("Date")})
         return out.reset_index(drop=True)
 
     @staticmethod
@@ -950,60 +951,183 @@ class ChartsTab(TabWidget):
             return pd.DataFrame(), []
         return out, list(scatter_cols)
 
+    # @ai(gpt-5, codex, refactor, 2026-03-12)
     def _export_results(self) -> None:
-        fetch_requests: list[tuple[int, ChartCard, str, list[FeatureSelection], list[dict]]] = []
+        export_items: dict[str, dict[str, object]] = {}
         for idx, card in enumerate(self._chart_cards, start=1):
             chart_type = card.chart_type()
+            if chart_type == "correlation_bar":
+                corr_df = self._correlation_export_frame(self._correlation_bar_payload)
+                if corr_df.empty:
+                    continue
+                name = tr("Chart {index} (correlation ranking)").format(index=idx)
+                export_items[name] = {
+                    "kind": "correlation",
+                    "frame": corr_df,
+                }
+                continue
             if chart_type not in {"monthly", "time_series", "scatter"}:
                 continue
             selected_features = [f for f in card.selected_features() if isinstance(f, FeatureSelection)]
             if not selected_features:
                 continue
-            fetch_requests.append(
-                (
-                    idx,
-                    card,
-                    chart_type,
-                    selected_features,
-                    [self._feature_payload(sel) for sel in selected_features],
-                )
-            )
-
-        datasets: dict[str, pd.DataFrame] = {}
-        chart_specs: dict[str, dict[str, object]] = {}
-        for idx, card in enumerate(self._chart_cards, start=1):
-            if card.chart_type() != "correlation_bar":
-                continue
-            corr_df = self._correlation_export_frame(self._correlation_bar_payload)
-            if corr_df.empty:
-                continue
-            name = tr("Chart {index} (correlation ranking)").format(index=idx)
-            datasets[name] = corr_df
-            chart_specs[name] = {
-                "type": "monthly",
-                "x_column": "Feature",
-                "y_columns": ["Correlation"],
-                "title": name,
+            name = tr("Chart {index} ({kind})").format(index=idx, kind=chart_type)
+            export_items[name] = {
+                "kind": "card_fetch",
+                "index": idx,
+                "chart_type": chart_type,
+                "selected_features": selected_features,
+                "feature_payloads": [self._feature_payload(sel) for sel in selected_features],
             }
 
-        if not fetch_requests and not datasets:
+        self._run_export_dialog(export_items)
+
+    # @ai(gpt-5, codex, refactor, 2026-03-12)
+    def _run_export_dialog(
+        self,
+        export_items: dict[str, dict[str, object]],
+    ) -> None:
+        if not export_items:
             toast_info(tr("No chart data available to export."), title=tr("Charts"), tab_key="charts")
             return
 
-        request_index = 0
+        dialog = ExportSelectionDialog(
+            title=tr("Export chart results"),
+            heading=tr("Choose which chart datasets to export."),
+            options=[ExportOption(key=k, label=k) for k in export_items],
+            show_chart_data_options=True,
+            chart_label="Charts",
+            data_label="Data",
+            parent=self,
+        )
+        if dialog.exec() != ExportSelectionDialog.DialogCode.Accepted:
+            return
+        selected = dialog.selected_keys()
+        if not selected:
+            toast_info(tr("Select at least one dataset to export."), title=tr("Export"), tab_key="charts")
+            return
+        include_charts = dialog.include_charts()
+        include_data = dialog.include_data()
+        if not include_charts and not include_data:
+            toast_info(tr("Select charts and/or data to export."), title=tr("Export"), tab_key="charts")
+            return
+
+        chosen_items = {name: export_items[name] for name in selected if name in export_items}
+        if not chosen_items:
+            toast_info(tr("No chart data available to export."), title=tr("Charts"), tab_key="charts")
+            return
+
+        selected_format = dialog.selected_format()
+        destination_plan = self._prepare_export_destination_plan(
+            selected_format=selected_format,
+            include_charts=include_charts,
+            include_data=include_data,
+        )
+        if destination_plan is None:
+            return
+        self._collect_and_export_selected_items(
+            chosen_items=chosen_items,
+            selected_format=selected_format,
+            include_charts=include_charts,
+            include_data=include_data,
+            destination_plan=destination_plan,
+        )
+
+    def _prepare_export_destination_plan(
+        self,
+        *,
+        selected_format: str,
+        include_charts: bool,
+        include_data: bool,
+    ) -> ExportPlan | None:
+        # File selection should happen before any data fetch work starts.
+        placeholder = {tr("Selection"): pd.DataFrame({"Value": [0]})}
+        if selected_format == "excel":
+            return prepare_charts_excel_export_plan(
+                parent=self,
+                title=tr("Export charts"),
+                datasets=placeholder,
+                chart_specs={},
+                include_charts=include_charts,
+                include_data=include_data,
+                chart_first=True,
+            )
+        return prepare_dataframes_export_plan(
+            parent=self,
+            title=tr("Export charts"),
+            selected_format=selected_format,
+            datasets=placeholder,
+        )
+
+    def _collect_and_export_selected_items(
+        self,
+        *,
+        chosen_items: dict[str, dict[str, object]],
+        selected_format: str,
+        include_charts: bool,
+        include_data: bool,
+        destination_plan: ExportPlan,
+    ) -> None:
         export_button = getattr(self.sidebar, "btn_export", None)
         if export_button is not None:
             export_button.setEnabled(False)
+        set_status_text(tr("Fetching chart data..."))
+        toast_info(tr("Fetching chart data..."), title=tr("Charts"), tab_key="charts")
+
+        datasets: dict[str, pd.DataFrame] = {}
+        chart_specs: dict[str, dict[str, object]] = {}
+        fetch_requests: list[tuple[str, int, str, list[FeatureSelection], list[dict]]] = []
+
+        for name, item in chosen_items.items():
+            kind = str(item.get("kind") or "")
+            if kind == "correlation":
+                frame = item.get("frame")
+                if isinstance(frame, pd.DataFrame) and not frame.empty:
+                    datasets[name] = frame.copy()
+                    chart_specs[name] = {
+                        "type": "monthly",
+                        "x_column": "Feature",
+                        "y_columns": ["Correlation"],
+                        "title": name,
+                    }
+                continue
+            if kind != "card_fetch":
+                continue
+            idx = int(item.get("index") or 0)
+            chart_type = str(item.get("chart_type") or "")
+            selected_features = [
+                f for f in (item.get("selected_features") or []) if isinstance(f, FeatureSelection)
+            ]
+            feature_payloads = [dict(p) for p in (item.get("feature_payloads") or []) if isinstance(p, dict)]
+            if idx <= 0 or chart_type not in {"monthly", "time_series", "scatter"}:
+                continue
+            if not selected_features or not feature_payloads:
+                continue
+            fetch_requests.append((name, idx, chart_type, selected_features, feature_payloads))
+
+        request_index = 0
 
         def _finish_collection() -> None:
-            if export_button is not None:
-                export_button.setEnabled(True)
-            self._run_export_dialog(datasets, chart_specs)
+            if not datasets:
+                if export_button is not None:
+                    export_button.setEnabled(True)
+                set_status_text(tr("Chart export warning."))
+                toast_warn(tr("No chart data available to export."), title=tr("Export"), tab_key="charts")
+                return
+            set_status_text(tr("Chart data fetched. Exporting..."))
+            self._execute_chart_export_plan(
+                datasets=datasets,
+                chart_specs=chart_specs,
+                selected_format=selected_format,
+                include_charts=include_charts,
+                include_data=include_data,
+                destination_plan=destination_plan,
+                export_button=export_button,
+            )
 
         def _process_frame(
             *,
-            idx: int,
-            card: ChartCard,
+            name: str,
             chart_type: str,
             selected_features: list[FeatureSelection],
             frame: pd.DataFrame | None,
@@ -1011,6 +1135,7 @@ class ChartsTab(TabWidget):
             if frame is None or frame.empty:
                 return
             try:
+                scatter_cols: list[str] = []
                 if chart_type == "monthly":
                     frame, _chart_level = self._aggregate_monthly_export_frame(frame)
                 elif chart_type == "time_series":
@@ -1026,7 +1151,6 @@ class ChartsTab(TabWidget):
                 return
             if frame is None or frame.empty:
                 return
-            name = tr("Chart {index} ({kind})").format(index=idx, kind=chart_type)
             datasets[name] = frame.copy()
             columns = [str(c) for c in frame.columns]
             if chart_type == "scatter":
@@ -1037,29 +1161,28 @@ class ChartsTab(TabWidget):
                         "y_columns": [scatter_cols[1]],
                         "title": name,
                     }
-            else:
-                x_col = "t" if "t" in columns else (columns[0] if columns else "")
-                y_cols = [c for c in columns if c and c != x_col]
-                chart_specs[name] = {
-                    "type": chart_type,
-                    "x_column": x_col,
-                    "y_columns": y_cols,
-                    "title": name,
-                }
+                return
+            x_col = tr("Date") if tr("Date") in columns else ("t" if "t" in columns else (columns[0] if columns else ""))
+            y_cols = [c for c in columns if c and c != x_col]
+            chart_specs[name] = {
+                "type": chart_type,
+                "x_column": x_col,
+                "y_columns": y_cols,
+                "title": name,
+            }
 
         def _fetch_next() -> None:
             nonlocal request_index
             if request_index >= len(fetch_requests):
                 _finish_collection()
                 return
-            idx, card, chart_type, selected_features, feature_payloads = fetch_requests[request_index]
+            name, idx, chart_type, selected_features, feature_payloads = fetch_requests[request_index]
             request_index += 1
 
             def _on_result(frame_token: str) -> None:
                 frame = self.sidebar.data_selector.resolve_dataframe_token(frame_token, consume=True)
                 _process_frame(
-                    idx=idx,
-                    card=card,
+                    name=name,
                     chart_type=chart_type,
                     selected_features=selected_features,
                     frame=frame,
@@ -1082,63 +1205,37 @@ class ChartsTab(TabWidget):
 
         _fetch_next()
 
-    # @ai(gpt-5, codex, refactor, 2026-03-11)
-    def _run_export_dialog(
+    def _execute_chart_export_plan(
         self,
+        *,
         datasets: dict[str, pd.DataFrame],
         chart_specs: dict[str, dict[str, object]],
+        selected_format: str,
+        include_charts: bool,
+        include_data: bool,
+        destination_plan: ExportPlan,
+        export_button,
     ) -> None:
-        if not datasets:
-            toast_info(tr("No chart data available to export."), title=tr("Charts"), tab_key="charts")
-            return
-
-        dialog = ExportSelectionDialog(
-            title=tr("Export chart results"),
-            heading=tr("Choose which chart datasets to export."),
-            options=[ExportOption(key=k, label=k) for k in datasets],
-            show_chart_data_options=True,
-            chart_label="Charts",
-            data_label="Data",
-            parent=self,
-        )
-        if dialog.exec() != ExportSelectionDialog.DialogCode.Accepted:
-            return
-        selected = dialog.selected_keys()
-        if not selected:
-            toast_info(tr("Select at least one dataset to export."), title=tr("Export"), tab_key="charts")
-            return
-        include_charts = dialog.include_charts()
-        include_data = dialog.include_data()
-        if not include_charts and not include_data:
-            toast_info(tr("Select charts and/or data to export."), title=tr("Export"), tab_key="charts")
-            return
-        chosen = {name: datasets[name] for name in selected if name in datasets}
-        selected_format = dialog.selected_format()
-        plan = None
         if selected_format == "excel":
-            chosen_specs = {name: chart_specs.get(name, {}) for name in chosen}
-            plan = prepare_charts_excel_export_plan(
-                parent=self,
-                title=tr("Export charts"),
-                datasets=chosen,
+            chosen_specs = {name: chart_specs.get(name, {}) for name in datasets}
+            plan = ExportPlan(
+                kind="charts_excel",
+                selected_format="excel",
+                destination=destination_plan.destination,
+                datasets=datasets,
                 chart_specs=chosen_specs,
                 include_charts=include_charts,
                 include_data=include_data,
                 chart_first=True,
             )
         else:
-            plan = prepare_dataframes_export_plan(
-                parent=self,
-                title=tr("Export charts"),
+            plan = ExportPlan(
+                kind="dataframes",
                 selected_format=selected_format,
-                datasets=chosen,
+                destination=destination_plan.destination,
+                datasets=datasets,
             )
-        if plan is None:
-            return
 
-        export_button = getattr(self.sidebar, "btn_export", None)
-        if export_button is not None:
-            export_button.setEnabled(False)
         set_status_text(tr("Exporting charts..."))
         toast_info(tr("Exporting charts..."), title=tr("Charts"), tab_key="charts")
 

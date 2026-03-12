@@ -15,9 +15,11 @@ from PySide6.QtWidgets import QApplication
 
 from backend.services.regression_service import RegressionRunResult
 from frontend.tabs.charts.charts_tab import ChartsTab
+import frontend.tabs.charts.charts_tab as charts_tab_module
 import frontend.tabs.regression.regression_tab as regression_tab_module
 from frontend.tabs.som.som_tab import SomTab
 from frontend.tabs.statistics.preview_panel import StatisticsPreview
+from frontend.utils.exporting import ExportPlan
 
 
 @pytest.fixture
@@ -232,8 +234,8 @@ def test_charts_export_helpers_keep_visible_columns_only() -> None:
         }
     )
     ts_df = ChartsTab._prepare_time_series_export_frame(ts_input, feature_count=2)
-    assert list(ts_df.columns) == ["t", "A", "B"]
-    assert bool(ts_df["t"].is_monotonic_increasing)
+    assert list(ts_df.columns) == ["Date", "A", "B"]
+    assert bool(ts_df["Date"].is_monotonic_increasing)
 
 
 def test_charts_monthly_export_keeps_missing_periods_empty() -> None:
@@ -268,6 +270,66 @@ def test_charts_correlation_export_frame_uses_feature_labels() -> None:
     out = ChartsTab._correlation_export_frame(payload)
     assert list(out.columns) == ["Feature", "Correlation"]
     assert out["Feature"].tolist() == ["Temperature", "Pressure"]
+
+
+def test_charts_export_dialog_asks_destination_before_collection(monkeypatch: pytest.MonkeyPatch) -> None:
+    call_order: list[str] = []
+    captured_collect: dict[str, object] = {}
+
+    class _DialogStub:
+        class DialogCode:
+            Accepted = 1
+
+        def __init__(self, **_kwargs):
+            return None
+
+        def exec(self):
+            return self.DialogCode.Accepted
+
+        def selected_keys(self):
+            return ["Chart 1 (correlation ranking)"]
+
+        def include_charts(self):
+            return True
+
+        def include_data(self):
+            return True
+
+        def selected_format(self):
+            return "excel"
+
+    class _DummyTab:
+        def _prepare_export_destination_plan(self, **kwargs):
+            call_order.append("prepare")
+            return ExportPlan(
+                kind="charts_excel",
+                selected_format="excel",
+                destination=Path("dummy.xlsx"),
+                datasets={"placeholder": pd.DataFrame({"Value": [0]})},
+                chart_specs={},
+                include_charts=bool(kwargs.get("include_charts", True)),
+                include_data=bool(kwargs.get("include_data", True)),
+                chart_first=True,
+            )
+
+        def _collect_and_export_selected_items(self, **kwargs):
+            call_order.append("collect")
+            captured_collect.update(kwargs)
+
+    monkeypatch.setattr(charts_tab_module, "ExportSelectionDialog", _DialogStub)
+    monkeypatch.setattr(charts_tab_module, "toast_info", lambda *args, **kwargs: None)
+
+    payload = {
+        "Chart 1 (correlation ranking)": {
+            "kind": "correlation",
+            "frame": pd.DataFrame({"Feature": ["Temperature"], "Correlation": [0.9]}),
+        }
+    }
+    ChartsTab._run_export_dialog(_DummyTab(), payload)
+
+    assert call_order == ["prepare", "collect"]
+    assert captured_collect.get("selected_format") == "excel"
+    assert isinstance(captured_collect.get("destination_plan"), ExportPlan)
 
 
 def test_som_export_fallbacks_use_user_friendly_table_headers() -> None:
