@@ -277,101 +277,13 @@ class RegressionResultsPanel(Panel):
 
     def export_summary_frame(self, runs: Optional[list[RegressionRunResult]] = None) -> pd.DataFrame:
         selected_runs = runs if runs is not None else self.all_runs()
-        rows: list[dict[str, object]] = []
-        columns = [key for key, _ in self._COLUMN_DEFINITIONS]
-        for run in selected_runs:
-            run_key = self._normalize_key(getattr(run, "key", ""))
-            ctx = self._run_contexts.get(run_key, {})
-            values = self._row_values(run, ctx)
-            _display, sort_value = self._trained_at_display_and_sort(run, ctx)
-            row = {key: values.get(key) for key in columns}
-            row["__trained_sort"] = sort_value
-            rows.append(row)
-        if not rows:
-            return pd.DataFrame(columns=columns)
-        frame = pd.DataFrame(rows)
-        frame = frame.sort_values(by="__trained_sort", ascending=False, kind="stable")
-        frame = frame.drop(columns=["__trained_sort"])
-        return frame[columns].reset_index(drop=True)
+        return self._summary_table_frame(selected_runs, include_hidden_columns=False)
 
     def export_individual_frame(self, run: RegressionRunResult) -> pd.DataFrame:
         if run is None:
-            return pd.DataFrame(columns=["datetime", "actual", "prediction", "split"])
+            return pd.DataFrame(columns=self._predictions_columns)
         timeline = run.timeline_frame if run.timeline_frame is not None else pd.DataFrame()
-        if timeline.empty:
-            return pd.DataFrame(columns=["datetime", "actual", "prediction", "split"])
-
-        actual_col = "Actual" if "Actual" in timeline.columns else None
-        train_col = "Prediction (train)" if "Prediction (train)" in timeline.columns else None
-        train_split_cols = [
-            column
-            for column in timeline.columns
-            if isinstance(column, str)
-            and column.startswith("Prediction (train split ")
-            and column.endswith(")")
-        ]
-        split_col = "Split (train)" if "Split (train)" in timeline.columns else None
-        test_col = "Prediction (test)" if "Prediction (test)" in timeline.columns else None
-        if "t" not in timeline.columns or actual_col is None:
-            return pd.DataFrame(columns=["datetime", "actual", "prediction", "split"])
-
-        train_export_cols: list[str] = []
-        # Avoid duplicate rows: either split-specific train traces or the single train trace.
-        if train_split_cols:
-            train_export_cols.extend(train_split_cols)
-        elif train_col:
-            train_export_cols.append(train_col)
-
-        working = timeline[
-            ["t", actual_col]
-            + train_export_cols
-            + ([split_col] if split_col else [])
-            + ([test_col] if test_col else [])
-        ].copy()
-        working["t"] = pd.to_datetime(working["t"], errors="coerce")
-        working = working.dropna(subset=["t"])
-        if working.empty:
-            return pd.DataFrame(columns=["datetime", "actual", "prediction", "split"])
-
-        rows: list[dict[str, object]] = []
-
-        for train_name in train_export_cols:
-            train_rows = working.dropna(subset=[train_name])
-            for _, row in train_rows.iterrows():
-                split_text = "train"
-                if train_name.startswith("Prediction (train split ") and train_name.endswith(")"):
-                    split_text = train_name[len("Prediction (train split ") : -1].strip() or "train"
-                else:
-                    split_value = row.get(split_col) if split_col else None
-                    split_text = str(split_value).strip() if split_value is not None else ""
-                    if not split_text or split_text.lower() == "nan":
-                        split_text = "train"
-                rows.append(
-                    {
-                        "datetime": row.get("t"),
-                        "actual": row.get(actual_col),
-                        "prediction": row.get(train_name),
-                        "split": split_text,
-                    }
-                )
-        if test_col:
-            test_rows = working.dropna(subset=[test_col])
-            for _, row in test_rows.iterrows():
-                rows.append(
-                    {
-                        "datetime": row.get("t"),
-                        "actual": row.get(actual_col),
-                        "prediction": row.get(test_col),
-                        "split": "test",
-                    }
-                )
-
-        if not rows:
-            return pd.DataFrame(columns=["datetime", "actual", "prediction", "split"])
-
-        frame = pd.DataFrame(rows)
-        frame = frame.sort_values(by=["datetime", "split"], ascending=[True, True]).reset_index(drop=True)
-        return frame
+        return self._prediction_table_frame(timeline)
 
     def run_label(self, run: RegressionRunResult) -> str:
         context = self._run_contexts.get(str(getattr(run, "key", "")), {})
@@ -675,12 +587,21 @@ class RegressionResultsPanel(Panel):
         return None
 
     def _refresh_runs_table(self) -> None:
+        frame = self._summary_table_frame(self.all_runs(), include_hidden_columns=True)
+        self.runs_table.set_dataframe(frame, include_index=False)
+        self.runs_table.hideColumn(len(self._runs_display_columns))
+        self.runs_table.hideColumn(len(self._runs_display_columns) + 1)
+
+    def _summary_table_frame(
+        self,
+        runs: list[RegressionRunResult],
+        *,
+        include_hidden_columns: bool,
+    ) -> pd.DataFrame:
         rows: list[dict[str, object]] = []
-        for run_key in self._run_order:
-            run = self._runs.get(run_key)
-            if run is None:
-                continue
-            context = self._run_contexts.get(str(run.key), {})
+        for run in runs:
+            run_key = self._normalize_key(getattr(run, "key", ""))
+            context = self._run_contexts.get(run_key, {})
             values = self._row_values(run, context)
             row: dict[str, object] = {}
             _trained_display, sort_value = self._trained_at_display_and_sort(run, context)
@@ -701,9 +622,9 @@ class RegressionResultsPanel(Panel):
         frame = pd.DataFrame(rows, columns=self._runs_display_columns + [self._run_key_column, self._trained_sort_column])
         if not frame.empty and self._trained_sort_column in frame.columns:
             frame = frame.sort_values(by=self._trained_sort_column, ascending=False, kind="stable").reset_index(drop=True)
-        self.runs_table.set_dataframe(frame, include_index=False)
-        self.runs_table.hideColumn(len(self._runs_display_columns))
-        self.runs_table.hideColumn(len(self._runs_display_columns) + 1)
+        if include_hidden_columns:
+            return frame
+        return frame.reindex(columns=self._runs_display_columns).reset_index(drop=True)
 
     @staticmethod
     def _to_float(value: Optional[float]) -> Optional[float]:

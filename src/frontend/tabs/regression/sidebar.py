@@ -806,6 +806,7 @@ class RegressionSidebar(SidebarWidget):
         self._help_dataset_signature = None
         self._help_dataset_rows = None
         self._selected_input_payloads_cache = [dict(p) for p in (payloads or []) if isinstance(p, dict)]
+        self._features_changed_timer.start()
 
     def _on_target_selection_changed(self) -> None:
         previous_ids = list(self._selected_target_ids)

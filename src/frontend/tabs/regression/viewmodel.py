@@ -526,6 +526,7 @@ class RegressionViewModel(QObject):
             if batch:
                 self._start_save_thread(batch, auto=True)
 
+    # @ai(gpt-5, codex, refactor, 2026-03-12)
     def run_regressions(
         self,
         *,
@@ -586,7 +587,22 @@ class RegressionViewModel(QObject):
         total_runs = total_runs_per_target * total_targets if total_runs_per_target else total_targets
 
         all_runs: list[RegressionRunResult] = []
+        seen_run_keys: set[str] = set()
         target_failures: list[str] = []
+
+        def _append_runs(candidates: Sequence[RegressionRunResult]) -> int:
+            added = 0
+            for run in candidates:
+                if run is None:
+                    continue
+                run_key = str(getattr(run, "key", "") or "").strip()
+                if run_key:
+                    if run_key in seen_run_keys:
+                        continue
+                    seen_run_keys.add(run_key)
+                all_runs.append(run)
+                added += 1
+            return added
 
         for idx, target_payload in enumerate(targets):
             if target_contexts and idx < len(target_contexts) and context_callback is not None:
@@ -609,6 +625,15 @@ class RegressionViewModel(QObject):
                     logger.warning("Exception in _progress_adapter", exc_info=True)
 
             target_label = str(display_name(target_payload)).strip() or f"target-{idx + 1}"
+            target_emitted_runs: list[RegressionRunResult] = []
+
+            def _target_result_adapter(run: RegressionRunResult) -> None:
+                if run is None:
+                    return
+                target_emitted_runs.append(run)
+                if result_callback is not None:
+                    result_callback(run)
+
             try:
                 summary = self._service.run_regressions(
                     input_features=input_payloads,
@@ -636,7 +661,7 @@ class RegressionViewModel(QObject):
                     data_frame=target_data_frame,
                     stratify_feature=stratify_payload,
                     status_callback=status_callback,
-                    result_callback=result_callback,
+                    result_callback=_target_result_adapter,
                     stop_event=stop_event,
                 )
             except Exception as exc:
@@ -644,20 +669,41 @@ class RegressionViewModel(QObject):
                 if text.lower() == "regression run cancelled":
                     raise
                 target_failures.append(f"{target_label}: {text}")
+                if target_emitted_runs:
+                    _append_runs(target_emitted_runs)
                 if status_callback is not None:
                     try:
-                        status_callback(f"Skipped target {target_label}: {text}")
+                        if target_emitted_runs:
+                            status_callback(
+                                f"WARNING: Target {target_label} completed partially and then failed: {text}"
+                            )
+                        else:
+                            status_callback(f"WARNING: Skipped target {target_label}: {text}")
                     except Exception:
                         logger.warning("Exception in _progress_adapter", exc_info=True)
                 continue
 
             target_runs = getattr(summary, "runs", []) or []
             if target_runs:
-                all_runs.extend(target_runs)
+                _append_runs(target_runs)
+                continue
+            if target_emitted_runs:
+                _append_runs(target_emitted_runs)
                 continue
             target_failures.append(f"{target_label}: no runs produced")
+            if status_callback is not None:
+                try:
+                    status_callback(f"WARNING: Skipped target {target_label}: no runs produced")
+                except Exception:
+                    logger.warning("Exception in _progress_adapter", exc_info=True)
 
         if not all_runs:
+            if target_failures:
+                preview = "; ".join(target_failures[:3])
+                raise RuntimeError(
+                    "Regression could not train any models. "
+                    f"Target failures: {preview}"
+                )
             raise RuntimeError(
                 "Regression could not train any models. "
                 "Check your selected input and target features and verify data is available."

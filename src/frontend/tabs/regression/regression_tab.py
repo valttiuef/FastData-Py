@@ -16,7 +16,7 @@ from ...localization import tr
 from ...models.hybrid_pandas_model import HybridPandasModel
 from ...threading import run_in_main_thread, run_in_thread
 from ...utils import clear_status_text, set_status_text, toast_error, toast_file_saved, toast_info, toast_success, toast_warn
-from ...utils.exporting import execute_export_plan, prepare_dataframes_export_plan
+from ...utils.exporting import ExportPlan, execute_export_plan, prepare_dataframes_export_plan
 from ...utils.model_details import build_model_details_prompt, build_regression_details_text
 from ...widgets.export_dialog import ExportOption, ExportSelectionDialog
 from ...widgets.model_details_dialog import ModelDetailsDialog
@@ -294,7 +294,6 @@ class RegressionTab(TabWidget):
             ExportOption(
                 key="summary",
                 label=tr("Regression summary"),
-                description=tr("One row per model run"),
             )
         ]
         for run in all_runs:
@@ -324,23 +323,51 @@ class RegressionTab(TabWidget):
             toast_info(tr("Select at least one export item."), title=tr("Export"), tab_key="regression")
             return
 
+        selected_format = dialog.selected_format()
+        destination_plan = self._prepare_export_destination_plan(selected_format=selected_format)
+        if destination_plan is None:
+            return
+        self._collect_and_export_selected_items(
+            all_runs=all_runs,
+            selected_keys=selected_keys,
+            selected_format=selected_format,
+            destination_plan=destination_plan,
+        )
+
+    def _prepare_export_destination_plan(self, *, selected_format: str) -> ExportPlan | None:
+        # Select destination before collecting or transforming export datasets.
+        placeholder = {tr("Selection"): pd.DataFrame({"Value": [0]})}
+        return prepare_dataframes_export_plan(
+            parent=self,
+            title=tr("Export regression"),
+            selected_format=selected_format,
+            datasets=placeholder,
+        )
+
+    def _collect_and_export_selected_items(
+        self,
+        *,
+        all_runs: list[object],
+        selected_keys: list[str],
+        selected_format: str,
+        destination_plan: ExportPlan,
+    ) -> None:
         include_summary = "summary" in selected_keys
         selected_model_keys = {
             key.split("model::", 1)[1]
             for key in selected_keys
             if key.startswith("model::")
         }
-        chosen_runs = [run for run in all_runs if str(run.key) in selected_model_keys]
+        chosen_runs = [run for run in all_runs if str(getattr(run, "key", "")) in selected_model_keys]
 
         datasets: dict[str, pd.DataFrame] = {}
-        export_mode = dialog.selected_format()
         if include_summary:
             summary_runs = chosen_runs if chosen_runs else all_runs
             summary_df = self.results_panel.export_summary_frame(summary_runs)
             if not summary_df.empty:
                 datasets[tr("Regression summary")] = summary_df
         if chosen_runs:
-            if export_mode == "excel":
+            if selected_format == "excel":
                 for run in chosen_runs:
                     run_df = self.results_panel.export_individual_frame(run)
                     if run_df.empty:
@@ -353,7 +380,7 @@ class RegressionTab(TabWidget):
                     if run_df.empty:
                         continue
                     run_df = run_df.copy()
-                    run_df.insert(0, "model", self.results_panel.run_label(run))
+                    run_df.insert(0, tr("Model"), self.results_panel.run_label(run))
                     combined_rows.append(run_df)
                 if combined_rows:
                     datasets[tr("Regression points")] = pd.concat(combined_rows, axis=0, ignore_index=True)
@@ -362,14 +389,16 @@ class RegressionTab(TabWidget):
             toast_info(tr("No data available for selected export options."), title=tr("Export"), tab_key="regression")
             return
 
-        plan = prepare_dataframes_export_plan(
-            parent=self,
-            title=tr("Export regression"),
-            selected_format=export_mode,
+        plan = ExportPlan(
+            kind=destination_plan.kind,
+            selected_format=selected_format,
+            destination=destination_plan.destination,
             datasets=datasets,
+            chart_specs=destination_plan.chart_specs,
+            include_charts=destination_plan.include_charts,
+            include_data=destination_plan.include_data,
+            chart_first=destination_plan.chart_first,
         )
-        if plan is None:
-            return
 
         self.sidebar.set_export_enabled(False)
         set_status_text(tr("Exporting regression results..."))
@@ -540,7 +569,9 @@ class RegressionTab(TabWidget):
             return
 
         save_frame = frame.copy()
-        if "datetime" not in save_frame.columns or "prediction" not in save_frame.columns:
+        ts_column = "Date" if "Date" in save_frame.columns else "datetime"
+        value_column = "Prediction" if "Prediction" in save_frame.columns else "prediction"
+        if ts_column not in save_frame.columns or value_column not in save_frame.columns:
             try:
                 toast_error(
                     tr("Selected run does not contain exportable predictions."),
@@ -551,7 +582,7 @@ class RegressionTab(TabWidget):
                 logger.warning("Exception in _save_predictions_from_selected_run", exc_info=True)
             return
 
-        save_frame = save_frame.rename(columns={"datetime": "ts", "prediction": "value"})
+        save_frame = save_frame.rename(columns={ts_column: "ts", value_column: "value"})
         save_frame["ts"] = pd.to_datetime(save_frame["ts"], errors="coerce")
         save_frame["value"] = pd.to_numeric(save_frame["value"], errors="coerce")
         save_frame = save_frame.dropna(subset=["ts", "value"])
@@ -644,42 +675,37 @@ class RegressionTab(TabWidget):
 
     def _update_stratify_options(self) -> None:
         targets = self.sidebar.selected_target_payloads()
-        inputs = self.sidebar.available_feature_payloads()
+        input_features = self.sidebar.selected_input_payloads()
         group_kinds = self._view_model.available_group_kinds()
 
         options: list[tuple[str, Optional[dict]]] = []
         seen: set[int] = set()
 
-        for target in targets:
-            fid = target.get("feature_id")
-            key = None
-            try:
-                key = int(fid) if fid is not None else None
-            except Exception:
-                key = None
-            if key is not None and key in seen:
-                continue
-            if key is not None:
-                seen.add(key)
-            options.append((self.sidebar.payload_label(target), target))
-
-        for payload in inputs:
+        def _feature_id(payload: dict[str, object]) -> Optional[int]:
             fid = payload.get("feature_id")
-            key = None
             try:
-                key = int(fid) if fid is not None else None
+                return int(fid) if fid is not None else None
             except Exception:
-                key = None
+                return None
+
+        def _append_feature(payload: dict[str, object]) -> None:
+            key = _feature_id(payload)
             if key is not None and key in seen:
-                continue
+                return
             if key is not None:
                 seen.add(key)
             options.append((self.sidebar.payload_label(payload), payload))
+
+        for target in targets:
+            _append_feature(target)
 
         for kind, label in group_kinds:
             group_label = str(label)
             payload = {"group_kind": str(kind), "label": group_label}
             options.append((group_label, payload))
+
+        for payload in input_features:
+            _append_feature(payload)
 
         self.sidebar.set_stratify_options(options)
 

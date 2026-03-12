@@ -15,7 +15,7 @@ class _SidebarStub:
     def selected_target_payloads(self):
         return [{"feature_id": 2, "name": "Target"}]
 
-    def available_feature_payloads(self):
+    def selected_input_payloads(self):
         return [
             {"feature_id": 1, "name": "Input A"},
             {"feature_id": 2, "name": "Target"},
@@ -31,10 +31,10 @@ class _SidebarStub:
 
 class _ViewModelStub:
     def available_group_kinds(self):
-        return [("batch", "Batch")]
+        return [("batch", "Batch"), ("line", "Line")]
 
 
-def test_regression_stratify_options_use_available_features_not_selected_inputs():
+def test_regression_stratify_options_order_is_target_groups_then_selected_inputs():
     tab = RegressionTab.__new__(RegressionTab)
     tab.sidebar = _SidebarStub()
     tab._view_model = _ViewModelStub()
@@ -43,4 +43,4 @@ def test_regression_stratify_options_use_available_features_not_selected_inputs(
 
     assert tab.sidebar.options is not None
     labels = [label for label, _payload in tab.sidebar.options]
-    assert labels == ["Target", "Input A", "Input B", "Batch"]
+    assert labels == ["Target", "Batch", "Line", "Input A", "Input B"]

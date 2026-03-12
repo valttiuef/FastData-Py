@@ -17,6 +17,7 @@ from backend.services.regression_service import RegressionRunResult
 from frontend.tabs.charts.charts_tab import ChartsTab
 import frontend.tabs.charts.charts_tab as charts_tab_module
 import frontend.tabs.regression.regression_tab as regression_tab_module
+from frontend.tabs.regression.results_panel import RegressionResultsPanel
 from frontend.tabs.som.som_tab import SomTab
 from frontend.tabs.statistics.preview_panel import StatisticsPreview
 from frontend.utils.exporting import ExportPlan
@@ -104,6 +105,83 @@ def test_regression_export_dialog_includes_model_options(monkeypatch: pytest.Mon
     assert isinstance(defaults, list)
     assert "summary" in defaults
     assert "model::run_a" in defaults
+
+
+def test_regression_export_dialog_asks_destination_before_collection(monkeypatch: pytest.MonkeyPatch) -> None:
+    run_a = _build_run("run_a")
+    run_b = _build_run("run_b")
+    call_order: list[str] = []
+    captured_collect: dict[str, object] = {}
+
+    class _DummyResultsPanel:
+        def all_runs(self):
+            return [run_a, run_b]
+
+        def selected_runs(self):
+            return [run_a]
+
+        def run_label(self, run):
+            return f"Run {run.key}"
+
+    class _DummySidebar:
+        def set_export_enabled(self, _enabled: bool) -> None:
+            return None
+
+    class _DialogStub:
+        class DialogCode:
+            Accepted = 1
+
+        def __init__(self, **_kwargs):
+            return None
+
+        def exec(self):
+            return self.DialogCode.Accepted
+
+        def selected_keys(self):
+            return ["summary", "model::run_a"]
+
+        def selected_format(self):
+            return "excel"
+
+    class _DummyTab:
+        def __init__(self):
+            self.results_panel = _DummyResultsPanel()
+            self.sidebar = _DummySidebar()
+
+        def _prepare_export_destination_plan(self, **kwargs):
+            call_order.append("prepare")
+            return ExportPlan(
+                kind="dataframes",
+                selected_format=str(kwargs.get("selected_format") or "excel"),
+                destination=Path("regression.xlsx"),
+                datasets={"placeholder": pd.DataFrame({"Value": [0]})},
+            )
+
+        def _collect_and_export_selected_items(self, **kwargs):
+            call_order.append("collect")
+            captured_collect.update(kwargs)
+
+    monkeypatch.setattr(regression_tab_module, "ExportSelectionDialog", _DialogStub)
+    monkeypatch.setattr(regression_tab_module, "toast_info", lambda *args, **kwargs: None)
+
+    regression_tab_module.RegressionTab._export_results(_DummyTab())
+
+    assert call_order == ["prepare", "collect"]
+    assert captured_collect.get("selected_format") == "excel"
+    assert isinstance(captured_collect.get("destination_plan"), ExportPlan)
+
+
+def test_regression_exports_use_table_columns(qapp) -> None:
+    panel = RegressionResultsPanel()
+    run = _build_run("run_a")
+    panel.update_run(run)
+
+    summary_export = panel.export_summary_frame([run])
+    prediction_export = panel.export_individual_frame(run)
+
+    assert list(summary_export.columns) == panel._runs_display_columns
+    assert list(prediction_export.columns) == panel._predictions_columns
+    assert not prediction_export.empty
 
 
 def test_statistics_preview_feature_export_tracks_selected_rows(qapp) -> None:

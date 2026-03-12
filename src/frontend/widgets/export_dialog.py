@@ -82,7 +82,8 @@ class ExportSelectionDialog(QDialog):
         options_layout = QVBoxLayout(self._options_group)
 
         self.select_all_checkbox = QCheckBox(tr("Select all"), self._options_group)
-        self.select_all_checkbox.setChecked(True)
+        self.select_all_checkbox.setChecked(False)
+        self.select_all_checkbox.setTristate(False)
         options_layout.addWidget(self.select_all_checkbox)
 
         scroll = QScrollArea(self._options_group)
@@ -97,6 +98,7 @@ class ExportSelectionDialog(QDialog):
 
         selected_defaults = set(default_selected_keys or [])
         use_default_subset = bool(selected_defaults)
+        self._bulk_selection_update = False
         self._option_checkboxes: dict[str, QCheckBox] = {}
         for option in options:
             cb_text = option.label
@@ -120,7 +122,7 @@ class ExportSelectionDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
-        self.select_all_checkbox.toggled.connect(self._set_all_options_checked)
+        self.select_all_checkbox.clicked.connect(self._on_select_all_clicked)
         self.format_combo.currentIndexChanged.connect(self._on_format_changed)
         self._sync_select_all_checkbox()
         self._on_format_changed()
@@ -137,28 +139,45 @@ class ExportSelectionDialog(QDialog):
     def include_data(self) -> bool:
         return True if self._data_checkbox is None else bool(self._data_checkbox.isChecked())
 
+    # @ai(gpt-5, codex, fix, 2026-03-12)
+    def _on_select_all_clicked(self, _checked: bool) -> None:
+        if not self._option_checkboxes:
+            return
+        all_checked = all(cb.isChecked() for cb in self._option_checkboxes.values())
+        # If all items are selected, the control acts as "Unselect all";
+        # otherwise it acts as "Select all".
+        self._set_all_options_checked(not all_checked)
+
     def _set_all_options_checked(self, checked: bool) -> None:
-        for checkbox in self._option_checkboxes.values():
-            checkbox.setChecked(bool(checked))
+        self._bulk_selection_update = True
+        try:
+            for checkbox in self._option_checkboxes.values():
+                if checkbox.isChecked() != bool(checked):
+                    checkbox.setChecked(bool(checked))
+        finally:
+            self._bulk_selection_update = False
+        self._sync_select_all_checkbox()
 
     def _sync_select_all_checkbox(self) -> None:
+        if self._bulk_selection_update:
+            return
         if not self._option_checkboxes:
-            self.select_all_checkbox.setChecked(False)
-            self.select_all_checkbox.setEnabled(False)
+            block = self.select_all_checkbox.blockSignals(True)
+            try:
+                self.select_all_checkbox.setChecked(False)
+                self.select_all_checkbox.setEnabled(False)
+                self.select_all_checkbox.setText(tr("Select all"))
+            finally:
+                self.select_all_checkbox.blockSignals(block)
             return
         states = [cb.isChecked() for cb in self._option_checkboxes.values()]
         all_checked = all(states)
-        any_checked = any(states)
         block = self.select_all_checkbox.blockSignals(True)
         try:
+            self.select_all_checkbox.setEnabled(True)
+            self.select_all_checkbox.setTristate(False)
             self.select_all_checkbox.setChecked(all_checked)
-            self.select_all_checkbox.setTristate(True)
-            if any_checked and not all_checked:
-                self.select_all_checkbox.setCheckState(Qt.CheckState.PartiallyChecked)
-            elif all_checked:
-                self.select_all_checkbox.setCheckState(Qt.CheckState.Checked)
-            else:
-                self.select_all_checkbox.setCheckState(Qt.CheckState.Unchecked)
+            self.select_all_checkbox.setText(tr("Unselect all") if all_checked else tr("Select all"))
         finally:
             self.select_all_checkbox.blockSignals(block)
 
