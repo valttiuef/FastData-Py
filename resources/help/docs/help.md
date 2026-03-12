@@ -2,7 +2,7 @@
 
 Context-sensitive help entries for FastData application
 
-Updated: 2026-03-12
+Updated: 2026-03-13
 
 Version: 2
 
@@ -176,16 +176,16 @@ algorithm for your specific problem.</p>
 
 ### Data
 
-Load datasets and browse their contents.
+Import data, manage databases, and define the active selection scope.
 
-<p>The <b>Data</b> tab is the starting point for working with FastData.</p>
+<p>The <b>Data</b> tab is the main entry point for preparing data in FastData.</p>
 <ul>
-  <li>Connect to DuckDB/DB files and pick the active table.</li>
-  <li>Preview rows with paging to verify that the dataset loaded correctly.</li>
-  <li>Inspect schema information such as column names, data types, and row counts.</li>
-  <li>Refresh or swap datasets without restarting the application.</li>
+  <li>Import files into the project database (<b>Import Files…</b>).</li>
+  <li>Create, open, and save database files from the sidebar actions.</li>
+  <li>Use <b>Data selection</b> to choose systems, datasets, imports, tags, filters, and preprocessing.</li>
+  <li>Preview the resulting table to confirm values and columns before analysis.</li>
 </ul>
-<p>Use this tab to confirm your source data looks correct before you create selections or train models.</p>
+<p>Selections configured here are reused by downstream tabs through the same data-selection model.</p>
 
 
 #### Filters
@@ -202,8 +202,7 @@ Apply conditions to subset your dataset.
   <li>Analyze specific categories or groups</li>
   <li>Compare subsets of data</li>
 </ul>
-<p>Filters can be combined using AND/OR logic for complex queries.</p>
-<p>Filtered data is used for all downstream analysis and visualizations.</p>
+<p>The selected filter set is applied to the dataframe used by downstream analysis and visualizations.</p>
 
 
 ##### Systems and datasets
@@ -460,51 +459,21 @@ Load large CSVs with DuckDB's fast parser.
 </ul>
 
 
-### Selections
-
-Create reusable feature selections and filter presets.
-
-<p>The <b>Selections</b> tab lets you curate which features to keep for downstream tasks.</p>
-<ul>
-  <li>Toggle columns on or off to build a focused feature set.</li>
-  <li>Right-click a saved feature to convert its measurement values into database groups.</li>
-  <li>Use <b>Reload features</b> to restore the table from the database and discard unsaved edits.</li>
-  <li>Choose a filter scope per feature to apply value limits globally, by system, dataset, import, or only to that feature.</li>
-  <li>Store multiple presets and quickly switch between them for experimentation.</li>
-  <li>Export or import selection databases to share with teammates.</li>
-</ul>
-<p>Adjusting selections here keeps your preprocessing and modeling steps consistent.</p>
-
-
-### Statistics
-
-Review derived statistics and prepared measurements.
-
-<p>The <b>Statistics</b> tab focuses on validating the numbers produced from your data.</p>
-<ul>
-  <li>Preview aggregated measurements and sanity-check values before saving them.</li>
-  <li>See how filters and preprocessing settings shape the resulting metrics.</li>
-  <li>Confirm column names, units, and sampling windows prior to exporting.</li>
-</ul>
-<p>This tab highlights the statistical outputs themselves, while the preprocessing widget controls how they are generated.</p>
-
-
 #### Preprocessing
 
-##### Data Preprocessing
+##### Preprocessing
 
-Clean and transform data before analysis.
+Prepare selected data with the built-in preprocessing controls.
 
-<p><b>Preprocessing</b> is the critical step of preparing raw data for machine learning models.</p>
-<p>Common preprocessing operations:</p>
+<p><b>Preprocessing</b> in FastData is configured from the shared <b>Data selection</b> area used across tabs.</p>
+<p>The app currently provides these preprocessing options:</p>
 <ul>
-  <li><b>Missing Value Handling</b> - Impute or remove rows with missing data</li>
-  <li><b>Normalization/Scaling</b> - Standardize feature ranges (e.g., StandardScaler, MinMaxScaler)</li>
-  <li><b>Encoding</b> - Convert categorical variables to numeric (one-hot, label encoding)</li>
-  <li><b>Outlier Removal</b> - Filter extreme values that may skew results</li>
-  <li><b>Feature Engineering</b> - Create new derived features from existing ones</li>
+  <li><b>Timestep</b>: keep native spacing, use a preset interval, or enter custom seconds.</li>
+  <li><b>Moving average</b>: optional smoothing window (preset or custom seconds).</li>
+  <li><b>Fill empty</b>: fill missing timestamps with none, zero, previous, or next value.</li>
+  <li><b>Aggregation</b>: combine overlapping points using avg, min, max, first, last, or median.</li>
 </ul>
-<p>Proper preprocessing often has more impact on model performance than algorithm selection.</p>
+<p>These controls shape the dataframe used by Statistics, Charts, SOM, Regression, and other analysis flows.</p>
 
 
 ##### Timestep
@@ -561,6 +530,35 @@ Summarize multiple points that fall within a timestep.
 <p>Pick the method that best matches how you would summarize overlapping readings.</p>
 
 
+### Selections
+
+Create reusable feature selections and filter presets.
+
+<p>The <b>Selections</b> tab lets you curate which features to keep for downstream tasks.</p>
+<ul>
+  <li>Toggle columns on or off to build a focused feature set.</li>
+  <li>Right-click a saved feature to convert its measurement values into database groups.</li>
+  <li>Use <b>Reload features</b> to restore the table from the database and discard unsaved edits.</li>
+  <li>Choose a filter scope per feature to apply value limits globally, by system, dataset, import, or only to that feature.</li>
+  <li>Store multiple presets and quickly switch between them for experimentation.</li>
+  <li>Export or import selection databases to share with teammates.</li>
+</ul>
+<p>Adjusting selections here keeps your preprocessing and modeling steps consistent.</p>
+
+
+### Statistics
+
+Review derived statistics and prepared measurements.
+
+<p>The <b>Statistics</b> tab focuses on validating the numbers produced from your data.</p>
+<ul>
+  <li>Preview aggregated measurements and sanity-check values before saving them.</li>
+  <li>See how the shared data-selection filters and preprocessing settings shape the resulting metrics.</li>
+  <li>Confirm column names, units, and sampling windows prior to exporting.</li>
+</ul>
+<p>This tab focuses on statistical outputs, while preprocessing is configured in the shared <b>Data selection</b> widget used by this tab.</p>
+
+
 #### Statistics
 
 ##### Statistics actions
@@ -570,7 +568,7 @@ Run the computation and store results when you are happy with them.
 <p>Use these buttons to generate and persist the statistics previewed in this tab.</p>
 <ul>
   <li><b>Gather statistics</b> executes the selected statistics with the current filters, mode, and preprocessing settings.</li>
-  <li><b>Save to database</b> writes the last computed preview into the database so it can be reused in other tabs.</li>
+  <li><b>Save statistics</b> writes the last computed preview into the database so it can be reused in other tabs.</li>
   <li>Run again any time you tweak filters, periods, or selected statistics to refresh the preview.</li>
 </ul>
 
@@ -649,7 +647,7 @@ Visualize your dataset with quick plots.
   <li>Create common plots such as histograms, scatter plots, and correlations.</li>
   <li>Use selections and filters to focus charts on specific subsets.</li>
   <li>Pick a target feature and run <b>Find feature correlations</b> to auto-build:
-    a top-20 correlation bar chart plus 3 scatter charts for the strongest matches.</li>
+    a top-10 correlation bar chart.</li>
   <li>Compare relationships between variables before modeling.</li>
 </ul>
 <p>Use charts to spot trends, outliers, and data quality issues early.</p>

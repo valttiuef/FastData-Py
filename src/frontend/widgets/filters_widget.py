@@ -5,8 +5,6 @@ from typing import Any, Iterable, Optional
 import pandas as pd
 from PySide6.QtCore import QDateTime, Qt, Signal, QObject
 from PySide6.QtWidgets import (
-
-
     QDateTimeEdit,
     QGridLayout,
     QGroupBox,
