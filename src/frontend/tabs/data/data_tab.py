@@ -16,12 +16,12 @@ logger = logging.getLogger(__name__)
 
 # Use shared chart caps to keep visualization work bounded for large selections.
 from frontend.charts import (
+    MAX_FEATURES_SHOWN,
     MAX_FEATURES_SHOWN_LEGEND,
     MonthlyBarChart,
     TimeSeriesChart,
 )
 from frontend.utils.feature_details import (
-    build_feature_label_list,
     format_feature_label,
 )
 from ...widgets.panel import Panel
@@ -374,7 +374,20 @@ class DataTab(TabWidget):
 
     # --- features
     def _format_feature_label(self, feature) -> str:
-        return format_feature_label(feature)
+        if isinstance(feature, dict):
+            payload = dict(feature)
+        else:
+            payload = {
+                "feature_id": getattr(feature, "feature_id", None),
+                "name": getattr(feature, "name", getattr(feature, "base_name", None)),
+                "base_name": getattr(feature, "base_name", getattr(feature, "name", None)),
+                "source": getattr(feature, "source", None),
+                "unit": getattr(feature, "unit", None),
+                "type": getattr(feature, "type", None),
+            }
+        payload.pop("notes", None)
+        payload.pop("label", None)
+        return format_feature_label(payload)
 
     def _format_date(self, ts) -> str:
         """Safely format a timestamp as YYYY-MM-DD or return "?"."""
@@ -388,7 +401,18 @@ class DataTab(TabWidget):
 
     def _build_feature_label_list(self, features: list | None, max_count: int | None = None) -> tuple[str, int]:
         """Return (display_names, display_count)."""
-        return build_feature_label_list(features or [], max_count=max_count)
+        if not features:
+            return "—", 0
+        limit = MAX_FEATURES_SHOWN if max_count is None else int(max_count)
+        requested = len(features)
+        display_count = min(requested, limit)
+        names = ", ".join(
+            self._format_feature_label(feature)
+            for feature in (features or [])[:display_count]
+        )
+        if requested > display_count:
+            names = f"{names} (+{requested - display_count} more)"
+        return names, display_count
 
     def _build_data_info_text(self, flt: DataFilters, start_ts, end_ts, rows: int | None = None) -> str:
         """

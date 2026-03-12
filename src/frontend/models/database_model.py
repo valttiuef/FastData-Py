@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 from pathlib import Path
+import hashlib
 import logging
 import re
 import threading
@@ -1904,6 +1905,7 @@ class DatabaseModel(QObject):
             "group_points": 0,
         }
 
+    # @ai(gpt-5, codex-cli, fix, 2026-03-12)
     def save_feature_with_measurements(
         self,
         *,
@@ -1969,6 +1971,7 @@ class DatabaseModel(QObject):
         db = self._ensure_database()
         with db.write_transaction() as con:
             import_targets: list[tuple[int, int]] = []
+            source_scope_rows: list[tuple[int, int, int]] = []
 
             source_id: Optional[int] = None
             if source_feature_id is not None:
@@ -1977,7 +1980,44 @@ class DatabaseModel(QObject):
                 except Exception:
                     source_id = None
 
+            source_system_id: Optional[int] = None
             if source_id is not None:
+                system_row = con.execute(
+                    "SELECT system_id FROM features WHERE id = ? LIMIT 1;",
+                    [source_id],
+                ).fetchone()
+                if system_row and system_row[0] is not None:
+                    source_system_id = int(system_row[0])
+
+                where = ["fim.feature_id = ?"]
+                params = [source_id]
+                if selected_systems:
+                    ph = ",".join(["?"] * len(selected_systems))
+                    where.append(f"sy.name IN ({ph})")
+                    params.extend(selected_systems)
+                if selected_datasets:
+                    ph = ",".join(["?"] * len(selected_datasets))
+                    where.append(f"ds.name IN ({ph})")
+                    params.extend(selected_datasets)
+                rows = con.execute(
+                    f"""
+                    SELECT DISTINCT fim.system_id, fim.dataset_id, fim.import_id
+                    FROM feature_import_map fim
+                    JOIN systems sy ON sy.id = fim.system_id
+                    JOIN datasets ds ON ds.id = fim.dataset_id
+                    WHERE {' AND '.join(where)}
+                    ORDER BY fim.system_id, fim.dataset_id, fim.import_id
+                    """,
+                    params,
+                ).fetchall()
+                source_scope_rows.extend(
+                    (int(row[0]), int(row[1]), int(row[2]))
+                    for row in rows
+                    if row and row[0] is not None and row[1] is not None and row[2] is not None
+                )
+                import_targets.extend((sid, did) for sid, did, _ in source_scope_rows)
+
+            if source_id is not None and not import_targets:
                 where = ["m.feature_id = ?"]
                 params = [source_id]
                 if selected_systems:
@@ -2002,7 +2042,9 @@ class DatabaseModel(QObject):
                     params,
                 ).fetchall()
                 import_targets.extend(
-                    (int(row[0]), int(row[1])) for row in rows if row and row[0] is not None and row[1] is not None
+                    (int(row[0]), int(row[1]))
+                    for row in rows
+                    if row and row[0] is not None and row[1] is not None
                 )
                 if not import_targets:
                     where = ["cfc.feature_id = ?"]
@@ -2029,7 +2071,9 @@ class DatabaseModel(QObject):
                         params,
                     ).fetchall()
                     import_targets.extend(
-                        (int(row[0]), int(row[1])) for row in rows if row and row[0] is not None and row[1] is not None
+                        (int(row[0]), int(row[1]))
+                        for row in rows
+                        if row and row[0] is not None and row[1] is not None
                     )
 
             if not import_targets:
@@ -2053,10 +2097,15 @@ class DatabaseModel(QObject):
             notes = payload.get("notes")
             lag = payload.get("lag_seconds")
             raw_tags = payload.get("tags")
+            feature_system_id = (
+                int(source_system_id)
+                if source_system_id is not None
+                else int(import_targets[0][0])
+            )
 
             feature_id = db.features_repo.insert_feature(
                 con,
-                system_id=int(import_targets[0][0]),
+                system_id=feature_system_id,
                 name=feature_name,
                 source=str(source or ""),
                 unit=str(unit or ""),
@@ -2079,28 +2128,145 @@ class DatabaseModel(QObject):
                 db.feature_tags_repo.replace_feature_tags(con, int(feature_id), tags)
 
             measurement_parts: list[pd.DataFrame] = []
-            for system_id, dataset_id in import_targets:
-                new_import_id = db.imports_repo.next_id(con)
-                db.imports_repo.insert(
-                    con,
-                    import_id=new_import_id,
-                    file_path="predictions",
-                    file_name="predictions",
-                    file_sha256=None,
-                    sheet_name=None,
-                    dataset_id=int(dataset_id),
-                    header_rows=0,
-                    row_count=int(len(frame)),
+            scope_rows_frames: list[pd.DataFrame] = []
+            if source_scope_rows:
+                scope_rows_frames.append(
+                    pd.DataFrame(
+                        source_scope_rows,
+                        columns=["system_id", "dataset_id", "import_id"],
+                    ).drop_duplicates()
                 )
-                part = frame.copy()
-                part["dataset_id"] = int(dataset_id)
-                part["feature_id"] = int(feature_id)
-                part["import_id"] = int(new_import_id)
-                measurement_parts.append(part[["dataset_id", "ts", "feature_id", "value", "import_id"]])
+
+            fallback_frame = frame.copy()
+            if source_id is not None and source_scope_rows:
+                where = ["m.feature_id = ?"]
+                params = [source_id]
+                if selected_systems:
+                    ph = ",".join(["?"] * len(selected_systems))
+                    where.append(f"sy.name IN ({ph})")
+                    params.extend(selected_systems)
+                if selected_datasets:
+                    ph = ",".join(["?"] * len(selected_datasets))
+                    where.append(f"ds.name IN ({ph})")
+                    params.extend(selected_datasets)
+                source_measurements = con.execute(
+                    f"""
+                    SELECT m.ts, sy.id AS system_id, i.dataset_id, m.import_id
+                    FROM measurements m
+                    JOIN imports i ON i.id = m.import_id
+                    JOIN datasets ds ON ds.id = i.dataset_id
+                    JOIN systems sy ON sy.id = ds.system_id
+                    WHERE {' AND '.join(where)}
+                    ORDER BY m.ts ASC, m.import_id ASC
+                    """,
+                    params,
+                ).df()
+                if source_measurements is not None and not source_measurements.empty:
+                    source_measurements["ts"] = pd.to_datetime(source_measurements["ts"], errors="coerce")
+                    source_measurements = source_measurements.dropna(subset=["ts", "system_id", "dataset_id", "import_id"])
+                    source_measurements = source_measurements.drop_duplicates(subset=["ts"], keep="first")
+                    if not source_measurements.empty:
+                        mapped = frame.merge(
+                            source_measurements[["ts", "system_id", "dataset_id", "import_id"]],
+                            on="ts",
+                            how="left",
+                        )
+                        matched = mapped.dropna(subset=["system_id", "dataset_id", "import_id"]).copy()
+                        if not matched.empty:
+                            matched["system_id"] = pd.to_numeric(matched["system_id"], errors="coerce").astype(int)
+                            matched["dataset_id"] = pd.to_numeric(matched["dataset_id"], errors="coerce").astype(int)
+                            matched["import_id"] = pd.to_numeric(matched["import_id"], errors="coerce").astype(int)
+                            matched["feature_id"] = int(feature_id)
+                            measurement_parts.append(
+                                matched[["dataset_id", "ts", "feature_id", "value", "import_id"]]
+                            )
+                            scope_rows_frames.append(
+                                matched[["system_id", "dataset_id", "import_id"]].drop_duplicates()
+                            )
+                            fallback_frame = mapped[mapped["import_id"].isna()][["ts", "value"]].copy()
+
+            if fallback_frame is not None and not fallback_frame.empty:
+                # If some rows are already mapped to source imports, write unmapped rows
+                # once to a synthetic import tied to the first target dataset.
+                fallback_targets = import_targets if not measurement_parts else [import_targets[0]]
+                for system_id, dataset_id in fallback_targets:
+                    new_import_id = db.imports_repo.next_id(con)
+                    synthetic_sha = hashlib.sha256(
+                        f"predictions|{feature_id}|{dataset_id}|{new_import_id}".encode("utf-8")
+                    ).hexdigest()
+                    db.imports_repo.insert(
+                        con,
+                        import_id=new_import_id,
+                        file_path="predictions",
+                        file_name="predictions",
+                        file_sha256=synthetic_sha,
+                        sheet_name=None,
+                        dataset_id=int(dataset_id),
+                        header_rows=0,
+                        row_count=int(len(fallback_frame)),
+                    )
+                    part = fallback_frame.copy()
+                    part["dataset_id"] = int(dataset_id)
+                    part["feature_id"] = int(feature_id)
+                    part["import_id"] = int(new_import_id)
+                    measurement_parts.append(
+                        part[["dataset_id", "ts", "feature_id", "value", "import_id"]]
+                    )
+                    scope_rows_frames.append(
+                        pd.DataFrame(
+                            [
+                                {
+                                    "system_id": int(system_id),
+                                    "dataset_id": int(dataset_id),
+                                    "import_id": int(new_import_id),
+                                }
+                            ]
+                        )
+                    )
+
+            if not measurement_parts:
+                raise ValueError("No prediction rows could be mapped to target imports")
 
             all_measurements = pd.concat(measurement_parts, axis=0, ignore_index=True)
             con.register("new_feature_measurements_from_model", all_measurements)
-            db.measurements_repo.insert_chunk(con, "new_feature_measurements_from_model")
+            try:
+                db.measurements_repo.insert_chunk(con, "new_feature_measurements_from_model")
+            finally:
+                try:
+                    con.unregister("new_feature_measurements_from_model")
+                except Exception:
+                    logger.warning("Failed to unregister temp table new_feature_measurements_from_model", exc_info=True)
+
+            if scope_rows_frames:
+                scope_rows = pd.concat(scope_rows_frames, axis=0, ignore_index=True).drop_duplicates()
+                scope_rows["feature_id"] = int(feature_id)
+                scope_rows["system_id"] = pd.to_numeric(scope_rows["system_id"], errors="coerce")
+                scope_rows["dataset_id"] = pd.to_numeric(scope_rows["dataset_id"], errors="coerce")
+                scope_rows["import_id"] = pd.to_numeric(scope_rows["import_id"], errors="coerce")
+                scope_rows = scope_rows.dropna(subset=["system_id", "dataset_id", "import_id", "feature_id"]).copy()
+                if not scope_rows.empty:
+                    scope_rows["feature_id"] = scope_rows["feature_id"].astype(int)
+                    scope_rows["system_id"] = scope_rows["system_id"].astype(int)
+                    scope_rows["dataset_id"] = scope_rows["dataset_id"].astype(int)
+                    scope_rows["import_id"] = scope_rows["import_id"].astype(int)
+                    con.register("new_feature_scope_rows_from_model", scope_rows[["feature_id", "system_id", "dataset_id", "import_id"]])
+                    try:
+                        db.feature_scopes_repo.insert_import_scope_from_temp(con, "new_feature_scope_rows_from_model")
+                    finally:
+                        try:
+                            con.unregister("new_feature_scope_rows_from_model")
+                        except Exception:
+                            logger.warning("Failed to unregister temp table new_feature_scope_rows_from_model", exc_info=True)
+                    dataset_ids = sorted(
+                        int(value)
+                        for value in scope_rows["dataset_id"].dropna().astype(int).unique().tolist()
+                    )
+                    if dataset_ids:
+                        db.feature_scopes_repo.sync_dataset_scope(con, dataset_ids)
+                else:
+                    scope_rows = pd.DataFrame(columns=["feature_id", "system_id", "dataset_id", "import_id"])
+            else:
+                scope_rows = pd.DataFrame(columns=["feature_id", "system_id", "dataset_id", "import_id"])
 
         return {
             "feature": {
@@ -2113,7 +2279,11 @@ class DatabaseModel(QObject):
                 "lag_seconds": int(lag) if lag not in (None, "") else 0,
                 "tags": list(tags),
             },
-            "import_count": int(len(import_targets)),
+            "import_count": int(
+                len(
+                    scope_rows["import_id"].dropna().astype(int).unique().tolist()
+                )
+            ) if not scope_rows.empty else 0,
             "measurement_count": int(len(all_measurements)),
         }
 

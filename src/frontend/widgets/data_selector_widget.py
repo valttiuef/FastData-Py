@@ -957,6 +957,10 @@ class DataSelectorWidget(QGroupBox):
             self.preprocessing_widget.parameters_changed.connect(self._on_preprocessing_changed)
         if self.filters_widget is not None:
             self.filters_widget.filters_changed.connect(self._on_filters_changed)
+            # @ai(gpt-5, codex-cli, fix, 2026-03-12)
+            # Refreshes can update selected scope values without emitting
+            # filters_changed (combos are updated with signals blocked).
+            self.filters_widget.filters_refreshed.connect(self._on_filters_changed)
         if self.features_widget is not None:
             self.features_widget.selection_changed.connect(self._on_features_selection_changed)
 

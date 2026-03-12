@@ -580,52 +580,29 @@ class FiltersWidget(CollapsibleSection):
 
     # ------------------------------------------------------------------
     def set_systems(self, items: list[tuple[str, Any]], *, check_all: bool = True) -> None:
-        was = self.systems_combo.blockSignals(True)
-        try:
-            self.systems_combo.set_items(items, check_all=check_all)
-            if check_all and items and not self.systems_combo.selected_values():
-                values = [value for _label, value in items]
-                self.systems_combo.set_selected_values(values)
-                if self.systems_combo.preserve_missing_selected_values():
-                    self.systems_combo.set_remembered_selected_values(values)
-        finally:
-            self.systems_combo.blockSignals(was)
+        self._set_combo_items_preserving_selection(
+            self.systems_combo,
+            items,
+            check_all=check_all,
+        )
 
     def set_datasets(self, items: list[tuple[str, Any]], *, check_all: bool = True) -> None:
-        was = self.datasets_combo.blockSignals(True)
-        try:
-            self._set_combo_placeholder_from_items(
-                self.datasets_combo,
-                items,
-                empty_placeholder="No datasets available",
-                default_placeholder="All datasets",
-            )
-            self.datasets_combo.set_items(items, check_all=check_all)
-            if check_all and items and not self.datasets_combo.selected_values():
-                values = [value for _label, value in items]
-                self.datasets_combo.set_selected_values(values)
-                if self.datasets_combo.preserve_missing_selected_values():
-                    self.datasets_combo.set_remembered_selected_values(values)
-        finally:
-            self.datasets_combo.blockSignals(was)
+        self._set_combo_items_preserving_selection(
+            self.datasets_combo,
+            items,
+            check_all=check_all,
+            empty_placeholder="No datasets available",
+            default_placeholder="All datasets",
+        )
 
     def set_imports(self, items: list[tuple[str, Any]], *, check_all: bool = True) -> None:
-        was = self.imports_combo.blockSignals(True)
-        try:
-            self._set_combo_placeholder_from_items(
-                self.imports_combo,
-                items,
-                empty_placeholder="No imports available",
-                default_placeholder="All imports",
-            )
-            self.imports_combo.set_items(items, check_all=check_all)
-            if check_all and items and not self.imports_combo.selected_values():
-                values = [value for _label, value in items]
-                self.imports_combo.set_selected_values(values)
-                if self.imports_combo.preserve_missing_selected_values():
-                    self.imports_combo.set_remembered_selected_values(values)
-        finally:
-            self.imports_combo.blockSignals(was)
+        self._set_combo_items_preserving_selection(
+            self.imports_combo,
+            items,
+            check_all=check_all,
+            empty_placeholder="No imports available",
+            default_placeholder="All imports",
+        )
 
     def set_groups(self, df: pd.DataFrame) -> None:
         was = self.group_combo.blockSignals(True)
@@ -680,6 +657,60 @@ class FiltersWidget(CollapsibleSection):
         normalized_items = list(items or [])
         has_real_items = bool(normalized_items)
         combo.set_placeholder(empty_placeholder if not has_real_items else default_placeholder)
+
+    @staticmethod
+    def _is_full_visible_selection(
+        selected_values: Iterable[Any] | None,
+        visible_values: Iterable[Any] | None,
+    ) -> bool:
+        selected_set = set(selected_values or [])
+        visible_set = set(visible_values or [])
+        return bool(visible_set) and selected_set == visible_set
+
+    # @ai(gpt-5, codex-cli, fix, 2026-03-12)
+    def _set_combo_items_preserving_selection(
+        self,
+        combo: MultiCheckCombo,
+        items: Iterable[tuple[str, Any]] | None,
+        *,
+        check_all: bool,
+        empty_placeholder: str | None = None,
+        default_placeholder: str | None = None,
+    ) -> None:
+        normalized_items = list(items or [])
+        previous_visible_values = self._all_combo_values(combo)
+        previous_selected_values = combo.selected_values()
+        previous_remembered_values = combo.remembered_selected_values()
+        had_full_selection = self._is_full_visible_selection(
+            previous_selected_values,
+            previous_visible_values,
+        )
+
+        was = combo.blockSignals(True)
+        try:
+            if empty_placeholder is not None and default_placeholder is not None:
+                self._set_combo_placeholder_from_items(
+                    combo,
+                    normalized_items,
+                    empty_placeholder=empty_placeholder,
+                    default_placeholder=default_placeholder,
+                )
+
+            combo.set_items(normalized_items, check_all=check_all)
+            if not check_all or not normalized_items:
+                return
+
+            values = [value for _label, value in normalized_items]
+            if not (had_full_selection or not combo.selected_values()):
+                return
+
+            combo.set_selected_values(values)
+            if combo.preserve_missing_selected_values():
+                visible_set = set(values)
+                extras = [value for value in previous_remembered_values if value not in visible_set]
+                combo.set_remembered_selected_values(values + extras)
+        finally:
+            combo.blockSignals(was)
 
     def _select_values_or_all(
         self,

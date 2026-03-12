@@ -214,3 +214,55 @@ def test_scope_refresh_selects_available_systems_when_previous_selection_disappe
     widget.set_systems([("System B", "System B")], check_all=True)
 
     assert widget.selected_systems() == ["System B"]
+
+
+def test_scope_refresh_keeps_all_selected_when_new_dataset_and_import_options_appear():
+    _qapp()
+    widget = FiltersWidget(model=_StubDatabaseModel())
+
+    widget.set_datasets([("Dataset A", "Dataset A")], check_all=True)
+    widget.set_imports([("Import 1", 1)], check_all=True)
+    assert widget.selected_datasets() == ["Dataset A"]
+    assert widget.selected_import_ids() == [1]
+
+    widget.set_datasets(
+        [("Dataset A", "Dataset A"), ("Dataset B", "Dataset B")],
+        check_all=True,
+    )
+    widget.set_imports(
+        [("Import 1", 1), ("Import 2", 2)],
+        check_all=True,
+    )
+
+    assert widget.selected_datasets() == ["Dataset A", "Dataset B"]
+    assert widget.selected_import_ids() == [1, 2]
+    assert widget.selected_datasets_for_data_scope() == ["Dataset A", "Dataset B"]
+    assert widget.selected_import_ids_for_data_scope() == [1, 2]
+
+
+def test_scope_refresh_preserves_user_subset_when_not_all_selected():
+    _qapp()
+    widget = FiltersWidget(model=_StubDatabaseModel())
+
+    widget.set_datasets(
+        [("Dataset A", "Dataset A"), ("Dataset B", "Dataset B")],
+        check_all=True,
+    )
+    widget.set_imports(
+        [("Import 1", 1), ("Import 2", 2)],
+        check_all=True,
+    )
+    widget.datasets_combo.set_selected_values(["Dataset A"])
+    widget.imports_combo.set_selected_values([1])
+
+    widget.set_datasets(
+        [("Dataset A", "Dataset A"), ("Dataset B", "Dataset B"), ("Dataset C", "Dataset C")],
+        check_all=True,
+    )
+    widget.set_imports(
+        [("Import 1", 1), ("Import 2", 2), ("Import 3", 3)],
+        check_all=True,
+    )
+
+    assert widget.selected_datasets() == ["Dataset A"]
+    assert widget.selected_import_ids() == [1]

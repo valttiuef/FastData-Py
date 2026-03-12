@@ -496,7 +496,7 @@ Review derived statistics and prepared measurements.
 Clean and transform data before analysis.
 
 <p><b>Preprocessing</b> is the critical step of preparing raw data for machine learning models.</p>
-<p>Common preprocessing operations in FastData:</p>
+<p>Common preprocessing operations:</p>
 <ul>
   <li><b>Missing Value Handling</b> - Impute or remove rows with missing data</li>
   <li><b>Normalization/Scaling</b> - Standardize feature ranges (e.g., StandardScaler, MinMaxScaler)</li>

@@ -117,7 +117,6 @@ class TimelineTabWidget(QWidget):
             return container
 
         time_layout.addWidget(_title_row(tr("Cluster timeline"), "controls.som.timeline.chart"))
-        time_layout.addSpacing(4)
 
         controls_row = QHBoxLayout()
         display_label = QLabel(tr("Display:"))
