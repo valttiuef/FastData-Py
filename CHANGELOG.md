@@ -4,14 +4,52 @@ All notable end-user changes are documented in this file.
 
 The format is based on Keep a Changelog, with entries grouped by release.
 
-## [Unreleased]
+## [0.2.0] - 2026-03-13
+
+### Added
+- Chat session management: save, load, and manage multiple conversation sessions
+- AI thinking mode toggle for more detailed analysis responses
+- LLM provider selection and model listing (OpenAI, Ollama)
+- API key testing flow for LLM providers
+- Stop button for chat streaming responses
+- CSV group labeling: link CSV columns as group labels for better data organization
+- Dynamic theme switching at runtime (no restart needed)
+- Language switching at runtime
+- Session-aware logging in the database
+- Import/export file dialog remembers last used folder
 
 ### Changed
-- Data tab filter dependency flow now separates feature-affecting and data-affecting filter updates more clearly, and group/tag filter options are scoped to selected systems/datasets/imports.
+- Filter dependency flow is now more intuitive: datasets filter by systems, imports filter by datasets, and groups/tags scope to your selection
+- Better data selection performance with async fetching that doesn't freeze the UI
+- Chart exports now match the GUI appearance for professional reports
+- Statistics tab can plot and export multiple features at once
+- Regression and SOM tabs now use unified data fetching for consistency
+- Selection settings are now more secure with explicit preset saving options
+- Improved chart styling across both light and dark themes for a more cohesive look
+- More user-friendly error messages in regression and SOM analysis
+- Reset buttons readily available on all chart views
+
+### Fixed
+- Filter state restoration now respects data dependencies (datasets available for systems, imports available for datasets)
+- Chart feature combo now updates properly when database changes
+- SOM saved timeline cluster groups now show correctly in custom selections
+- Regression predictions properly preserve source import scope when saving
+- Stratify options update correctly when user changes inputs/targets
+- Chart selections work correctly even when table rows are sorted
+- Timeline cluster groups and statistics properly use scoped filters
+- Feature selections are preserved across UI refreshes
+- Empty and static features are automatically cleaned during model training
+- CSV imports now retain non-numeric columns as features instead of silently dropping them
+
+### Performance
+- Significantly faster data filtering and selection operations
+- Improved chart responsiveness with better refresh optimization
+- More efficient database queries for filtered data access
+- Optimized statistics calculations with preprocessed data
 
 ### Breaking
-- Data database schema now includes `group_label_scopes` for explicit group-to-system/dataset/import linking.
-- Existing databases must be recreated to fully use scoped group/tag filtering behavior.
+- Data database schema now includes `group_label_scopes` for explicit group-to-system/dataset/import linking
+- Existing databases should be recreated to fully support scoped group/tag filtering and CSV group linking
 
 ## [0.1.1] - 2026-02-28
 

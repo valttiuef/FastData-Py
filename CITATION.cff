@@ -21,8 +21,8 @@ authors:
     given-names: "Valtteri"
     email: "valtti@uef.fi"
 
-version: "0.1.1"
-date-released: "2026-02-28"
+version: "0.2.0"
+date-released: "2026-03-13"
 
 repository-code: "https://github.com/valttiuef/FastData-Py"
 url: "https://github.com/valttiuef/FastData-Py"
