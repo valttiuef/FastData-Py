@@ -424,6 +424,19 @@ class HybridPandasModel(DatabaseModel):
         """
         opts = options or ImportOptions()
         created_import_ids: list[int] = []
+        features_before_import = pd.DataFrame()
+
+        try:
+            features_before_import = self._normalize_feature_frame_columns(self.db.all_features())
+        except Exception:
+            features_before_import = pd.DataFrame()
+        before_ids: set[int] = set()
+        if features_before_import is not None and not features_before_import.empty and "feature_id" in features_before_import.columns:
+            for value in features_before_import["feature_id"].tolist():
+                try:
+                    before_ids.add(int(value))
+                except Exception:
+                    continue
 
         def _cb(phase, cur, tot, msg):
             # always emit Qt signal
@@ -479,17 +492,49 @@ class HybridPandasModel(DatabaseModel):
                     len(files),
                     exc_info=True,
                 )
-        
+
+        new_features: list[dict] = []
+        try:
+            features_after_import = self._normalize_feature_frame_columns(self.db.all_features())
+        except Exception:
+            features_after_import = pd.DataFrame()
+        if (
+            features_after_import is not None
+            and not features_after_import.empty
+            and "feature_id" in features_after_import.columns
+        ):
+            for row in features_after_import.itertuples(index=False):
+                raw_feature_id = getattr(row, "feature_id", None)
+                if raw_feature_id is None:
+                    continue
+                try:
+                    feature_id = int(raw_feature_id)
+                except Exception:
+                    continue
+                if feature_id in before_ids:
+                    continue
+                label = str(getattr(row, "notes", "") or "").strip()
+                new_features.append({"feature_id": feature_id, "label": label})
+
         # Importing changes the underlying measurement rows even when the
         # feature list is unchanged, so drop the in-memory data caches before
         # notifying the UI. The next fetch must hit the updated database.
         self._reset_caches()
 
+        if new_features:
+            try:
+                self._extend_active_selection_with_new_features(new_features)
+            except Exception:
+                logger.warning(
+                    "Failed to include imported features in the active selection payload.",
+                    exc_info=True,
+                )
+
         # Signal that feature/import metadata changed so dependent widgets
         # refresh once. Do not emit database_changed here: the database path did
         # not change, and that extra signal causes duplicate UI refresh cycles.
         try:
-            self.notify_features_changed()
+            self.notify_features_changed(new_features=new_features or None)
         except Exception:
             logger.warning(
                 "File import completed, but model refresh/feature-change notification failed.",

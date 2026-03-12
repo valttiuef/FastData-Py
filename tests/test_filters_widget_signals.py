@@ -40,6 +40,20 @@ class _StubDatabaseModel:
             return ["Dataset C"]
         return []
 
+    def list_datasets_for_filters(self, *, systems=None):
+        items = [
+            ("Dataset A", "System A"),
+            ("Dataset A", "System B"),
+            ("Dataset B", "System A"),
+            ("Dataset C", "System B"),
+        ]
+        if systems is None:
+            return items
+        allowed = {str(name).strip() for name in systems if str(name).strip()}
+        if not allowed:
+            return []
+        return [(dataset, system) for dataset, system in items if system in allowed]
+
     def list_imports(self, *, system=None, dataset=None, datasets=None, systems=None):
         if systems == ["System A"] and datasets == ["Dataset A"]:
             return [("Import 1", 1)]
@@ -146,6 +160,16 @@ def test_dataset_change_emits_only_final_dataset_and_filters_signals():
         "datasets_changed": 1,
         "imports_changed": 0,
     }
+
+
+def test_same_named_datasets_are_listed_per_system_in_filter_options():
+    _qapp()
+    widget = FiltersWidget(model=_StubDatabaseModel())
+
+    items = widget._filters_view_model.datasets_for_systems(None)
+
+    dataset_a_labels = [label for label, value in items if value == "Dataset A"]
+    assert dataset_a_labels == ["Dataset A (System A)", "Dataset A (System B)"]
 
 
 def test_group_and_tag_combos_include_no_group_and_no_tag_options():

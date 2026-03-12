@@ -19,7 +19,6 @@ class CollapsibleSection(QWidget):
         self._group.setTitle("")        # no native title; we’ll use the button text
         self._group.setFlat(False)
         self._group.setMinimumWidth(240) #match sidebar minimum width
-        self._group.setStyleSheet("QGroupBox { margin-top: 4px; }")
 
         # Header button (inside the groupbox)
         self._btn = QToolButton(parent=self)

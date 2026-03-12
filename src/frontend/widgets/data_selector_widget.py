@@ -207,11 +207,13 @@ class DataSelectorViewModel(QObject):
     def _on_selection_state_changed(self) -> None:
         """Apply saved selection filters/preprocessing and refresh affected widgets."""
         already_pending = self._selection_refresh_pending
+        if already_pending:
+            # Coalesce rapid selection-setting activations into one refresh pass.
+            return
         self._selection_refresh_pending = True
         self._selection_refresh_waiting_features_reload = False
-        if not already_pending:
-            self._widget.begin_feature_reload_batch()
-            self._widget.begin_data_requirements_batch()
+        self._widget.begin_feature_reload_batch()
+        self._widget.begin_data_requirements_batch()
         if self._widget.filters_widget is not None:
             try:
                 self._widget.filters_widget.refresh_filters()
@@ -268,6 +270,13 @@ class DataSelectorViewModel(QObject):
             preprocessing_state = dict(getattr(model, "selection_preprocessing", {}) or {})
         except Exception:
             preprocessing_state = {}
+        filters_widget = self._widget.filters_widget
+        if filters_widget is not None and filters_state:
+            filters_state = self._sanitize_loaded_scope_filters(
+                filters_state,
+                available_datasets=filters_widget.available_datasets(),
+                available_import_ids=filters_widget.available_import_ids(),
+            )
 
         try:
             self._widget.apply_settings(
@@ -279,6 +288,46 @@ class DataSelectorViewModel(QObject):
             )
         except Exception:
             logger.warning("Exception in _apply_selection_state_to_widget", exc_info=True)
+
+    @staticmethod
+    def _sanitize_loaded_scope_filters(
+        filters_state: Mapping[str, Any],
+        *,
+        available_datasets: Sequence[str],
+        available_import_ids: Sequence[int],
+    ) -> dict[str, Any]:
+        state = dict(filters_state or {})
+
+        requested_datasets = [
+            str(value).strip()
+            for value in (state.get("datasets") or state.get("Datasets") or [])
+            if str(value).strip()
+        ]
+        if requested_datasets:
+            available_dataset_set = {str(value).strip() for value in (available_datasets or []) if str(value).strip()}
+            matched_datasets = [value for value in requested_datasets if value in available_dataset_set]
+            if matched_datasets:
+                state["datasets"] = list(dict.fromkeys(matched_datasets))
+                state["Datasets"] = list(state["datasets"])
+            else:
+                state.pop("datasets", None)
+                state.pop("Datasets", None)
+
+        requested_import_ids: list[int] = []
+        for value in state.get("import_ids") or []:
+            try:
+                requested_import_ids.append(int(value))
+            except Exception:
+                continue
+        if requested_import_ids:
+            available_import_set = {int(value) for value in (available_import_ids or [])}
+            matched_import_ids = [value for value in requested_import_ids if value in available_import_set]
+            if matched_import_ids:
+                state["import_ids"] = list(dict.fromkeys(matched_import_ids))
+            else:
+                state.pop("import_ids", None)
+
+        return state
 
     # ------------------------------------------------------------------
     # @ai(gpt-5, codex, refactor, 2026-03-10)
@@ -948,6 +997,10 @@ class DataSelectorWidget(QGroupBox):
                 parent=self,
                 data_model=data_model,
             )
+            # @ai(gpt-5, codex-cli, fix, 2026-03-12)
+            # Active selection settings define the primary feature visibility
+            # scope across tabs, so feature lists default to selection-filtered.
+            self.features_widget.set_use_selection_filter(True)
             self.features_widget.setVisible(True)
             layout.addWidget(self.features_widget, 1)
             self.features_widget.details_requested.connect(self._show_features_info_dialog)

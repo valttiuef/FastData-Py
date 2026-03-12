@@ -6,7 +6,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from frontend.widgets.data_selector_widget import DataSelectorWidget
+from frontend.widgets.data_selector_widget import DataSelectorWidget, DataSelectorViewModel
 
 
 class _Emitter:
@@ -134,3 +134,71 @@ def test_dataset_change_emits_data_filter_change_and_requirements():
     assert selector.feature_refresh_calls == 2
     assert selector.requirements_calls == 2
     assert len(selector.filters_changed.emitted) == 2
+
+
+def test_sanitize_loaded_scope_filters_drops_missing_dataset_and_import_constraints():
+    state = {
+        "datasets": ["Missing Dataset"],
+        "Datasets": ["Missing Dataset"],
+        "import_ids": [999],
+        "months": [1],
+    }
+    sanitized = DataSelectorViewModel._sanitize_loaded_scope_filters(
+        state,
+        available_datasets=["Dataset A", "Dataset B"],
+        available_import_ids=[1, 2],
+    )
+    assert "datasets" not in sanitized
+    assert "Datasets" not in sanitized
+    assert "import_ids" not in sanitized
+    assert sanitized.get("months") == [1]
+
+
+def test_sanitize_loaded_scope_filters_keeps_intersection_for_partial_matches():
+    state = {
+        "datasets": ["Dataset A", "Missing Dataset"],
+        "Datasets": ["Dataset A", "Missing Dataset"],
+        "import_ids": [1, 999],
+    }
+    sanitized = DataSelectorViewModel._sanitize_loaded_scope_filters(
+        state,
+        available_datasets=["Dataset A", "Dataset B"],
+        available_import_ids=[1, 2],
+    )
+    assert sanitized["datasets"] == ["Dataset A"]
+    assert sanitized["Datasets"] == ["Dataset A"]
+    assert sanitized["import_ids"] == [1]
+
+
+def test_selection_state_refresh_is_coalesced_when_already_pending():
+    class _StubFilters:
+        def __init__(self) -> None:
+            self.refresh_calls = 0
+
+        def refresh_filters(self) -> None:
+            self.refresh_calls += 1
+
+    class _StubWidget:
+        def __init__(self) -> None:
+            self.filters_widget = _StubFilters()
+            self.begin_feature_reload_batch_calls = 0
+            self.begin_data_requirements_batch_calls = 0
+
+        def begin_feature_reload_batch(self) -> None:
+            self.begin_feature_reload_batch_calls += 1
+
+        def begin_data_requirements_batch(self) -> None:
+            self.begin_data_requirements_batch_calls += 1
+
+    class _DummyVm:
+        def __init__(self) -> None:
+            self._selection_refresh_pending = True
+            self._selection_refresh_waiting_features_reload = True
+            self._widget = _StubWidget()
+
+    vm = _DummyVm()
+    DataSelectorViewModel._on_selection_state_changed(vm)
+    assert vm._widget.filters_widget.refresh_calls == 0
+    assert vm._widget.begin_feature_reload_batch_calls == 0
+    assert vm._widget.begin_data_requirements_batch_calls == 0
+    assert vm._selection_refresh_waiting_features_reload is True

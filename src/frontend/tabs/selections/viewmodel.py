@@ -296,6 +296,11 @@ class SelectionsViewModel(QObject):
     ) -> Optional[SelectionSettingsPayload]:
         if payload is None or not new_features:
             return None
+        if not payload.selections_enabled():
+            return None
+        # Keep explicit "none selected" settings intact.
+        if not payload.feature_ids and not payload.feature_labels:
+            return None
         new_ids: List[int] = []
         new_labels: List[str] = []
         for item in new_features:
@@ -315,8 +320,6 @@ class SelectionsViewModel(QObject):
             return None
 
         changed = False
-        if not payload.selections_enabled():
-            return None
 
         if payload.feature_labels or payload.feature_ids:
             if payload.feature_labels:

@@ -72,7 +72,7 @@ class FiltersWidgetViewModel(QObject):
 
         def _load():
             systems: Iterable[str] = []
-            datasets: Iterable[str] = []
+            datasets: list[tuple[str, str]] = []
             groups = pd.DataFrame(columns=["group_id", "kind", "label"])
             tags: Iterable[str] = []
             imports: Iterable[tuple[str, int]] = []
@@ -82,7 +82,7 @@ class FiltersWidgetViewModel(QObject):
                 except Exception:
                     systems = []
                 try:
-                    datasets = model.list_datasets()
+                    datasets = self.datasets_for_systems(systems_scope)
                 except Exception:
                     datasets = []
                 try:
@@ -107,7 +107,7 @@ class FiltersWidgetViewModel(QObject):
                     imports = []
             payload = {
                 "systems": [(str(name), str(name)) for name in systems],
-                "datasets": [(str(name), str(name)) for name in datasets],
+                "datasets": list(datasets),
                 "groups": groups,
                 "tags": [(str(tag), str(tag)) for tag in tags],
                 "imports": [(str(label), int(import_id)) for label, import_id in imports],
@@ -167,14 +167,7 @@ class FiltersWidgetViewModel(QObject):
         self.systems_updated.emit(items)
 
     def _emit_datasets(self) -> None:
-        datasets: Iterable[str] = []
-        if self._model is not None:
-            try:
-                datasets = self._model.list_datasets()
-            except Exception:
-                datasets = []
-        items = [(str(name), str(name)) for name in datasets]
-        self.datasets_updated.emit(items)
+        self.datasets_updated.emit(self.datasets_for_systems(None))
 
     def _emit_groups(
         self,
@@ -301,11 +294,46 @@ class FiltersWidgetViewModel(QObject):
                 return []
         else:
             selected_systems = []
-        try:
-            items = model.list_datasets(systems=selected_systems if systems is not None else None)
-        except Exception:
-            items = []
-        return [(str(name), str(name)) for name in items]
+        dataset_entries: list[tuple[str, str]] = []
+        list_for_filters = getattr(model, "list_datasets_for_filters", None)
+        if callable(list_for_filters):
+            try:
+                raw_entries = list_for_filters(
+                    systems=selected_systems if systems is not None else None
+                )
+            except Exception:
+                raw_entries = []
+            seen_pairs: set[tuple[str, str]] = set()
+            for entry in raw_entries or []:
+                if not isinstance(entry, (tuple, list)) or len(entry) < 2:
+                    continue
+                dataset_name = str(entry[0] or "").strip()
+                system_name = str(entry[1] or "").strip()
+                if not dataset_name:
+                    continue
+                key = (dataset_name, system_name)
+                if key in seen_pairs:
+                    continue
+                seen_pairs.add(key)
+                dataset_entries.append(key)
+        if not dataset_entries:
+            try:
+                items = model.list_datasets(systems=selected_systems if systems is not None else None)
+            except Exception:
+                items = []
+            dataset_entries = [(str(name).strip(), "") for name in items if str(name).strip()]
+
+        name_counts: dict[str, int] = {}
+        for dataset_name, _system_name in dataset_entries:
+            name_counts[dataset_name] = name_counts.get(dataset_name, 0) + 1
+
+        out: list[tuple[str, str]] = []
+        for dataset_name, system_name in dataset_entries:
+            label = dataset_name
+            if name_counts.get(dataset_name, 0) > 1 and system_name:
+                label = f"{dataset_name} ({system_name})"
+            out.append((label, dataset_name))
+        return out
 
     def imports_for_filters(
         self,
@@ -760,15 +788,40 @@ class FiltersWidget(CollapsibleSection):
         return [str(v) for v in self.systems_combo.selected_values()]
 
     def selected_datasets(self) -> list[str]:
-        return [str(v) for v in self.datasets_combo.selected_values()]
+        return self._dataset_names_from_values(self.datasets_combo.selected_values())
 
     def selected_import_ids(self) -> list[int]:
         return [int(v) for v in self.imports_combo.selected_values()]
 
+    # @ai(gpt-5, codex-cli, fix, 2026-03-12)
+    def available_datasets(self) -> list[str]:
+        return self._dataset_names_from_values(self._all_combo_values(self.datasets_combo))
+
+    # @ai(gpt-5, codex-cli, fix, 2026-03-12)
+    def available_import_ids(self) -> list[int]:
+        out: list[int] = []
+        for value in self._all_combo_values(self.imports_combo):
+            try:
+                out.append(int(value))
+            except Exception:
+                continue
+        return out
+
     # @ai(gpt-5, codex, feature, 2026-03-10)
     def selected_datasets_for_data_scope(self) -> list[str]:
-        values = self.datasets_combo.remembered_selected_values()
-        return [str(v) for v in values if str(v).strip()]
+        return self._dataset_names_from_values(self.datasets_combo.remembered_selected_values())
+
+    @staticmethod
+    def _dataset_names_from_values(values: Iterable[Any] | None) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for value in values or []:
+            text = str(value).strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            out.append(text)
+        return out
 
     # @ai(gpt-5, codex, feature, 2026-03-10)
     def selected_import_ids_for_data_scope(self) -> list[int]:

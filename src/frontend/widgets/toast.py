@@ -26,13 +26,8 @@ def _is_dark(color: QColor) -> bool:
     return l < 0.5
 
 
-def _rgba(color: QColor, alpha: int) -> str:
-    c = QColor(color)
-    c.setAlpha(max(0, min(255, int(alpha))))
-    return f"rgba({c.red()}, {c.green()}, {c.blue()}, {c.alpha()})"
-
-
 class _Toast(QWidget):
+    # @ai(gpt-5, codex-cli, refactor, 2026-03-12)
     def __init__(
         self,
         title: str,
@@ -52,23 +47,27 @@ class _Toast(QWidget):
 
         # Frameless, non-blocking, stays on top of your app
         self.setWindowFlags(
-            Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.BypassWindowManagerHint
+            Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setAutoFillBackground(False)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         if self._on_click is not None:
             self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         bg = QWidget(self)
-        bg.setObjectName("bg")
+        bg.setObjectName("toastCard")
 
         accent = QWidget(bg)
-        accent.setObjectName("accent")
+        accent.setObjectName("toastAccent")
+        accent.setProperty("toastKind", str(kind or "info"))
         accent.setFixedWidth(6)
 
         content = QWidget(bg)
+        content.setObjectName("toastContent")
         content_lay = QHBoxLayout(content)
         content_lay.setContentsMargins(18, 16, 18, 16)
         content_lay.setSpacing(10)
@@ -76,7 +75,7 @@ class _Toast(QWidget):
         icon_lbl: Optional[QLabel] = None
         if icon_key:
             icon_lbl = QLabel(content)
-            icon_lbl.setObjectName("icon")
+            icon_lbl.setObjectName("toastIcon")
             icon_lbl.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
             icon_lbl.setFixedWidth(20)
             icon = self._resolve_icon(icon_key)
@@ -87,17 +86,18 @@ class _Toast(QWidget):
             content_lay.addWidget(icon_lbl, 0)
 
         text_wrap = QWidget(content)
+        text_wrap.setObjectName("toastTextWrap")
         text_lay = QVBoxLayout(text_wrap)
         text_lay.setContentsMargins(0, 0, 0, 0)
         text_lay.setSpacing(4)
 
         title_lbl = QLabel(title)
-        title_lbl.setObjectName("title")
+        title_lbl.setObjectName("toastTitle")
         title_font = QFont(title_lbl.font())
         title_font.setWeight(QFont.Weight.DemiBold)
         title_lbl.setFont(title_font)
         msg_lbl = QLabel(message)
-        msg_lbl.setObjectName("msg")
+        msg_lbl.setObjectName("toastMsg")
         msg_lbl.setWordWrap(True)
 
         text_lay.addWidget(title_lbl)
@@ -111,39 +111,18 @@ class _Toast(QWidget):
         lay.addWidget(content)
 
         root = QHBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
+        # Keep transparent margins so the drop-shadow is not clipped.
+        root.setContentsMargins(10, 8, 10, 0)
         root.addWidget(bg)
 
         pal = self.palette()
         bg_color = pal.color(QPalette.Window)
-        text_color = pal.color(QPalette.WindowText)
-        border_color = pal.color(QPalette.Mid)
         dark = _is_dark(bg_color)
 
-        accents = {
-            "info": QColor("#42a5f5" if not dark else "#90caf9"),
-            "success": QColor("#2e7d32" if not dark else "#81c784"),
-            "warn": QColor("#ed6c02" if not dark else "#ffb74d"),
-            "error": QColor("#d32f2f" if not dark else "#ef9a9a"),
-        }
-        accent_color = accents.get(kind, pal.color(QPalette.Highlight))
-
-        bg.setStyleSheet(
-            "\n".join(
-                [
-                    f"QWidget#bg {{ background-color: {_rgba(bg_color, 235)}; border: 1px solid {_rgba(border_color, 200)}; border-radius: 10px; }}",
-                    f"QWidget#accent {{ background-color: {accent_color.name()}; border-top-left-radius: 10px; border-bottom-left-radius: 10px; }}",
-                    f"QLabel#title {{ color: {text_color.name()}; }}",
-                    f"QLabel#msg {{ color: {text_color.name()}; }}",
-                    f"QLabel#icon {{ color: {text_color.name()}; }}",
-                ]
-            )
-        )
-
         shadow = QGraphicsDropShadowEffect(bg)
-        shadow.setBlurRadius(18)
-        shadow.setOffset(0, 4)
-        shadow_color = QColor(0, 0, 0, 180 if dark else 120)
+        shadow.setBlurRadius(24)
+        shadow.setOffset(0, 6)
+        shadow_color = QColor(0, 0, 0, 145 if dark else 92)
         shadow.setColor(shadow_color)
         bg.setGraphicsEffect(shadow)
 

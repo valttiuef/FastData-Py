@@ -34,7 +34,7 @@ class _ImportHarness:
 
         self.progress = _ProgressSignal(self)
 
-    def notify_features_changed(self):
+    def notify_features_changed(self, *args, **kwargs):
         self.notify_features_changed_calls += 1
 
     def refresh(self):

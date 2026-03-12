@@ -9,7 +9,10 @@ import pandas as pd
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QLabel,
+    QScrollArea,
+    QSizePolicy,
     QSplitter,
+    QVBoxLayout,
     QWidget,
 )
 from ...localization import tr
@@ -29,6 +32,8 @@ from ..tab_widget import TabWidget
 
 class ChartsTab(TabWidget):
     """Interactive charts workspace with configurable chart cards."""
+    MAX_CHART_CARDS = 9
+    MIN_CHART_CARD_HEIGHT = 220
 
     def __init__(self, database_model: HybridPandasModel, parent=None):
         self._database_model = database_model
@@ -76,6 +81,7 @@ class ChartsTab(TabWidget):
         self.sidebar = ChartsSidebar(view_model=self._view_model, parent=self)
         return self.sidebar
 
+    # @ai(gpt-5, codex-cli, refactor, 2026-03-12)
     def _create_content_widget(self) -> QWidget:
         right_panel = Panel("", parent=self)
         right_layout = right_panel.content_layout()
@@ -85,9 +91,20 @@ class ChartsTab(TabWidget):
         header.setWordWrap(True)
         right_layout.addWidget(header)
 
-        self._chart_splitter = QSplitter(Qt.Orientation.Vertical, right_panel)
-        self._chart_splitter.setChildrenCollapsible(False)
-        right_layout.addWidget(self._chart_splitter, 1)
+        self._charts_scroll = QScrollArea(right_panel)
+        self._charts_scroll.setObjectName("chartsScrollArea")
+        self._charts_scroll.setWidgetResizable(True)
+        self._charts_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._charts_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+        self._charts_container = QWidget(self._charts_scroll)
+        self._charts_container.setObjectName("chartsScrollContainer")
+        self._charts_layout = QVBoxLayout(self._charts_container)
+        self._charts_layout.setContentsMargins(0, 0, 0, 0)
+        self._charts_layout.setSpacing(8)
+
+        self._charts_scroll.setWidget(self._charts_container)
+        right_layout.addWidget(self._charts_scroll, 1)
 
         self._row_splitters: list[QSplitter] = []
 
@@ -193,12 +210,14 @@ class ChartsTab(TabWidget):
 
     # ------------------------------------------------------------------
     def _ensure_chart_count(self, count: int) -> None:
-        while len(self._chart_cards) < count:
+        target = max(0, min(int(count), self.MAX_CHART_CARDS))
+        while len(self._chart_cards) < target:
             self._add_chart_card()
+        self._update_add_chart_button_state()
         self._layout_chart_cards()
 
     def _set_chart_count_exact(self, count: int) -> None:
-        count = max(1, int(count))
+        count = max(1, min(int(count), self.MAX_CHART_CARDS))
         while len(self._chart_cards) < count:
             self._add_chart_card()
         while len(self._chart_cards) > count:
@@ -213,15 +232,29 @@ class ChartsTab(TabWidget):
         if self._selected_card not in self._chart_cards:
             fallback = self._chart_cards[0] if self._chart_cards else None
             self._set_selected_card(fallback)
+        self._update_add_chart_button_state()
         self._layout_chart_cards()
 
+    # @ai(gpt-5, codex-cli, refactor, 2026-03-12)
     def _on_add_chart_requested(self) -> None:
-        self._add_chart_card()
+        if not self._add_chart_card():
+            set_status_text(tr("Chart panel limit reached."))
+            toast_warn(
+                tr("Maximum of {count} chart panels reached.").format(count=self.MAX_CHART_CARDS),
+                title=tr("Charts"),
+                tab_key="charts",
+            )
+            self._update_add_chart_button_state()
+            return
         self._layout_chart_cards()
         self._refresh_all_charts()
 
-    def _add_chart_card(self) -> None:
+    def _add_chart_card(self) -> bool:
+        if len(self._chart_cards) >= self.MAX_CHART_CARDS:
+            self._update_add_chart_button_state()
+            return False
         card = ChartCard(parent=self, view_model=self._view_model)
+        self._apply_chart_card_height(card)
         self._chart_cards.append(card)
         items = self.sidebar.available_feature_items()
         card.set_available_features(items)
@@ -229,6 +262,12 @@ class ChartsTab(TabWidget):
         card.selection_requested.connect(self._on_card_selection_requested)
         if self._selected_card is None:
             self._set_selected_card(card)
+        self._update_add_chart_button_state()
+        return True
+
+    def _apply_chart_card_height(self, card: ChartCard) -> None:
+        card.setMinimumHeight(self.MIN_CHART_CARD_HEIGHT)
+        card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
     def _on_remove_chart_requested(self) -> None:
         if not self._chart_cards:
@@ -244,8 +283,16 @@ class ChartsTab(TabWidget):
         if self._selected_card not in self._chart_cards:
             fallback = self._chart_cards[0] if self._chart_cards else None
             self._set_selected_card(fallback)
+        self._update_add_chart_button_state()
         self._layout_chart_cards()
         self._refresh_all_charts()
+
+    def _update_add_chart_button_state(self) -> None:
+        sidebar = getattr(self, "sidebar", None)
+        button = getattr(sidebar, "btn_add_chart", None) if sidebar is not None else None
+        if button is None:
+            return
+        button.setEnabled(len(self._chart_cards) < self.MAX_CHART_CARDS)
 
     def _configure_default_cards(self) -> None:
         self._set_chart_count_exact(2)
@@ -260,18 +307,20 @@ class ChartsTab(TabWidget):
         self._set_selected_card(self._chart_cards[1] if len(self._chart_cards) > 1 else self._chart_cards[0])
 
     def _layout_chart_cards(self) -> None:
-        # remove existing row splitters from the vertical splitter
+        # remove existing row splitters from the rows layout
         for splitter in self._row_splitters:
             splitter.setParent(None)
             splitter.deleteLater()
         self._row_splitters = []
 
-        while self._chart_splitter.count():
-            widget = self._chart_splitter.widget(0)
+        while self._charts_layout.count():
+            item = self._charts_layout.takeAt(0)
+            widget = item.widget()
             if widget is not None:
                 widget.setParent(None)
 
         if not self._chart_cards:
+            self._charts_container.setMinimumHeight(0)
             return
 
         if len(self._chart_cards) == 1:
@@ -283,20 +332,27 @@ class ChartsTab(TabWidget):
             self._add_row(self._chart_cards[0:1], full_width=True)
             for start in range(1, len(self._chart_cards), 2):
                 self._add_row(self._chart_cards[start : start + 2], full_width=False)
+        for idx, _row in enumerate(self._row_splitters):
+            self._charts_layout.setStretch(idx, 1)
 
-        for index in range(self._chart_splitter.count()):
-            self._chart_splitter.setStretchFactor(index, 1)
-        self._chart_splitter.setSizes([1] * self._chart_splitter.count())
+        row_count = max(0, len(self._row_splitters))
+        min_height = 0
+        if row_count > 0:
+            min_height = row_count * self.MIN_CHART_CARD_HEIGHT + max(0, row_count - 1) * 8
+        self._charts_container.setMinimumHeight(min_height)
 
     def _add_row(self, row_cards: list[ChartCard], *, full_width: bool) -> None:
-        row_splitter = QSplitter(Qt.Orientation.Horizontal, self)
+        row_splitter = QSplitter(Qt.Orientation.Horizontal, self._charts_container)
         row_splitter.setChildrenCollapsible(False)
+        row_splitter.setMinimumHeight(self.MIN_CHART_CARD_HEIGHT)
+        row_splitter.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         for idx, card in enumerate(row_cards):
+            self._apply_chart_card_height(card)
             row_splitter.addWidget(card)
             row_splitter.setStretchFactor(idx, 1)
         if not full_width and len(row_cards) > 1:
             row_splitter.setSizes([1, 1])
-        self._chart_splitter.addWidget(row_splitter)
+        self._charts_layout.addWidget(row_splitter)
         self._row_splitters.append(row_splitter)
 
     # ------------------------------------------------------------------

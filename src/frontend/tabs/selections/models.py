@@ -232,6 +232,7 @@ class FeatureSelectionTableModel(QAbstractTableModel):
                 [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole, Qt.ItemDataRole.CheckStateRole],
             )
 
+    # @ai(gpt-5, codex-cli, fix, 2026-03-12)
     def apply_selection(self, payload: Optional[SelectionSettingsPayload], *, select_all_by_default: bool = False) -> None:
         selection_key = self._selection_key(payload, select_all_by_default=select_all_by_default)
         if selection_key == self._last_selection_key:
@@ -248,7 +249,7 @@ class FeatureSelectionTableModel(QAbstractTableModel):
             for label in ((payload.feature_labels if (payload and selections_enabled) else []) or [])
             if str(label).strip()
         )
-        use_labels = bool(selected_labels)
+        use_labels = not bool(selected_ids) and bool(selected_labels)
         filters: Dict[int, FeatureValueFilter] = {}
         if payload and selections_enabled:
             for flt in payload.feature_filters:
@@ -281,10 +282,13 @@ class FeatureSelectionTableModel(QAbstractTableModel):
         for row in self._rows:
             fid = row.get("feature_id")
             label = row.get("notes") or ""
-            if use_labels:
+            if selected_ids:
+                try:
+                    row["selected"] = bool(int(fid) in selected_ids)
+                except Exception:
+                    row["selected"] = False
+            elif use_labels:
                 row["selected"] = bool(str(label) in selected_labels)
-            elif selected_ids:
-                row["selected"] = bool(fid in selected_ids)
             else:
                 row["selected"] = bool(select_all_by_default)
             flt = None

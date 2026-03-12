@@ -33,7 +33,7 @@ def _default_selection_payload() -> SelectionSettingsPayload:
     # @ai(gpt-5, codex-cli, fix, 2026-03-10)
     """Default payload for the built-in startup selection state."""
     return SelectionSettingsPayload(
-        include_selections=True,
+        include_selections=False,
         include_filters=False,
         include_preprocessing=False,
     )
@@ -221,7 +221,7 @@ class SelectionsTab(TabWidget):
             auto_load=False,
             is_active=False,
             payload=SelectionSettingsPayload(
-                include_selections=True,
+                include_selections=False,
                 include_filters=False,
                 include_preprocessing=False,
             ),

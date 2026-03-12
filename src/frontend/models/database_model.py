@@ -120,6 +120,7 @@ class DatabaseModel(QObject):
         self._selection_payload: Optional[SelectionSettingsPayload] = None
         self._selection_payload_key: Optional[tuple] = None
         self._selected_feature_ids: set[int] = set()
+        self._selection_features_filter_enabled: bool = False
         self._selection_filters: Dict[str, Any] = {}
         self._selection_preprocessing: Dict[str, Any] = {}
         self._value_filters: List[FeatureValueFilter] = []
@@ -237,8 +238,21 @@ class DatabaseModel(QObject):
         remaining = [c for c in out.columns if c not in existing]
         return out.loc[:, existing + remaining]
 
-    def _run_in_thread(self, func, *, on_result=None, key: object | None = None):
-        run_in_thread(func, on_result=on_result, owner=self, key=key)
+    def _run_in_thread(
+        self,
+        func,
+        *,
+        on_result=None,
+        key: object | None = None,
+        cancel_previous: bool = False,
+    ):
+        run_in_thread(
+            func,
+            on_result=on_result,
+            owner=self,
+            key=key,
+            cancel_previous=cancel_previous,
+        )
 
     def _emit_in_main_thread(self, signal, *args) -> None:
         run_in_main_thread(signal.emit, *args)
@@ -266,6 +280,8 @@ class DatabaseModel(QObject):
 
         self._selection_payload = None
         self._selected_feature_ids = set()
+        self._filtered_feature_ids = set()
+        self._selection_features_filter_enabled = False
         self._selection_filters = {}
         self._selection_preprocessing = {}
         self._value_filters = []
@@ -472,6 +488,7 @@ class DatabaseModel(QObject):
         self._selection_payload = None
         self._selected_feature_ids = set()
         self._filtered_feature_ids = set()
+        self._selection_features_filter_enabled = False
         self._selection_filters = {}
         self._selection_preprocessing = {}
         self._value_filters = []
@@ -740,8 +757,14 @@ class DatabaseModel(QObject):
         All feature lists will automatically update with filtered results.
         """
         new_ids = set(feature_ids or [])
-        if new_ids == self._selected_feature_ids and new_ids == self._filtered_feature_ids:
+        enabled = feature_ids is not None
+        if (
+            enabled == self._selection_features_filter_enabled
+            and new_ids == self._selected_feature_ids
+            and new_ids == self._filtered_feature_ids
+        ):
             return
+        self._selection_features_filter_enabled = enabled
         self._filtered_feature_ids = new_ids
         self._selected_feature_ids = new_ids
         self._emit_selected_features()
@@ -757,6 +780,7 @@ class DatabaseModel(QObject):
         if payload is None:
             self._selected_feature_ids = set()
             self._filtered_feature_ids = set()
+            self._selection_features_filter_enabled = False
             self._selection_filters = {}
             self._selection_preprocessing = {}
             self._value_filters = []
@@ -765,10 +789,13 @@ class DatabaseModel(QObject):
             self._emit_selected_features()
             return
         selected_ids: set[int] = set()
-        if payload.selections_enabled():
+        selections_enabled = bool(payload.selections_enabled())
+        if selections_enabled:
             selected_ids = {int(fid) for fid in (payload.feature_ids or []) if fid is not None}
             if not selected_ids and payload.feature_labels:
                 selected_ids = self._resolve_feature_ids_from_labels(payload.feature_labels)
+            selected_ids = self._resolve_existing_feature_ids(selected_ids)
+        self._selection_features_filter_enabled = selections_enabled
         self._selected_feature_ids = selected_ids
         self._filtered_feature_ids = set(self._selected_feature_ids)
         self._selection_filters = (
@@ -790,6 +817,137 @@ class DatabaseModel(QObject):
         self._selection_payload_key = payload_key
         self._emit_in_main_thread(self.selection_state_changed)
         self._emit_selected_features()
+
+    def _merge_new_features_into_active_selection_payload(
+        self,
+        payload: SelectionSettingsPayload,
+        new_features: Sequence[dict],
+    ) -> Optional[SelectionSettingsPayload]:
+        if payload is None or not payload.selections_enabled():
+            return None
+        if not payload.feature_ids and not payload.feature_labels:
+            return None
+
+        merged = SelectionSettingsPayload.from_dict(payload.to_dict())
+        changed = False
+
+        existing_ids = {int(fid) for fid in (merged.feature_ids or []) if fid is not None}
+        existing_labels = {str(label) for label in (merged.feature_labels or []) if str(label).strip()}
+        append_labels = bool(merged.feature_labels)
+
+        # Label-only legacy payloads cannot include new features when imported
+        # labels are blank; promote resolved existing labels to explicit IDs first.
+        if not existing_ids and existing_labels:
+            resolved_ids = self._resolve_feature_ids_from_labels(sorted(existing_labels))
+            if resolved_ids:
+                merged.feature_ids = sorted(int(fid) for fid in resolved_ids)
+                existing_ids = set(merged.feature_ids)
+                changed = True
+
+        for item in new_features or []:
+            if not isinstance(item, dict):
+                continue
+            raw_feature_id = item.get("feature_id")
+            feature_id: Optional[int] = None
+            if raw_feature_id is not None:
+                try:
+                    feature_id = int(raw_feature_id)
+                except Exception:
+                    feature_id = None
+            label = str(item.get("label") or "").strip()
+
+            if feature_id is not None and feature_id not in existing_ids:
+                merged.feature_ids.append(feature_id)
+                existing_ids.add(feature_id)
+                changed = True
+            if append_labels and label and label not in existing_labels:
+                merged.feature_labels.append(label)
+                existing_labels.add(label)
+                changed = True
+
+        return merged if changed else None
+
+    # @ai(gpt-5, codex-cli, fix, 2026-03-12)
+    def _extend_active_selection_with_new_features(
+        self,
+        new_features: Sequence[dict],
+    ) -> bool:
+        features: list[dict] = []
+        for item in new_features or []:
+            if not isinstance(item, dict):
+                continue
+            raw_feature_id = item.get("feature_id")
+            if raw_feature_id is None:
+                continue
+            try:
+                feature_id = int(raw_feature_id)
+            except Exception:
+                continue
+            features.append(
+                {
+                    "feature_id": feature_id,
+                    "label": str(item.get("label") or "").strip(),
+                }
+            )
+        if not features:
+            return False
+
+        try:
+            record = self.active_selection_setting()
+        except Exception:
+            record = None
+        if not record or not isinstance(record, dict):
+            return False
+
+        try:
+            payload = SelectionSettingsPayload.from_dict(record.get("payload"))
+        except Exception:
+            return False
+        updated_payload = self._merge_new_features_into_active_selection_payload(payload, features)
+        if updated_payload is None:
+            return False
+
+        try:
+            self.save_selection_setting(
+                name=str(record.get("name") or "Selection"),
+                payload=updated_payload.to_dict(),
+                notes=str(record.get("notes") or ""),
+                auto_load=bool(record.get("auto_load")),
+                setting_id=int(record.get("id")),
+                activate=False,
+            )
+        except Exception:
+            logger.warning("Failed to extend active selection with newly imported features.", exc_info=True)
+            return False
+
+        try:
+            self.apply_selection_payload(updated_payload)
+        except Exception:
+            logger.warning("Failed to apply extended selection payload after feature import.", exc_info=True)
+        return True
+
+    def _resolve_existing_feature_ids(self, feature_ids: set[int]) -> set[int]:
+        if not feature_ids:
+            return set()
+        try:
+            db = self._ensure_database()
+            features = self._normalize_feature_frame_columns(db.all_features())
+        except Exception:
+            try:
+                features = self.all_features_df()
+            except Exception:
+                return set(feature_ids)
+        if features is None or features.empty or "feature_id" not in features.columns:
+            return set()
+        existing_ids: set[int] = set()
+        for value in features["feature_id"].tolist():
+            try:
+                existing_ids.add(int(value))
+            except Exception:
+                continue
+        if not existing_ids:
+            return set()
+        return {int(fid) for fid in feature_ids if int(fid) in existing_ids}
 
     def _selection_payload_key_for(self, payload: Optional[SelectionSettingsPayload]) -> tuple:
         if payload is None:
@@ -908,12 +1066,18 @@ class DatabaseModel(QObject):
                 self._last_selected_features_key = None
                 self._emit_selected_features()
 
-            self._run_in_thread(_load, on_result=lambda df: run_in_main_thread(_apply, df))
+            self._run_in_thread(
+                _load,
+                on_result=lambda df: run_in_main_thread(_apply, df),
+                key="selected_features_load",
+                cancel_previous=True,
+            )
             return
 
         cache_version = self._features_cache_version
+        selection_enabled = bool(self._selection_features_filter_enabled)
         filtered_ids = set(self._filtered_feature_ids)
-        cache_key = (cache_version, tuple(sorted(filtered_ids)))
+        cache_key = (cache_version, selection_enabled, tuple(sorted(filtered_ids)))
         if cache_key == self._last_selected_features_key:
             return
 
@@ -935,11 +1099,13 @@ class DatabaseModel(QObject):
                         "tags",
                     ]
                 )
-            if not filtered_ids:
+            if not selection_enabled:
                 return all_features.copy()
+            if not filtered_ids:
+                return all_features.iloc[0:0].copy()
             if "feature_id" in all_features.columns:
                 return all_features[all_features["feature_id"].isin(filtered_ids)].copy()
-            return all_features.copy()
+            return all_features.iloc[0:0].copy()
 
         def _apply(selected):
             if job_id != self._selected_features_job_id:
@@ -947,7 +1113,12 @@ class DatabaseModel(QObject):
             self._last_selected_features_key = cache_key
             self._emit_in_main_thread(self.selected_features_changed, selected)
 
-        self._run_in_thread(_filter, on_result=lambda selected: run_in_main_thread(_apply, selected))
+        self._run_in_thread(
+            _filter,
+            on_result=lambda selected: run_in_main_thread(_apply, selected),
+            key="selected_features_filter",
+            cancel_previous=True,
+        )
 
     def _apply_feature_changes(
         self,
@@ -1189,7 +1360,11 @@ class DatabaseModel(QObject):
             datasets=datasets,
             import_ids=import_ids,
         )
-        if self._filtered_feature_ids and "feature_id" in filtered.columns:
+        if self._selection_features_filter_enabled:
+            if "feature_id" not in filtered.columns:
+                return filtered.iloc[0:0].copy()
+            if not self._filtered_feature_ids:
+                return filtered.iloc[0:0].copy()
             filtered = filtered[filtered["feature_id"].isin(list(self._filtered_feature_ids))]
         return self._apply_tag_filters(filtered, tags)
 
@@ -1376,6 +1551,8 @@ class DatabaseModel(QObject):
                 .reset_index(drop=True)
             )
         selected_ids = sorted(int(fid) for fid in (self._selected_feature_ids or set()) if fid is not None)
+        if self._selection_features_filter_enabled and not selected_ids:
+            return pd.DataFrame(columns=["group_id", "kind", "label"])
         if not selected_ids:
             return (
                 scoped.loc[:, ["group_id", "kind", "label"]]
@@ -2371,6 +2548,69 @@ class DatabaseModel(QObject):
         except Exception:
             return []
 
+    # @ai(gpt-5, codex-cli, fix, 2026-03-12)
+    def list_datasets_for_filters(
+        self,
+        *,
+        systems: Optional[Sequence[str]] = None,
+    ) -> list[tuple[str, str]]:
+        """Return dataset/system pairs for filter widgets without collapsing same-name datasets."""
+        if systems is not None:
+            provided_systems = [str(item).strip() for item in systems if str(item).strip()]
+            if not provided_systems:
+                return []
+        normalized_systems = [str(item).strip() for item in (systems or []) if str(item).strip()]
+        try:
+            imports_df = self._all_imports_df()
+            if imports_df is not None and not imports_df.empty:
+                scoped = imports_df
+                if normalized_systems:
+                    scoped = scoped[scoped["system"].isin(normalized_systems)]
+                seen: set[tuple[str, str]] = set()
+                out: list[tuple[str, str]] = []
+                for _, row in scoped.iterrows():
+                    dataset_name = str(row.get("dataset") or "").strip()
+                    system_name = str(row.get("system") or "").strip()
+                    if not dataset_name:
+                        continue
+                    key = (dataset_name, system_name)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    out.append(key)
+                out.sort(key=lambda item: (item[0].casefold(), item[1].casefold()))
+                return out
+
+            db = self._ensure_database()
+            params: list[object] = []
+            where_sql = ""
+            if normalized_systems:
+                placeholders = ",".join(["?"] * len(normalized_systems))
+                where_sql = f"WHERE s.name IN ({placeholders})"
+                params.extend(normalized_systems)
+            with db.connection() as con:
+                rows = con.execute(
+                    f"""
+                    SELECT d.name, s.name
+                    FROM datasets d
+                    JOIN systems s ON s.id = d.system_id
+                    {where_sql}
+                    ORDER BY d.name, s.name, d.id
+                    """,
+                    params,
+                ).fetchall()
+            out: list[tuple[str, str]] = []
+            for row in rows:
+                if not row:
+                    continue
+                dataset_name = str(row[0] or "").strip()
+                if not dataset_name:
+                    continue
+                out.append((dataset_name, str(row[1] or "").strip()))
+            return out
+        except Exception:
+            return []
+
     def list_datasets(
         self,
         system: Optional[str] = None,
@@ -2602,10 +2842,20 @@ class DatabaseModel(QObject):
                 db.selection_settings_repo.set_active(db.connection, new_id)
             return new_id
 
+    # @ai(gpt-5, codex-cli, fix, 2026-03-12)
     def delete_selection_setting(self, setting_id: int) -> None:
         db = self._selection_db()
+        deleted_active = False
         with db.lock:
+            existing = db.selection_settings_repo.get_by_id(db.connection, int(setting_id))
+            deleted_active = bool(existing and bool(existing.get("is_active")))
             db.selection_settings_repo.delete(db.connection, int(setting_id))
+            if deleted_active:
+                # Keep DB state explicit: deleting the active setting reverts to default/no active setting.
+                db.selection_settings_repo.set_active(db.connection, None)
+        if deleted_active:
+            # Immediately clear in-memory selection state so all tabs fall back to defaults.
+            self.apply_selection_payload(None)
 
     def activate_selection_setting(self, setting_id: Optional[int]) -> None:
         db = self._selection_db()
@@ -2743,6 +2993,7 @@ class DatabaseModel(QObject):
             if payload is None:
                 self._selected_feature_ids = set()
                 self._filtered_feature_ids = set()
+                self._selection_features_filter_enabled = False
                 self._selection_filters = {}
                 self._selection_preprocessing = {}
                 self._value_filters = []
@@ -2752,7 +3003,8 @@ class DatabaseModel(QObject):
                 return
 
             selected_ids: set[int] = set()
-            if payload.selections_enabled():
+            selections_enabled = bool(payload.selections_enabled())
+            if selections_enabled:
                 selected_ids = {int(fid) for fid in (payload.feature_ids or []) if fid is not None}
                 if not selected_ids and payload.feature_labels:
                     resolved = self._resolve_feature_ids_from_labels(payload.feature_labels)
@@ -2763,6 +3015,8 @@ class DatabaseModel(QObject):
                             "Selection payload labels did not resolve to any feature IDs: %s",
                             list(payload.feature_labels or []),
                         )
+                selected_ids = self._resolve_existing_feature_ids(selected_ids)
+            self._selection_features_filter_enabled = selections_enabled
             self._selected_feature_ids = selected_ids
             self._filtered_feature_ids = set(self._selected_feature_ids)
             self._selection_filters = (
@@ -2785,7 +3039,12 @@ class DatabaseModel(QObject):
             self._emit_in_main_thread(self.selection_state_changed)
             self._emit_selected_features()
 
-        self._run_in_thread(_load, on_result=lambda payload: run_in_main_thread(_apply, payload))
+        self._run_in_thread(
+            _load,
+            on_result=lambda payload: run_in_main_thread(_apply, payload),
+            key="load_selection_state",
+            cancel_previous=True,
+        )
 
     def _normalize_filter_state(self, state: Dict[str, Any]) -> Dict[str, Any]:
         normalized: Dict[str, Any] = {}

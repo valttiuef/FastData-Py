@@ -107,6 +107,10 @@ QFrame#collapsibleSectionBody {
     background: transparent;
 }
 
+QGroupBox#collapsibleSectionGroup {
+    margin-top: 4px;
+}
+
 QToolButton#collapsibleSectionToggle,
 QToolButton#collapsibleSectionToggle:checked,
 QToolButton#collapsibleSectionToggle:disabled {
@@ -524,4 +528,46 @@ QLabel#DataSubInfo {
     background: transparent;
     font-size: 9pt;
     font-weight: 600;
+}
+
+/* ---------- Toast ---------- */
+QWidget#toastCard {
+    background-color: rgba(241, 241, 241, 246);
+    border: 1px solid rgba(181, 181, 181, 188);
+    border-bottom-color: transparent;
+    border-radius: 10px;
+}
+
+QWidget#toastCard:hover {
+    border-color: rgba(167, 167, 167, 198);
+    border-bottom-color: transparent;
+}
+
+QWidget#toastAccent {
+    border-top-left-radius: 10px;
+    border-bottom-left-radius: 10px;
+    background-color: #42a5f5;
+}
+
+QWidget#toastAccent[toastKind="info"] { background-color: #42a5f5; }
+QWidget#toastAccent[toastKind="success"] { background-color: #2e7d32; }
+QWidget#toastAccent[toastKind="warn"] { background-color: #ed6c02; }
+QWidget#toastAccent[toastKind="error"] { background-color: #d32f2f; }
+
+QWidget#toastContent,
+QWidget#toastTextWrap {
+    background: transparent;
+    border: none;
+}
+
+QLabel#toastTitle {
+    background: transparent;
+    color: #2a2a2a;
+    padding-bottom: 2px;
+}
+
+QLabel#toastMsg,
+QLabel#toastIcon {
+    background: transparent;
+    color: #2a2a2a;
 }
