@@ -2,7 +2,7 @@
 
 Context-sensitive help entries for FastData application
 
-Updated: 2026-03-10
+Updated: 2026-03-12
 
 Version: 2
 
@@ -594,18 +594,18 @@ Choose whether to aggregate over time or by a specific column.
 
 <ul>
   <li><b>Time based</b> groups measurements into regular periods using the <b>Statistics period</b> setting.</li>
-  <li><b>Group based</b> ignores time buckets and instead aggregates by the values of the chosen <b>Group</b>.</li>
+  <li><b>Group by column</b> ignores time buckets and instead aggregates by the values of the chosen <b>Group column</b>.</li>
 </ul>
 <p>Switching modes changes how the preview table and chart summarize your data.</p>
 
 
-##### Group
+##### Group column
 
-Pick the grouping field that defines each group in group-based mode.
+Pick the categorical column that defines each group in column mode.
 
-<p>Available options come from the selected data scope and only apply when <b>Group based</b> is selected.</p>
+<p>Available options come from the dataset and only apply when <b>Group by column</b> is selected.</p>
 <ul>
-  <li>Choose identifiers like <b>dataset</b>, <b>import</b>, or available group kinds.</li>
+  <li>Choose identifiers like <b>system</b>, <b>dataset</b>, or any other categorical field.</li>
   <li>Each distinct value becomes its own row or bar in the preview.</li>
   <li>Leave the dropdown empty in time-based mode—the control is disabled automatically.</li>
 </ul>
@@ -627,7 +627,7 @@ Define the window used for time-based aggregation.
 
 Choose whether group-kind statistics are split by each saved timeframe segment.
 
-<p>This setting applies when using <b>Group based</b> with a database group kind (for example <b>group:som_cluster</b>).</p>
+<p>This setting applies when using <b>Group by column</b> with a database group kind (for example <b>group:som_cluster</b>).</p>
 <ul>
   <li><b>Enabled</b>: each saved timeframe segment is treated as its own group bucket.</li>
   <li><b>Disabled</b>: all rows with the same group label are merged into one bucket, regardless of timeframe segments.</li>

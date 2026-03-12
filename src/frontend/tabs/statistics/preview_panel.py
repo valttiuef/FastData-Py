@@ -12,7 +12,7 @@ from ...localization import tr
 
 from ...widgets.fast_table import FastTable
 from ...widgets.panel import Panel
-from ...charts import GroupBarChart
+from ...charts import GroupBarChart, MAX_FEATURES_SHOWN_LEGEND
 import logging
 
 logger = logging.getLogger(__name__)
@@ -215,7 +215,7 @@ class StatisticsPreview(Panel):
             return selected_keys
         return [key for key, _label, _selection in self._feature_selections_from_table()]
 
-    # @ai(gpt-5, codex, refactor, 2026-03-12)
+    # @ai(gpt-5, codex, feature, 2026-03-12)
     def export_feature_series_frame(self, *, selected_feature_keys: Optional[set[str]] = None) -> pd.DataFrame:
         rows = self._feature_selections_from_table()
         if not rows:
@@ -226,27 +226,80 @@ class StatisticsPreview(Panel):
             selected_keys = set(defaults) if defaults else None
         else:
             selected_keys = set(selected_feature_keys)
-        parts: list[pd.DataFrame] = []
-        for key, _label, selection in rows:
+        selected_frames: list[tuple[pd.DataFrame, str]] = []
+        used_names: set[str] = set()
+        for key, label, selection in rows:
             if selected_keys is not None and key not in selected_keys:
                 continue
             subset = self._filter_preview(selection)
             if subset is None or subset.empty:
                 continue
-            parts.append(subset.copy())
+            column_name = self._build_export_value_column_name(selection, label, used_names)
+            selected_frames.append((subset.copy(), column_name))
 
-        if not parts:
+        if not selected_frames:
             return pd.DataFrame()
-        combined = pd.concat(parts, axis=0, ignore_index=True)
-        combined = combined.drop_duplicates(ignore_index=True)
-        sort_columns = [
-            column
-            for column in ("base_name", "source", "unit", "statistic", "t", "group_value", "value")
-            if column in combined.columns
-        ]
+
+        if len(selected_frames) == 1:
+            single = selected_frames[0][0].copy()
+            single = single.drop_duplicates(ignore_index=True)
+            sort_columns = [
+                column
+                for column in ("base_name", "source", "unit", "statistic", "t", "group_value", "value")
+                if column in single.columns
+            ]
+            if sort_columns:
+                single = single.sort_values(sort_columns, kind="stable").reset_index(drop=True)
+            return single
+
+        frames = [frame for frame, _column_name in selected_frames]
+        key_columns = self._export_row_key_columns(frames)
+        if not key_columns:
+            max_len = max(len(frame.index) for frame in frames)
+            export_df = pd.DataFrame({"Row": range(max_len)})
+            for frame, column_name in selected_frames:
+                values = pd.to_numeric(frame.get("value"), errors="coerce").reset_index(drop=True)
+                export_df[column_name] = values.reindex(range(max_len))
+            return export_df
+
+        merged: Optional[pd.DataFrame] = None
+        value_columns: list[str] = []
+        for frame, column_name in selected_frames:
+            reduced = frame.copy()
+            if "t" in key_columns:
+                reduced["t"] = pd.to_datetime(reduced["t"], errors="coerce")
+            reduced = reduced.loc[:, [*key_columns, "value"]]
+            reduced["value"] = pd.to_numeric(reduced["value"], errors="coerce")
+            reduced = (
+                reduced.groupby(key_columns, dropna=False, sort=False)["value"]
+                .mean()
+                .reset_index()
+                .rename(columns={"value": column_name})
+            )
+            value_columns.append(column_name)
+            if merged is None:
+                merged = reduced
+            else:
+                merged = merged.merge(reduced, on=key_columns, how="outer")
+
+        if merged is None or merged.empty:
+            return pd.DataFrame()
+
+        sort_columns = [col for col in ("t", "group_value", "import_id", "system", "Dataset") if col in key_columns]
         if sort_columns:
-            combined = combined.sort_values(sort_columns, kind="stable").reset_index(drop=True)
-        return combined
+            merged = merged.sort_values(sort_columns, kind="stable").reset_index(drop=True)
+
+        ordered_columns = [*key_columns, *value_columns]
+        merged = merged.loc[:, [col for col in ordered_columns if col in merged.columns]]
+        rename_map = {
+            "t": "Timestamp",
+            "group_value": "Group",
+            "import_id": "Import ID",
+            "import_name": "Import",
+            "system": "System",
+            "Dataset": "Dataset",
+        }
+        return merged.rename(columns=rename_map)
 
     def _model_to_frame(self, model) -> pd.DataFrame:
         headers = [
@@ -717,16 +770,98 @@ class StatisticsPreview(Panel):
                 return text
         return None
 
+    @staticmethod
+    def _selection_stat_name(selection_info: Optional[dict]) -> str:
+        if not isinstance(selection_info, dict):
+            return ""
+        for key in ("Statistic", "statistic"):
+            text = str(selection_info.get(key) or "").strip()
+            if text:
+                return text
+        return ""
+
+    def _build_chart_series_name(self, selection_info: dict, used: set[str]) -> str:
+        feature_name = self._selection_feature_name(selection_info) or tr("Feature")
+        stat_name = self._selection_stat_name(selection_info)
+        base_name = f"{feature_name} ({stat_name})" if stat_name else feature_name
+        candidate = base_name
+        suffix = 2
+        while candidate in used:
+            candidate = f"{base_name} ({suffix})"
+            suffix += 1
+        used.add(candidate)
+        return candidate
+
+    def _build_export_value_column_name(self, selection_info: dict, fallback_label: str, used: set[str]) -> str:
+        feature_name = self._selection_feature_name(selection_info) or str(fallback_label or "").strip() or tr("Feature")
+        stat_name = self._selection_stat_name(selection_info)
+        original = self._normalize_display_value(selection_info.get("original_qualifier"))
+        base_name = feature_name
+        if stat_name:
+            base_name = f"{base_name} [{stat_name}]"
+        if original:
+            base_name = f"{base_name} ({original})"
+        candidate = base_name
+        suffix = 2
+        while candidate in used:
+            candidate = f"{base_name} ({suffix})"
+            suffix += 1
+        used.add(candidate)
+        return candidate
+
+    @staticmethod
+    def _export_row_key_columns(frames: list[pd.DataFrame]) -> list[str]:
+        if not frames:
+            return []
+        common = set(frames[0].columns)
+        for frame in frames[1:]:
+            common &= set(frame.columns)
+        preferred = ["t", "group_value", "import_id", "import_name", "system", "Dataset"]
+        return [column for column in preferred if column in common]
+
+    @staticmethod
+    def _selection_caption(displayed_count: int, total_selected: int) -> str:
+        if total_selected > displayed_count:
+            return f" ({displayed_count}/{total_selected} selected)"
+        return ""
+
     def _update_chart_for_selection(self) -> None:
-        selection = self._selected_row_info()
-        if selection is None:
+        selections = self._selected_row_infos()
+        if not selections:
             self.preview_chart.clear()
             return
 
-        subset = self._filter_preview(selection)
-        self._update_chart(subset, selection_info=selection)
+        total_selected = len(selections)
+        chart_selections = selections[:MAX_FEATURES_SHOWN_LEGEND]
+        selected_frames: list[pd.DataFrame] = []
+        used_names: set[str] = set()
+        for selection in chart_selections:
+            subset = self._filter_preview(selection)
+            if subset is None or subset.empty:
+                continue
+            labeled = subset.copy()
+            labeled["__chart_series__"] = self._build_chart_series_name(selection, used_names)
+            selected_frames.append(labeled)
 
-    def _update_chart(self, df: pd.DataFrame, selection_info: Optional[dict] = None) -> None:
+        if not selected_frames:
+            self.preview_chart.clear()
+            return
+
+        if len(selected_frames) == 1:
+            single = selected_frames[0].drop(columns=["__chart_series__"], errors="ignore")
+            self._update_chart(single, selection_info=chart_selections[0], total_selected=total_selected)
+            return
+
+        combined = pd.concat(selected_frames, axis=0, ignore_index=True)
+        self._update_chart(combined, total_selected=total_selected)
+
+    def _update_chart(
+        self,
+        df: pd.DataFrame,
+        selection_info: Optional[dict] = None,
+        *,
+        total_selected: int = 1,
+    ) -> None:
         """Update the chart based on the current mode and data."""
         if df is None or df.empty:
             self.preview_chart.clear()
@@ -735,24 +870,35 @@ class StatisticsPreview(Panel):
         # Check which columns we have
         has_group_value = "group_value" in df.columns
         has_value = "value" in df.columns
-        has_statistic = "statistic" in df.columns
         has_t = "t" in df.columns
         
         if not has_value:
             self.preview_chart.clear()
             return
 
+        is_multi_selection = "__chart_series__" in df.columns and len(df["__chart_series__"].dropna().unique()) > 1
         # Decide chart rendering based on mode
         if self._current_mode == "column" and has_group_value:
-            # Group by column mode: show bars per group
-            self._render_group_chart(df, selection_info=selection_info)
+            if is_multi_selection:
+                self._render_group_chart_multi(df, total_selected=total_selected)
+            else:
+                self._render_group_chart(df, selection_info=selection_info, total_selected=total_selected)
         elif has_t:
-            # Time-based mode: show bars per time period
-            self._render_time_chart(df, selection_info=selection_info)
+            if is_multi_selection:
+                self._render_time_chart_multi(df, total_selected=total_selected)
+            else:
+                self._render_time_chart(df, selection_info=selection_info, total_selected=total_selected)
         else:
             self.preview_chart.clear()
 
-    def _render_group_chart(self, df: pd.DataFrame, selection_info: Optional[dict] = None) -> None:
+    # @ai(gpt-5, codex, feature, 2026-03-12)
+    def _render_group_chart(
+        self,
+        df: pd.DataFrame,
+        selection_info: Optional[dict] = None,
+        *,
+        total_selected: int = 1,
+    ) -> None:
         """Render chart for group-by-column mode."""
         if "group_value" not in df.columns or "value" not in df.columns:
             self.preview_chart.clear()
@@ -795,6 +941,7 @@ class StatisticsPreview(Panel):
             title = f"Statistics by Group ({stat})"
             if feature_name:
                 title = f"{feature_name} ({stat})"
+            title += self._selection_caption(1, int(total_selected))
             self.preview_chart.set_title(title)
             self.preview_chart.set_dataframe(
                 agg,
@@ -828,7 +975,9 @@ class StatisticsPreview(Panel):
 
             feature_name = self._selection_feature_name(selection_info)
             title = feature_name or "Statistics by Group"
-            self.preview_chart.set_title(title or "Statistics by Group")
+            title = title or "Statistics by Group"
+            title += self._selection_caption(1, int(total_selected))
+            self.preview_chart.set_title(title)
             self.preview_chart.set_multi_series(
                 pivot,
                 category_col="group_value_display",
@@ -860,7 +1009,85 @@ class StatisticsPreview(Panel):
                         tooltip_overrides[(str(stat_name), category)] = " | ".join(parts)
             self.preview_chart.set_tooltip_overrides(tooltip_overrides)
 
-    def _render_time_chart(self, df: pd.DataFrame, selection_info: Optional[dict] = None) -> None:
+    # @ai(gpt-5, codex, feature, 2026-03-12)
+    def _render_group_chart_multi(self, df: pd.DataFrame, *, total_selected: int) -> None:
+        if "group_value" not in df.columns or "value" not in df.columns or "__chart_series__" not in df.columns:
+            self.preview_chart.clear()
+            return
+        chart_df = df.copy()
+        chart_df["group_value_display"] = chart_df["group_value"].apply(self._display_group_value)
+        if "t" in chart_df.columns:
+            chart_df["t"] = pd.to_datetime(chart_df["t"], errors="coerce")
+            ordering = (
+                chart_df.dropna(subset=["t"])
+                .groupby("group_value_display", dropna=False, sort=False)["t"]
+                .min()
+                .reset_index(name="t_min")
+                .sort_values(["t_min", "group_value_display"], kind="stable")
+            )
+            order_map = {str(value): idx for idx, value in enumerate(ordering["group_value_display"].tolist())}
+        else:
+            order_map = {}
+
+        series_order = [str(value) for value in chart_df["__chart_series__"].dropna().tolist()]
+        series_order = list(dict.fromkeys(series_order))
+        pivot = (
+            chart_df.pivot_table(
+                index="group_value_display",
+                columns="__chart_series__",
+                values="value",
+                aggfunc="mean",
+            )
+            .reset_index()
+        )
+        if order_map:
+            pivot["_order"] = pivot["group_value_display"].map(lambda value: order_map.get(str(value), len(order_map)))
+            pivot = pivot.sort_values("_order", kind="stable").drop(columns=["_order"])
+        value_cols = [column for column in series_order if column in pivot.columns]
+        if not value_cols:
+            self.preview_chart.clear()
+            return
+
+        self.preview_chart.set_title(
+            "Statistics by Group" + self._selection_caption(len(value_cols), int(total_selected))
+        )
+        self.preview_chart.set_multi_series(
+            pivot,
+            category_col="group_value_display",
+            value_cols=value_cols,
+        )
+        tooltip_overrides: dict[tuple[str, str], str] = {}
+        for series_name in value_cols:
+            series_rows = chart_df[chart_df["__chart_series__"] == series_name]
+            if series_rows.empty:
+                continue
+            agg_spec: dict[str, tuple[str, str]] = {}
+            if "sample_count" in series_rows.columns:
+                agg_spec["sample_count"] = ("sample_count", "sum")
+            if "outlier_count" in series_rows.columns:
+                agg_spec["outlier_count"] = ("outlier_count", "sum")
+            if not agg_spec:
+                continue
+            meta = series_rows.groupby("group_value_display", dropna=False).agg(**agg_spec).reset_index()
+            for row in meta.itertuples(index=False):
+                category = str(getattr(row, "group_value_display", ""))
+                parts: list[str] = []
+                if hasattr(row, "sample_count") and pd.notna(getattr(row, "sample_count")):
+                    parts.append(f"Count: {int(getattr(row, 'sample_count'))}")
+                if hasattr(row, "outlier_count") and pd.notna(getattr(row, "outlier_count")):
+                    parts.append(f"Outliers: {int(getattr(row, 'outlier_count'))}")
+                if parts:
+                    tooltip_overrides[(str(series_name), category)] = " | ".join(parts)
+        self.preview_chart.set_tooltip_overrides(tooltip_overrides)
+
+    # @ai(gpt-5, codex, feature, 2026-03-12)
+    def _render_time_chart(
+        self,
+        df: pd.DataFrame,
+        selection_info: Optional[dict] = None,
+        *,
+        total_selected: int = 1,
+    ) -> None:
         """Render chart for time-based mode."""
         if "t" not in df.columns or "value" not in df.columns:
             self.preview_chart.clear()
@@ -902,6 +1129,7 @@ class StatisticsPreview(Panel):
             title = f"Statistics over Time ({stat})"
             if feature_name:
                 title = f"{feature_name} ({stat})"
+            title += self._selection_caption(1, int(total_selected))
             self.preview_chart.set_title(title)
             self.preview_chart.set_dataframe(
                 agg,
@@ -929,7 +1157,7 @@ class StatisticsPreview(Panel):
                 aggfunc="mean",
             ).reset_index()
             
-            self.preview_chart.set_title("Statistics over Time")
+            self.preview_chart.set_title("Statistics over Time" + self._selection_caption(1, int(total_selected)))
             self.preview_chart.set_multi_series(
                 pivot,
                 category_col="time_label",
@@ -956,6 +1184,88 @@ class StatisticsPreview(Panel):
                             parts.append(f"Outliers: {int(getattr(row, 'outlier_count'))}")
                         tooltip_overrides[(str(stat_name), category)] = " | ".join(parts)
             self.preview_chart.set_tooltip_overrides(tooltip_overrides)
+
+    # @ai(gpt-5, codex, feature, 2026-03-12)
+    def _render_time_chart_multi(self, df: pd.DataFrame, *, total_selected: int) -> None:
+        if "t" not in df.columns or "value" not in df.columns or "__chart_series__" not in df.columns:
+            self.preview_chart.clear()
+            return
+
+        chart_df = df.copy()
+        chart_df["t"] = pd.to_datetime(chart_df["t"], errors="coerce")
+        chart_df = chart_df.dropna(subset=["t"])
+        if chart_df.empty:
+            self.preview_chart.clear()
+            return
+
+        time_span = (chart_df["t"].max() - chart_df["t"].min()).days
+        if time_span > 365:
+            chart_df["time_label"] = chart_df["t"].dt.strftime("%Y-%m")
+            chart_df["time_order"] = chart_df["t"].dt.to_period("M").dt.start_time
+        elif time_span > 30:
+            chart_df["time_label"] = chart_df["t"].dt.strftime("%Y-%m-%d")
+            chart_df["time_order"] = chart_df["t"].dt.floor("D")
+        else:
+            chart_df["time_label"] = chart_df["t"].dt.strftime("%m-%d %H:%M")
+            chart_df["time_order"] = chart_df["t"]
+
+        ordering = (
+            chart_df.groupby("time_label", dropna=False, sort=False)["time_order"]
+            .min()
+            .reset_index(name="t_min")
+            .sort_values("t_min", kind="stable")
+        )
+        order_map = {str(value): idx for idx, value in enumerate(ordering["time_label"].tolist())}
+        series_order = [str(value) for value in chart_df["__chart_series__"].dropna().tolist()]
+        series_order = list(dict.fromkeys(series_order))
+        pivot = (
+            chart_df.pivot_table(
+                index="time_label",
+                columns="__chart_series__",
+                values="value",
+                aggfunc="mean",
+            )
+            .reset_index()
+        )
+        if not pivot.empty:
+            pivot["_order"] = pivot["time_label"].map(lambda value: order_map.get(str(value), len(order_map)))
+            pivot = pivot.sort_values("_order", kind="stable").drop(columns=["_order"])
+        value_cols = [column for column in series_order if column in pivot.columns]
+        if not value_cols:
+            self.preview_chart.clear()
+            return
+
+        self.preview_chart.set_title(
+            "Statistics over Time" + self._selection_caption(len(value_cols), int(total_selected))
+        )
+        self.preview_chart.set_multi_series(
+            pivot,
+            category_col="time_label",
+            value_cols=value_cols,
+        )
+        tooltip_overrides: dict[tuple[str, str], str] = {}
+        for series_name in value_cols:
+            series_rows = chart_df[chart_df["__chart_series__"] == series_name]
+            if series_rows.empty:
+                continue
+            agg_spec: dict[str, tuple[str, str]] = {}
+            if "sample_count" in series_rows.columns:
+                agg_spec["sample_count"] = ("sample_count", "sum")
+            if "outlier_count" in series_rows.columns:
+                agg_spec["outlier_count"] = ("outlier_count", "sum")
+            if not agg_spec:
+                continue
+            meta = series_rows.groupby("time_label", dropna=False).agg(**agg_spec).reset_index()
+            for row in meta.itertuples(index=False):
+                category = str(getattr(row, "time_label", ""))
+                parts: list[str] = []
+                if hasattr(row, "sample_count") and pd.notna(getattr(row, "sample_count")):
+                    parts.append(f"Count: {int(getattr(row, 'sample_count'))}")
+                if hasattr(row, "outlier_count") and pd.notna(getattr(row, "outlier_count")):
+                    parts.append(f"Outliers: {int(getattr(row, 'outlier_count'))}")
+                if parts:
+                    tooltip_overrides[(str(series_name), category)] = " | ".join(parts)
+        self.preview_chart.set_tooltip_overrides(tooltip_overrides)
 
 
 __all__ = ["StatisticsPreview"]

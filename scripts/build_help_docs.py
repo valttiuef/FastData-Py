@@ -7,6 +7,8 @@ import html
 import json
 import re
 import sys
+import shutil
+
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -416,6 +418,10 @@ def main() -> int:
 
     print(f"Wrote help documentation to {output_path}")
     print(f"Wrote help documentation to {html_path}")
+
+    #for github pages, we want the HTML version to be at docs/index.html
+    Path("docs").mkdir(exist_ok=True)
+    shutil.copy2(html_path, Path("docs/index.html"))
     return 0
 
 

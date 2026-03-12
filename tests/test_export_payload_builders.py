@@ -204,6 +204,9 @@ def test_statistics_preview_feature_export_tracks_selected_rows(qapp) -> None:
     assert "Feature data" in export_frames
     assert not export_frames["Summary table"].empty
     assert not export_frames["Feature data"].empty
+    feature_export = export_frames["Feature data"]
+    assert {"Timestamp", "Temperature [avg] (raw)", "Pressure [avg] (raw)"}.issubset(set(feature_export.columns))
+    assert len(feature_export.index) == 2
 
 
 def test_charts_export_helpers_keep_visible_columns_only() -> None:
