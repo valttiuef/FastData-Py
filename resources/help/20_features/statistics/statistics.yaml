@@ -6,7 +6,7 @@ entries:
       <p>Use these buttons to generate and persist the statistics previewed in this tab.</p>
       <ul>
         <li><b>Gather statistics</b> executes the selected statistics with the current filters, mode, and preprocessing settings.</li>
-        <li><b>Save to database</b> writes the last computed preview into the database so it can be reused in other tabs.</li>
+        <li><b>Save statistics</b> writes the last computed preview into the database so it can be reused in other tabs.</li>
         <li>Run again any time you tweak filters, periods, or selected statistics to refresh the preview.</li>
       </ul>
 

@@ -11,8 +11,7 @@ entries:
         <li>Analyze specific categories or groups</li>
         <li>Compare subsets of data</li>
       </ul>
-      <p>Filters can be combined using AND/OR logic for complex queries.</p>
-      <p>Filtered data is used for all downstream analysis and visualizations.</p>
+      <p>The selected filter set is applied to the dataframe used by downstream analysis and visualizations.</p>
     aliases: ["filter.widget", "data.filter"]
 
   controls.filters.systems_datasets:

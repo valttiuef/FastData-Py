@@ -6,8 +6,8 @@ entries:
       <p>The <b>Statistics</b> tab focuses on validating the numbers produced from your data.</p>
       <ul>
         <li>Preview aggregated measurements and sanity-check values before saving them.</li>
-        <li>See how filters and preprocessing settings shape the resulting metrics.</li>
+        <li>See how the shared data-selection filters and preprocessing settings shape the resulting metrics.</li>
         <li>Confirm column names, units, and sampling windows prior to exporting.</li>
       </ul>
-      <p>This tab highlights the statistical outputs themselves, while the preprocessing widget controls how they are generated.</p>
+      <p>This tab focuses on statistical outputs, while preprocessing is configured in the shared <b>Data selection</b> widget used by this tab.</p>
     aliases: ["tab.preprocessing", "preprocessing.tab", "Pre-processing"]

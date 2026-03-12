@@ -1,14 +1,14 @@
 entries:
   tab.data:
     title: "Data"
-    short: "Load datasets and browse their contents."
+    short: "Import data, manage databases, and define the active selection scope."
     body: |
-      <p>The <b>Data</b> tab is the starting point for working with FastData.</p>
+      <p>The <b>Data</b> tab is the main entry point for preparing data in FastData.</p>
       <ul>
-        <li>Connect to DuckDB/DB files and pick the active table.</li>
-        <li>Preview rows with paging to verify that the dataset loaded correctly.</li>
-        <li>Inspect schema information such as column names, data types, and row counts.</li>
-        <li>Refresh or swap datasets without restarting the application.</li>
+        <li>Import files into the project database (<b>Import Files…</b>).</li>
+        <li>Create, open, and save database files from the sidebar actions.</li>
+        <li>Use <b>Data selection</b> to choose systems, datasets, imports, tags, filters, and preprocessing.</li>
+        <li>Preview the resulting table to confirm values and columns before analysis.</li>
       </ul>
-      <p>Use this tab to confirm your source data looks correct before you create selections or train models.</p>
+      <p>Selections configured here are reused by downstream tabs through the same data-selection model.</p>
     aliases: ["data.tab", "Data"]
