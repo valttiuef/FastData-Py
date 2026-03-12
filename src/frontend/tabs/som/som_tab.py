@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 # @ai(gpt-5, codex, refactor, 2026-02-26)
+from pathlib import Path
 from typing import Optional, Any, List, Tuple, Iterable, Callable
 
 import numpy as np
@@ -12,6 +13,7 @@ from PySide6.QtWidgets import (
     QWidget,
     QLabel,
     QDialog,
+    QFileDialog,
     QTabWidget,
     QInputDialog,
     QSizePolicy,
@@ -32,7 +34,8 @@ from .som_details_dialog import SomDetailsDialog
 from .som_saved_maps_dialog import SomSavedMapsDialog
 from .timeline_cluster_groups_dialog import TimelineClusterGroupsDialog
 from ...utils.som_details import build_som_map_prompt, build_som_map_summary_text
-from ...utils.exporting import execute_export_plan, prepare_dataframes_export_plan
+from ...utils.exporting import ExportOutcome, ExportPlan, execute_export_plan
+from ...utils.file_dialog_history import get_dialog_directory, remember_dialog_path
 from ...widgets.export_dialog import ExportOption, ExportSelectionDialog
 from ...utils import set_status_text, toast_error, toast_file_saved, toast_info, toast_success, toast_warn
 from ...threading import run_in_main_thread, run_in_thread
@@ -58,6 +61,14 @@ class SomTab(TabWidget):
     _TIMELINE_OVERLAY_MAX_FEATURES = 5
     _FEATURE_TABLE_COLUMNS = FEATURE_TABLE_COLUMNS
     _FEATURE_TABLE_COLUMN_LABELS = FEATURE_TABLE_COLUMN_LABELS
+    _EXPORT_KEY_FEATURE_TABLE = "feature_table"
+    _EXPORT_KEY_FEATURE_GROUP = "feature_group_chart"
+    _EXPORT_KEY_TIMELINE_TABLE = "timeline_table"
+    _EXPORT_KEY_TIMELINE_CLUSTER_MAP = "timeline_cluster_map"
+    _EXPORT_KEY_DISTANCE_MAP = "distance_map"
+    _EXPORT_KEY_ACTIVATION_RESPONSE = "activation_response"
+    _EXPORT_KEY_QUANTIZATION_MAP = "quantization_map"
+    _EXPORT_KEY_SOM_METRICS = "som_metrics"
 
     @staticmethod
     def _default_title_text() -> str:
@@ -515,7 +526,10 @@ class SomTab(TabWidget):
         return labels
 
     def _selected_feature_payloads(self) -> list[dict]:
-        return self._view_model.selected_feature_payloads()
+        view_model = getattr(self, "_view_model", None)
+        if view_model is None:
+            return []
+        return view_model.selected_feature_payloads()
 
     # ------------------------------------------------------------------
     def _sync_cluster_controls(self) -> None:
@@ -787,94 +801,225 @@ class SomTab(TabWidget):
         self._sync_cluster_controls()
         self._update_timeline_cluster_map()
 
-    def _table_frame_from_widget(self, table: Any) -> pd.DataFrame:
-        if table is None:
-            return pd.DataFrame()
-        model = table.model()
-        if model is None:
-            return pd.DataFrame()
-        headers = [
-            str(model.headerData(col, Qt.Orientation.Horizontal, Qt.ItemDataRole.DisplayRole) or "")
-            for col in range(model.columnCount())
-        ]
-        rows: list[list[object]] = []
-        for row in range(model.rowCount()):
-            values: list[object] = []
-            for col in range(model.columnCount()):
-                values.append(model.data(model.index(row, col), Qt.ItemDataRole.DisplayRole))
-            rows.append(values)
-        return pd.DataFrame(rows, columns=headers)
-
     def _feature_table_export_dataframe(self) -> pd.DataFrame:
-        table_df = self._table_frame_from_widget(getattr(self, "feature_table", None))
-        if not table_df.empty:
-            return table_df
-        fallback = self._feature_positions_dataframe()
-        if fallback.empty:
+        base = self._build_feature_table_dataframe()
+        if base.empty:
             return pd.DataFrame()
-        normalized = self._normalize_feature_table_dataframe(fallback)
-        return normalized.rename(
-            columns={column: self._FEATURE_TABLE_COLUMN_LABELS.get(column, column) for column in normalized.columns}
+        return base.rename(
+            columns={
+                column: self._FEATURE_TABLE_COLUMN_LABELS.get(column, column)
+                for column in base.columns
+            }
         )
 
+    def _feature_group_chart_export_dataframe(self) -> pd.DataFrame:
+        feature_df = self._feature_table_export_dataframe()
+        view_model = getattr(self, "_view_model", None)
+        feature_col = self._FEATURE_TABLE_COLUMN_LABELS.get("feature", "feature")
+        selected_display_names: list[str] = []
+        if not feature_df.empty and feature_col in feature_df.columns:
+            selected_display_names = [
+                str(value).strip()
+                for value in feature_df[feature_col].tolist()
+                if str(value or "").strip()
+            ]
+        if not selected_display_names and self._result is not None:
+            normalized = getattr(self._result, "normalized_dataframe", pd.DataFrame())
+            if isinstance(normalized, pd.DataFrame) and not normalized.empty:
+                if view_model is not None:
+                    selected_display_names = [
+                        str(view_model.feature_display_name(str(column))).strip()
+                        for column in normalized.columns
+                        if str(column).strip()
+                    ]
+                else:
+                    selected_display_names = [str(column).strip() for column in normalized.columns if str(column).strip()]
+        selected_display_names = list(dict.fromkeys(selected_display_names))
+        if not selected_display_names:
+            return pd.DataFrame()
+        chart_df, _cluster_columns = self._feature_group_chart_dataframe(selected_display_names)
+        if chart_df.empty:
+            return pd.DataFrame()
+        if "feature" in chart_df.columns:
+            chart_df = chart_df.rename(columns={"feature": feature_col})
+        return chart_df
+
     def _timeline_table_export_dataframe(self) -> pd.DataFrame:
-        table_df = self._table_frame_from_widget(getattr(self, "timeline_table", None))
-        if not table_df.empty:
-            return table_df
-        base = self._timeline_display_df.copy() if self._timeline_display_df is not None else pd.DataFrame()
-        if base.empty:
-            base = self._timeline_dataframe()
+        base = self._timeline_dataframe()
+        if base is None or base.empty:
+            fallback = getattr(self, "_timeline_display_df", pd.DataFrame())
+            base = fallback.copy() if isinstance(fallback, pd.DataFrame) else pd.DataFrame()
         if base is None or base.empty:
             return pd.DataFrame()
         return base.rename(columns={column: TIMELINE_TABLE_COLUMN_LABELS.get(column, column) for column in base.columns})
 
-    # @ai(gpt-5, codex, refactor, 2026-03-11)
+    def _timeline_cluster_map_export_dataframe(self) -> pd.DataFrame:
+        cluster_df = self._timeline_cluster_map_dataframe()
+        if cluster_df is None or cluster_df.empty:
+            return pd.DataFrame()
+        out = cluster_df.copy()
+        for column in out.columns:
+            out[column] = out[column].map(self._format_cluster_label)
+        return out.reset_index(drop=True)
+
+    @staticmethod
+    def _som_export_file_stem() -> str:
+        return "export_som"
+
+    def _som_export_label_map(self) -> dict[str, str]:
+        return {
+            self._EXPORT_KEY_FEATURE_TABLE: tr("Feature table"),
+            self._EXPORT_KEY_FEATURE_GROUP: tr("Feature group chart data"),
+            self._EXPORT_KEY_TIMELINE_TABLE: tr("Timeline table"),
+            self._EXPORT_KEY_TIMELINE_CLUSTER_MAP: tr("Timeline cluster map"),
+            self._EXPORT_KEY_DISTANCE_MAP: tr("Distance map"),
+            self._EXPORT_KEY_ACTIVATION_RESPONSE: tr("Activation response"),
+            self._EXPORT_KEY_QUANTIZATION_MAP: tr("Quantization map"),
+            self._EXPORT_KEY_SOM_METRICS: tr("SOM metrics"),
+        }
+
+    def _som_export_options(self) -> list[ExportOption]:
+        if self._result is None:
+            return []
+        labels = self._som_export_label_map()
+        keys: list[str] = [
+            self._EXPORT_KEY_FEATURE_TABLE,
+            self._EXPORT_KEY_FEATURE_GROUP,
+            self._EXPORT_KEY_TIMELINE_TABLE,
+            self._EXPORT_KEY_SOM_METRICS,
+        ]
+        for key, attr in (
+            (self._EXPORT_KEY_DISTANCE_MAP, "distance_map"),
+            (self._EXPORT_KEY_ACTIVATION_RESPONSE, "activation_response"),
+            (self._EXPORT_KEY_QUANTIZATION_MAP, "quantization_map"),
+        ):
+            frame = getattr(self._result, attr, None)
+            if isinstance(frame, pd.DataFrame) and not frame.empty:
+                keys.append(key)
+        cluster_df = self._timeline_cluster_map_dataframe()
+        if isinstance(cluster_df, pd.DataFrame) and not cluster_df.empty:
+            keys.append(self._EXPORT_KEY_TIMELINE_CLUSTER_MAP)
+        return [ExportOption(key=key, label=labels.get(key, key), description=tr("SOM output")) for key in keys]
+
+    def _choose_som_export_destination(self, *, selected_format: str) -> Optional[Path]:
+        mode = str(selected_format or "csv").lower()
+        title = tr("Export SOM")
+        base_dir = get_dialog_directory(self, "export", Path.cwd())
+        if mode == "excel":
+            suggested = base_dir / f"{self._som_export_file_stem()}.xlsx"
+            path, _ = QFileDialog.getSaveFileName(
+                self,
+                title,
+                str(suggested),
+                tr("Excel files (*.xlsx);;All files (*.*)"),
+            )
+            if not path:
+                return None
+            dest = Path(path)
+            if dest.suffix.lower() != ".xlsx":
+                dest = dest.with_suffix(".xlsx")
+            remember_dialog_path(self, "export", dest)
+            return dest
+
+        suggested = base_dir / f"{self._som_export_file_stem()}.csv"
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            title,
+            str(suggested),
+            tr("CSV files (*.csv);;All files (*.*)"),
+        )
+        if not path:
+            return None
+        dest = Path(path)
+        if dest.suffix.lower() != ".csv":
+            dest = dest.with_suffix(".csv")
+        remember_dialog_path(self, "export", dest)
+        return dest
+
+    # @ai(gpt-5, codex, refactor, 2026-03-12)
+    def _build_som_export_datasets(self, selected_keys: list[str]) -> dict[str, pd.DataFrame]:
+        if self._result is None:
+            return {}
+        selected = {str(key or "").strip() for key in selected_keys if str(key or "").strip()}
+        if not selected:
+            return {}
+        labels = self._som_export_label_map()
+        datasets: dict[str, pd.DataFrame] = {}
+
+        if self._EXPORT_KEY_FEATURE_TABLE in selected:
+            feature_df = self._feature_table_export_dataframe()
+            if not feature_df.empty:
+                datasets[labels[self._EXPORT_KEY_FEATURE_TABLE]] = feature_df
+
+        if self._EXPORT_KEY_FEATURE_GROUP in selected:
+            feature_group_df = self._feature_group_chart_export_dataframe()
+            if not feature_group_df.empty:
+                datasets[labels[self._EXPORT_KEY_FEATURE_GROUP]] = feature_group_df
+
+        if self._EXPORT_KEY_TIMELINE_TABLE in selected:
+            timeline_df = self._timeline_table_export_dataframe()
+            if not timeline_df.empty:
+                datasets[labels[self._EXPORT_KEY_TIMELINE_TABLE]] = timeline_df
+
+        if self._EXPORT_KEY_TIMELINE_CLUSTER_MAP in selected:
+            cluster_map_df = self._timeline_cluster_map_export_dataframe()
+            if not cluster_map_df.empty:
+                datasets[labels[self._EXPORT_KEY_TIMELINE_CLUSTER_MAP]] = cluster_map_df
+
+        if self._EXPORT_KEY_DISTANCE_MAP in selected:
+            distance_map = getattr(self._result, "distance_map", None)
+            if isinstance(distance_map, pd.DataFrame) and not distance_map.empty:
+                datasets[labels[self._EXPORT_KEY_DISTANCE_MAP]] = distance_map.copy().reset_index(drop=True)
+
+        if self._EXPORT_KEY_ACTIVATION_RESPONSE in selected:
+            activation = getattr(self._result, "activation_response", None)
+            if isinstance(activation, pd.DataFrame) and not activation.empty:
+                datasets[labels[self._EXPORT_KEY_ACTIVATION_RESPONSE]] = activation.copy().reset_index(drop=True)
+
+        if self._EXPORT_KEY_QUANTIZATION_MAP in selected:
+            quant = getattr(self._result, "quantization_map", None)
+            if isinstance(quant, pd.DataFrame) and not quant.empty:
+                datasets[labels[self._EXPORT_KEY_QUANTIZATION_MAP]] = quant.copy().reset_index(drop=True)
+
+        if self._EXPORT_KEY_SOM_METRICS in selected:
+            datasets[labels[self._EXPORT_KEY_SOM_METRICS]] = pd.DataFrame(
+                [
+                    {"Metric": tr("Quantization error"), "Value": getattr(self._result, "quantization_error", None)},
+                    {"Metric": tr("Topographic error"), "Value": getattr(self._result, "topographic_error", None)},
+                ]
+            )
+
+        return datasets
+
+    def _run_som_export_job(
+        self,
+        *,
+        selected_keys: list[str],
+        selected_format: str,
+        destination: Path,
+    ) -> ExportOutcome:
+        datasets = self._build_som_export_datasets(selected_keys)
+        if not datasets:
+            return ExportOutcome(ok=False, message=tr("No SOM outputs available to export."))
+        plan = ExportPlan(
+            kind="dataframes",
+            selected_format=str(selected_format or "csv"),
+            destination=Path(destination),
+            datasets=datasets,
+        )
+        return execute_export_plan(plan)
+
+    # @ai(gpt-5, codex, refactor, 2026-03-12)
     def _on_export_requested(self) -> None:
         if not self._result:
             toast_info(tr("Train a SOM model before exporting."), title=tr("SOM"), tab_key="som")
             return
 
-        datasets: dict[str, pd.DataFrame] = {}
-        feature_df = self._feature_table_export_dataframe()
-        if not feature_df.empty:
-            datasets[tr("Feature table")] = feature_df
-
-        timeline_df = self._timeline_table_export_dataframe()
-        if not timeline_df.empty:
-            datasets[tr("Timeline table")] = timeline_df
-
-        correlations = getattr(self._result, "correlations", pd.DataFrame())
-        if isinstance(correlations, pd.DataFrame) and not correlations.empty:
-            corr_export = correlations.copy().reset_index().rename(columns={"index": "Feature"})
-            datasets[tr("Feature correlations")] = corr_export
-
-        distance_map = getattr(self._result, "distance_map", None)
-        if isinstance(distance_map, pd.DataFrame) and not distance_map.empty:
-            datasets[tr("Distance map")] = distance_map.copy().reset_index(drop=True)
-
-        activation = getattr(self._result, "activation_response", None)
-        if isinstance(activation, pd.DataFrame) and not activation.empty:
-            datasets[tr("Activation response")] = activation.copy().reset_index(drop=True)
-
-        quant = getattr(self._result, "quantization_map", None)
-        if isinstance(quant, pd.DataFrame) and not quant.empty:
-            datasets[tr("Quantization map")] = quant.copy().reset_index(drop=True)
-
-        metrics_df = pd.DataFrame(
-            [
-                {"Metric": tr("Quantization error"), "Value": getattr(self._result, "quantization_error", None)},
-                {"Metric": tr("Topographic error"), "Value": getattr(self._result, "topographic_error", None)},
-            ]
-        )
-        datasets[tr("SOM metrics")] = metrics_df
-
-        if not datasets:
+        options = self._som_export_options()
+        if not options:
             toast_info(tr("No SOM outputs available to export."), title=tr("SOM"), tab_key="som")
             return
 
-        options = [
-            ExportOption(key=name, label=name, description=tr("SOM output")) for name in datasets.keys()
-        ]
         dialog = ExportSelectionDialog(
             title=tr("Export SOM results"),
             heading=tr("Choose which SOM outputs to export."),
@@ -889,14 +1034,9 @@ class SomTab(TabWidget):
             toast_info(tr("Select at least one export item."), title=tr("Export"), tab_key="som")
             return
 
-        chosen = {name: datasets[name] for name in selected if name in datasets}
-        plan = prepare_dataframes_export_plan(
-            parent=self,
-            title=tr("Export SOM"),
-            selected_format=dialog.selected_format(),
-            datasets=chosen,
-        )
-        if plan is None:
+        selected_format = dialog.selected_format()
+        destination = self._choose_som_export_destination(selected_format=selected_format)
+        if destination is None:
             return
 
         if self.sidebar is not None:
@@ -927,10 +1067,12 @@ class SomTab(TabWidget):
             toast_error(text, title=tr("Export failed"), tab_key="som")
 
         run_in_thread(
-            execute_export_plan,
+            self._run_som_export_job,
             on_result=lambda outcome: run_in_main_thread(_on_export_finished, outcome),
             on_error=lambda message: run_in_main_thread(_on_export_error, message),
-            plan=plan,
+            selected_keys=list(selected),
+            selected_format=selected_format,
+            destination=destination,
             owner=self,
             key="som_export",
             cancel_previous=True,
@@ -1047,39 +1189,48 @@ class SomTab(TabWidget):
                 tabs.setCurrentIndex(index)
                 return
 
-    def _update_feature_table(self) -> None:
+    # @ai(gpt-5, codex, refactor, 2026-03-12)
+    def _build_feature_table_dataframe(self) -> pd.DataFrame:
         df = self._feature_positions_dataframe()
+        view_model = getattr(self, "_view_model", None)
+        has_view_model = view_model is not None
         drop_columns = [c for c in ("label", "max_value", "mean_value", "min_value") if c in df.columns]
         if drop_columns:
             df = df.drop(columns=drop_columns)
-        if not df.empty and "feature" in df.columns:
+        if has_view_model and not df.empty and "feature" in df.columns:
             id_map = self._feature_id_by_name()
             if id_map:
                 df = df.copy()
                 df["feature_id"] = df["feature"].map(id_map)
-        if not df.empty and "feature" in df.columns:
+        if has_view_model and not df.empty and "feature" in df.columns:
             stats = self._feature_stats_by_name()
             if stats:
                 df = df.copy()
                 df["min"] = df["feature"].map(stats.get("min", {}))
                 df["mean"] = df["feature"].map(stats.get("mean", {}))
                 df["max"] = df["feature"].map(stats.get("max", {}))
-        if "feature" in df.columns:
+        if has_view_model and "feature" in df.columns:
             try:
                 df = df.copy()
-                df["feature"] = df["feature"].apply(self._view_model.feature_display_name)
+                df["feature"] = df["feature"].apply(view_model.feature_display_name)
             except Exception:
                 logger.warning("Exception in _update_feature_table", exc_info=True)
         preferred_order = list(self._FEATURE_TABLE_COLUMNS)
         ordered = [col for col in preferred_order if col in df.columns]
         ordered.extend([col for col in df.columns if col not in ordered])
         df = df.loc[:, ordered] if ordered else self._empty_feature_table_dataframe()
-        df = self._normalize_feature_table_dataframe(df)
+        return self._normalize_feature_table_dataframe(df)
+
+    def _update_feature_table(self) -> None:
+        df = self._build_feature_table_dataframe()
         self._fill_table(self.feature_table, df)
         self._update_feature_group_chart()
 
     def _feature_id_by_name(self) -> dict[str, int]:
         mapping: dict[str, int] = {}
+        view_model = getattr(self, "_view_model", None)
+        if view_model is None:
+            return mapping
         payloads = self._selected_feature_payloads()
         for payload in payloads:
             try:
@@ -1094,7 +1245,7 @@ class SomTab(TabWidget):
                     type=payload.get("type"),
                     lag_seconds=payload.get("lag_seconds"),
                 )
-            feature_id = self._view_model._safe_feature_id(payload)
+            feature_id = view_model._safe_feature_id(payload)
             if feature_id is None:
                 continue
             feature_name = str(selection.display_name() or "").strip()
@@ -1105,7 +1256,8 @@ class SomTab(TabWidget):
     def _feature_stats_by_name(self) -> dict[str, dict[str, float]]:
         if not self._result:
             return {"min": {}, "mean": {}, "max": {}}
-        value_df = self._view_model.last_dataframe()
+        view_model = getattr(self, "_view_model", None)
+        value_df = view_model.last_dataframe() if view_model is not None else None
         if value_df is None or value_df.empty:
             value_df = getattr(self._result, "normalized_dataframe", pd.DataFrame())
         if value_df is None or value_df.empty:
@@ -1157,7 +1309,8 @@ class SomTab(TabWidget):
     def _feature_values_dataframe(self) -> pd.DataFrame:
         if not self._result:
             return pd.DataFrame()
-        value_df = self._view_model.last_dataframe()
+        view_model = getattr(self, "_view_model", None)
+        value_df = view_model.last_dataframe() if view_model is not None else None
         if value_df is None or value_df.empty:
             value_df = getattr(self._result, "normalized_dataframe", pd.DataFrame())
         if value_df is None or value_df.empty:
@@ -1180,9 +1333,13 @@ class SomTab(TabWidget):
             return pd.DataFrame(), {}
 
         available_actual = [str(col) for col in numeric_df.columns]
+        view_model = getattr(self, "_view_model", None)
         display_to_actual: dict[str, str] = {}
         for actual_name in available_actual:
-            display = self._view_model.feature_display_name(actual_name)
+            if view_model is not None:
+                display = view_model.feature_display_name(actual_name)
+            else:
+                display = actual_name
             display_to_actual[str(display)] = actual_name
 
         selected = [name for name in (selected_display_names or []) if name in display_to_actual]
@@ -1221,7 +1378,7 @@ class SomTab(TabWidget):
             mask = cluster_array == float(int(cluster_id))
             if not bool(mask.any()):
                 continue
-            cluster_name = self._view_model.get_cluster_name(int(cluster_id)).strip()
+            cluster_name = view_model.get_cluster_name(int(cluster_id)).strip() if view_model is not None else ""
             label = cluster_name or f"{tr('Cluster')} {int(cluster_id)}"
             if label in label_to_cluster:
                 existing_mask, existing_cluster_id = label_to_cluster[label]
