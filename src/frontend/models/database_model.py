@@ -1386,11 +1386,22 @@ class DatabaseModel(QObject):
         allowed_kinds: set[str] = set()
         for feature_id in selected_ids:
             allowed_kinds.update(feature_kinds_map.get(int(feature_id), set()))
-        if not allowed_kinds:
-            return pd.DataFrame(columns=["group_id", "kind", "label"])
         kinds = scoped.get("kind", pd.Series(dtype=object)).astype(str).str.strip()
+        mapped_kinds_all = {
+            str(kind).strip()
+            for kinds_set in feature_kinds_map.values()
+            for kind in kinds_set
+            if str(kind).strip()
+        }
+        # Keep non-feature-mapped kinds visible (for example SOM timeline
+        # cluster groups). Selection-based filtering applies only to group
+        # kinds that are explicitly linked to features.
+        visible_kinds = set(allowed_kinds)
+        visible_kinds.update({kind for kind in kinds.tolist() if kind and kind not in mapped_kinds_all})
+        if not visible_kinds:
+            return pd.DataFrame(columns=["group_id", "kind", "label"])
         return (
-            scoped.loc[kinds.isin(allowed_kinds), ["group_id", "kind", "label"]]
+            scoped.loc[kinds.isin(visible_kinds), ["group_id", "kind", "label"]]
             .drop_duplicates()
             .reset_index(drop=True)
         )

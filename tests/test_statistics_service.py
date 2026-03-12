@@ -74,6 +74,28 @@ class StubDatabase:
             out = out[out["start_ts"] < pd.Timestamp(end)]
         return out.reset_index(drop=True)
 
+    def list_group_kinds(self):
+        if self._group_labels.empty or "kind" not in self._group_labels.columns:
+            return []
+        values = self._group_labels["kind"].dropna().astype(str).str.strip()
+        return [v for v in sorted(values.unique().tolist()) if v]
+
+
+class _DummySignal:
+    def connect(self, _callback):
+        return None
+
+
+class _StubStatisticsDataModel:
+    def __init__(self, db: object):
+        self.db = db
+        self.path = Path("test.duckdb")
+        self.database_changed = _DummySignal()
+        self.groups_changed = _DummySignal()
+
+    def notify_features_changed(self) -> None:
+        return None
+
 
 def _build_imported_groups_context() -> dict[str, object]:
     test_imports_dir = Path(__file__).parent / "test_data" / "imports"
@@ -707,6 +729,54 @@ def test_wide_to_long_uses_payload_dataset_and_import_metadata():
     assert set(pressure_rows["Dataset"].dropna().astype(str).tolist()) == {"Dataset B"}
     assert set(pd.to_numeric(temperature_rows["import_id"], errors="coerce").dropna().astype(int).tolist()) == {101}
     assert set(pd.to_numeric(pressure_rows["import_id"], errors="coerce").dropna().astype(int).tolist()) == {202}
+
+
+def test_statistics_viewmodel_group_kind_uses_prefetched_frame_without_query_raw():
+    class _NoRawQueryDatabase(StubDatabase):
+        def __init__(self):
+            super().__init__()
+            self.query_raw_calls = 0
+
+        def query_raw(self, *args, **kwargs):
+            self.query_raw_calls += 1
+            raise AssertionError("query_raw must not be called for prefetched statistics runs")
+
+    db = _NoRawQueryDatabase()
+    data_model = _StubStatisticsDataModel(db)
+    view_model = StatisticsViewModel(data_model)
+    frame = pd.DataFrame(
+        {
+            "t": pd.date_range("2024-01-01 00:00:00", periods=4, freq="h"),
+            "Temperature": [1.0, 2.0, 10.0, 20.0],
+            "SOM Cluster": ["A", "A", "B", "B"],
+        }
+    )
+
+    result = view_model.compute(
+        data_frame=frame,
+        feature_payloads=[
+            {
+                "feature_id": 1,
+                "name": "Temperature",
+                "notes": "Temperature",
+                "systems": ["System1"],
+                "datasets": ["Dataset1"],
+                "import_ids": [100],
+            }
+        ],
+        systems=["System1"],
+        datasets=["Dataset1"],
+        import_ids=[100],
+        statistics=["avg"],
+        mode="column",
+        group_column="group:SOM Cluster",
+        preprocessing={"separate_timeframes": False},
+    )
+
+    assert not result.preview.empty
+    groups = set(result.preview["group_value"].dropna().astype(str).tolist())
+    assert groups == {"A", "B"}
+    assert int(db.query_raw_calls) == 0
 
 
 def test_statistics_group_kind_material_after_real_csv_import():

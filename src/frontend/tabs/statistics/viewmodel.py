@@ -156,6 +156,7 @@ class StatisticsViewModel(QObject):
 
     # ------------------------------------------------------------------
     # ------------------------------------------------------------------
+    # @ai(gpt-5, codex, fix, 2026-03-12)
     def compute(
         self,
         *,
@@ -188,26 +189,26 @@ class StatisticsViewModel(QObject):
         if frame is None:
             raise ValueError("Select at least one feature")
 
-        long_df = pd.DataFrame()
+        passthrough_columns: list[str] = []
         if mode == "column":
-            long_df = self._query_scoped_long_frame(
-                selections=selections,
-                systems=systems,
-                datasets=datasets,
-                import_ids=import_ids,
-                group_ids=group_ids,
-                start=start,
-                end=end,
-            )
-        if long_df is None or long_df.empty:
-            long_df = self._wide_to_long_statistics_frame(
-                frame,
-                selections,
-                feature_payloads=feature_payloads,
-                systems=systems,
-                datasets=datasets,
-                import_ids=import_ids,
-            )
+            column_name = str(group_column or "").strip()
+            if column_name:
+                passthrough_columns.append(column_name)
+                if column_name.startswith("group:"):
+                    group_kind = str(column_name.split(":", 1)[1]).strip()
+                    if group_kind:
+                        passthrough_columns.append(group_kind)
+                        passthrough_columns.append(f"group_{group_kind}")
+
+        long_df = self._wide_to_long_statistics_frame(
+            frame,
+            selections,
+            feature_payloads=feature_payloads,
+            systems=systems,
+            datasets=datasets,
+            import_ids=import_ids,
+            passthrough_columns=passthrough_columns,
+        )
         return self._service.compute(
             frame=long_df,
             months=months,
@@ -224,80 +225,6 @@ class StatisticsViewModel(QObject):
                 ),
             },
         )
-
-    def _query_scoped_long_frame(
-        self,
-        *,
-        selections: Sequence[FeatureSelection],
-        systems: Optional[Sequence[str]],
-        datasets: Optional[Sequence[str]],
-        import_ids: Optional[Sequence[int]],
-        group_ids: Optional[Sequence[int]],
-        start: Optional[pd.Timestamp],
-        end: Optional[pd.Timestamp],
-    ) -> pd.DataFrame:
-        db = self.database()
-        if db is None:
-            return pd.DataFrame()
-        feature_ids = [
-            int(sel.feature_id)
-            for sel in selections
-            if sel is not None and sel.feature_id is not None
-        ]
-        if not feature_ids:
-            return pd.DataFrame()
-        try:
-            scoped = db.query_raw(
-                feature_ids=feature_ids,
-                systems=list(systems) if systems else None,
-                datasets=list(datasets) if datasets else None,
-                import_ids=list(import_ids) if import_ids else None,
-                group_ids=list(group_ids) if group_ids else None,
-                start=start,
-                end=end,
-            )
-        except Exception:
-            logger.warning("Exception in _query_scoped_long_frame", exc_info=True)
-            return pd.DataFrame()
-        if not isinstance(scoped, pd.DataFrame) or scoped.empty:
-            return pd.DataFrame()
-        normalized = scoped.copy()
-        if "Dataset" not in normalized.columns:
-            for candidate in ("dataset", "Dataset_1"):
-                if candidate in normalized.columns:
-                    normalized["Dataset"] = normalized[candidate]
-                    break
-        if "source" not in normalized.columns and "source_1" in normalized.columns:
-            normalized["source"] = normalized["source_1"]
-        if "type" not in normalized.columns and "type_1" in normalized.columns:
-            normalized["type"] = normalized["type_1"]
-        normalized = self._attach_import_names(normalized, db=db)
-        required = {"t", "v", "feature_id", "feature_label", "system", "Dataset", "base_name", "import_id"}
-        if not required.issubset(set(normalized.columns)):
-            return pd.DataFrame()
-        if "source" not in normalized.columns:
-            normalized["source"] = pd.NA
-        if "unit" not in normalized.columns:
-            normalized["unit"] = pd.NA
-        if "type" not in normalized.columns:
-            normalized["type"] = pd.NA
-        return normalized.loc[
-            :,
-            [
-                "t",
-                "v",
-                "feature_id",
-                "feature_label",
-                "system",
-                "Dataset",
-                "base_name",
-                "source",
-                "unit",
-                "type",
-                "import_id",
-                "import_name",
-            ],
-        ].copy()
 
     def save(self, result: StatisticsResult) -> int:
         if not self._service:
@@ -409,6 +336,7 @@ class StatisticsViewModel(QObject):
         systems: Optional[Sequence[str]],
         datasets: Optional[Sequence[str]],
         import_ids: Optional[Sequence[int]],
+        passthrough_columns: Optional[Sequence[str]] = None,
     ) -> pd.DataFrame:
         if frame is None or frame.empty or "t" not in frame.columns:
             return pd.DataFrame(
@@ -428,7 +356,33 @@ class StatisticsViewModel(QObject):
                 ]
             )
 
-        value_cols = [c for c in frame.columns if c != "t"]
+        requested_cols: list[str] = []
+        used_names: set[str] = set()
+        for idx, sel in enumerate(features):
+            name = str(sel.display_name() or "").strip() or f"Feature {idx + 1}"
+            base = name
+            suffix = 2
+            while name in used_names:
+                name = f"{base} ({suffix})"
+                suffix += 1
+            used_names.add(name)
+            requested_cols.append(name)
+
+        value_cols: list[str] = []
+        if requested_cols:
+            resolved = [StatisticsViewModel._resolve_frame_column(frame, col) for col in requested_cols]
+            if all(col is not None for col in resolved):
+                value_cols = [str(col) for col in resolved]
+        if not value_cols:
+            numeric_non_time = [
+                str(col)
+                for col in frame.columns
+                if str(col) != "t" and pd.api.types.is_numeric_dtype(frame[col])
+            ]
+            if len(numeric_non_time) >= len(features):
+                value_cols = numeric_non_time[: len(features)]
+            else:
+                value_cols = [str(col) for col in frame.columns if str(col) != "t"][: len(features)]
         if not value_cols:
             return pd.DataFrame(
                 columns=[
@@ -451,6 +405,37 @@ class StatisticsViewModel(QObject):
         dataset_value = datasets[0] if datasets and len(datasets) == 1 else None
         import_value = import_ids[0] if import_ids and len(import_ids) == 1 else pd.NA
         import_name_value = None
+
+        system_col = StatisticsViewModel._resolve_frame_column(frame, "system")
+        dataset_col = (
+            StatisticsViewModel._resolve_frame_column(frame, "Dataset")
+            or StatisticsViewModel._resolve_frame_column(frame, "dataset")
+        )
+        import_col = StatisticsViewModel._resolve_frame_column(frame, "import_id")
+        import_name_col = StatisticsViewModel._resolve_frame_column(frame, "import_name")
+        passthrough_candidates = [
+            str(col)
+            for col in {
+                *(passthrough_columns or []),
+                "system",
+                "Dataset",
+                "dataset",
+                "import_id",
+                "import_name",
+            }
+            if str(col).strip()
+        ]
+        passthrough_resolved: list[str] = []
+        for requested in passthrough_candidates:
+            resolved = StatisticsViewModel._resolve_frame_column(frame, requested)
+            if resolved is None:
+                continue
+            if resolved in {"t", system_col, dataset_col, import_col, import_name_col}:
+                continue
+            if resolved in value_cols:
+                continue
+            if resolved not in passthrough_resolved:
+                passthrough_resolved.append(resolved)
 
         rows: list[pd.DataFrame] = []
         for idx, col in enumerate(value_cols):
@@ -484,25 +469,53 @@ class StatisticsViewModel(QObject):
                     "v": pd.to_numeric(frame[col], errors="coerce"),
                     "feature_id": sel.feature_id,
                     "feature_label": (sel.label or sel.base_name or str(col)),
-                    "system": payload_system if payload_system is not None else system_value,
-                    "Dataset": payload_dataset if payload_dataset is not None else dataset_value,
+                    "system": (
+                        frame[system_col].to_numpy(copy=False)
+                        if system_col is not None
+                        else (payload_system if payload_system is not None else system_value)
+                    ),
+                    "Dataset": (
+                        frame[dataset_col].to_numpy(copy=False)
+                        if dataset_col is not None
+                        else (payload_dataset if payload_dataset is not None else dataset_value)
+                    ),
                     "base_name": (sel.base_name or str(col)),
                     "source": sel.source,
                     "unit": sel.unit,
                     "type": sel.type,
-                    "import_id": payload_import if payload_import is not None else import_value,
+                    "import_id": (
+                        pd.to_numeric(frame[import_col], errors="coerce")
+                        if import_col is not None
+                        else (payload_import if payload_import is not None else import_value)
+                    ),
                     "import_name": (
-                        payload_import_name
-                        if payload_import_name is not None
-                        else import_name_value
+                        frame[import_name_col].to_numpy(copy=False)
+                        if import_name_col is not None
+                        else (payload_import_name if payload_import_name is not None else import_name_value)
                     ),
                 }
             )
+            for passthrough_col in passthrough_resolved:
+                part[passthrough_col] = frame[passthrough_col].to_numpy(copy=False)
             rows.append(part)
         out = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
         out["t"] = pd.to_datetime(out["t"], errors="coerce")
         out = out.dropna(subset=["t"])
         return out
+
+    @staticmethod
+    def _resolve_frame_column(frame: pd.DataFrame, requested: Optional[object]) -> Optional[str]:
+        name = str(requested or "").strip()
+        if not name:
+            return None
+        if name in frame.columns:
+            return name
+        folded = name.casefold()
+        for col in frame.columns:
+            col_name = str(col).strip()
+            if col_name.casefold() == folded:
+                return str(col)
+        return None
 
     def _attach_import_names(self, df: pd.DataFrame, *, db: Optional["Database"]) -> pd.DataFrame:
         if df is None or df.empty or "import_id" not in df.columns:

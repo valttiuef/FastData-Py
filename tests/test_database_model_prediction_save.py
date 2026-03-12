@@ -371,3 +371,55 @@ def test_insert_group_labels_and_points_refreshes_groups_cache_after_replace(tmp
         model._close_database()
 
     assert refreshed_kind_labels == {"Cluster New"}
+
+
+def test_groups_df_keeps_unmapped_som_groups_visible_with_selected_features(tmp_path: Path) -> None:
+    database_path = tmp_path / "group-visible-with-selection.duckdb"
+    settings = SettingsModel(
+        organization="FastDataTests",
+        application="FastDataGroupVisibleWithSelection",
+    )
+    settings.set_database_path(database_path)
+    model = DatabaseModel(settings)
+    try:
+        with model.db.write_transaction() as con:
+            system_id = int(model.db.systems_repo.upsert(con, "GroupVisibleSystem"))
+            dataset_id = int(model.db.datasets_repo.upsert(con, system_id, "GroupVisibleDataset"))
+            feature_id = int(
+                model.db.features_repo.insert_feature(
+                    con,
+                    system_id=system_id,
+                    name="visible_feature",
+                    source="sensor",
+                    unit="kW",
+                    type="float",
+                    notes="visible_feature",
+                    lag_seconds=0,
+                )
+            )
+
+        labels_df = pd.DataFrame({"label": ["Cluster A"]})
+        points_df = pd.DataFrame(
+            {
+                "start_ts": pd.to_datetime(["2026-01-01 00:00:00"]),
+                "end_ts": pd.to_datetime(["2026-01-01 01:00:00"]),
+                "label": ["Cluster A"],
+                "system_id": [system_id],
+                "dataset_id": [dataset_id],
+            }
+        )
+        model.insert_group_labels_and_points(
+            kind="som_timeline_cluster",
+            labels_df=labels_df,
+            points_df=points_df,
+            replace_kind=True,
+        )
+
+        model.set_selected_feature_ids({feature_id})
+        visible_groups = model.groups_df()
+    finally:
+        model._close_database()
+
+    assert not visible_groups.empty
+    visible_kinds = set(visible_groups["kind"].astype(str).tolist())
+    assert "som_timeline_cluster" in visible_kinds
