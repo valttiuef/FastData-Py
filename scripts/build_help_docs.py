@@ -22,6 +22,11 @@ HELP_EXTS = {".yaml", ".yml", ".json"}
 DEFAULT_HTML_CSS = "help.css"
 INTRO_SECTION = "Introduction"
 INTRO_PAGE = "Introduction"
+PROJECT_LINKS = (
+    ("repo_url", "Repository"),
+    ("releases_url", "Releases"),
+    ("issues_url", "Issue Tracker"),
+)
 SECTION_LABELS = {
     "10_basics": "Basics",
     "20_features": "Features",
@@ -57,6 +62,37 @@ def _load_help_file(path: Path) -> Dict[str, Any]:
     if not isinstance(data, dict):
         return {}
     return data
+
+
+def _load_app_metadata(path: Optional[Path]) -> Dict[str, Any]:
+    if path is None or not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return data
+
+
+def _normalize_http_url(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if not re.match(r"^https?://", text, flags=re.IGNORECASE):
+        return ""
+    return text
+
+
+def _project_links(metadata: Dict[str, Any]) -> List[Tuple[str, str]]:
+    links: List[Tuple[str, str]] = []
+    for key, label in PROJECT_LINKS:
+        url = _normalize_http_url(metadata.get(key))
+        if url:
+            links.append((label, url))
+    return links
 
 
 def _extract_entries(data: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
@@ -148,7 +184,7 @@ def _should_show_entry_title(
 
 
 # @ai(gpt-5, codex, refactor, 2026-03-10)
-def build_help_doc(help_dir: Path, output_path: Path) -> None:
+def build_help_doc(help_dir: Path, output_path: Path, *, appmeta_path: Optional[Path] = None) -> None:
     files = list(_iter_help_files(help_dir))
     if not files:
         raise RuntimeError(f"No help files found in {help_dir}")
@@ -186,6 +222,7 @@ def build_help_doc(help_dir: Path, output_path: Path) -> None:
     title = metadata.get("app") or "Help"
     description = metadata.get("description") or ""
     updated = date.today().isoformat()
+    project_links = _project_links(_load_app_metadata(appmeta_path))
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8") as handle:
@@ -196,6 +233,11 @@ def build_help_doc(help_dir: Path, output_path: Path) -> None:
             handle.write(f"Updated: {updated}\n\n")
         if version is not None:
             handle.write(f"Version: {version}\n\n")
+        if project_links:
+            handle.write("## Project Links\n\n")
+            for label, url in project_links:
+                handle.write(f"- [{label}]({url})\n")
+            handle.write("\n")
 
         for section in section_order:
             handle.write(f"## {section}\n\n")
@@ -235,7 +277,7 @@ def build_help_doc(help_dir: Path, output_path: Path) -> None:
 
 
 # @ai(gpt-5, codex, refactor, 2026-03-10)
-def build_help_html(help_dir: Path, output_path: Path) -> None:
+def build_help_html(help_dir: Path, output_path: Path, *, appmeta_path: Optional[Path] = None) -> None:
     files = list(_iter_help_files(help_dir))
     if not files:
         raise RuntimeError(f"No help files found in {help_dir}")
@@ -274,6 +316,7 @@ def build_help_html(help_dir: Path, output_path: Path) -> None:
     title = metadata.get("app") or "Help"
     description = metadata.get("description") or ""
     updated = date.today().isoformat()
+    project_links = _project_links(_load_app_metadata(appmeta_path))
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8") as handle:
@@ -295,6 +338,11 @@ def build_help_html(help_dir: Path, output_path: Path) -> None:
             handle.write(f"  <div class=\"meta\">Updated: {html.escape(str(updated))}</div>\n")
         if version is not None:
             handle.write(f"  <div class=\"meta\">Version: {html.escape(str(version))}</div>\n")
+        if project_links:
+            handle.write("  <details open>\n")
+            handle.write("    <summary>Project</summary>\n")
+            handle.write("    <a class=\"nav-page\" href=\"#project-links\">Links</a>\n")
+            handle.write("  </details>\n")
 
         for section in section_order:
             handle.write("  <details open>\n")
@@ -337,6 +385,16 @@ def build_help_html(help_dir: Path, output_path: Path) -> None:
         handle.write(f"<h1>{html.escape(str(title))} Help</h1>\n")
         if description:
             handle.write(f"<p>{html.escape(str(description))}</p>\n")
+        if project_links:
+            handle.write("<h2 id=\"project-links\">Project Links</h2>\n")
+            handle.write("<ul>\n")
+            for label, url in project_links:
+                safe_label = html.escape(label)
+                safe_url = html.escape(url, quote=True)
+                handle.write(
+                    f"<li><a href=\"{safe_url}\" target=\"_blank\" rel=\"noopener noreferrer\">{safe_label}</a></li>\n"
+                )
+            handle.write("</ul>\n")
 
         for section in section_order:
             handle.write(f"<h2>{html.escape(section)}</h2>\n")
@@ -399,19 +457,25 @@ def main() -> int:
         default="resources/help/docs/help.html",
         help="Output HTML path (default: resources/help/docs/help.html)",
     )
+    parser.add_argument(
+        "--appmeta",
+        default="appmeta.json",
+        help="Path to app metadata JSON (default: appmeta.json)",
+    )
     args = parser.parse_args()
 
     help_dir = Path(args.help_dir).resolve()
     output_path = Path(args.output).resolve()
     html_path = Path(args.html).resolve()
+    appmeta_path = Path(args.appmeta).resolve()
 
     if not help_dir.exists():
         print(f"Help directory not found: {help_dir}", file=sys.stderr)
         return 1
 
     try:
-        build_help_doc(help_dir, output_path)
-        build_help_html(help_dir, html_path)
+        build_help_doc(help_dir, output_path, appmeta_path=appmeta_path)
+        build_help_html(help_dir, html_path, appmeta_path=appmeta_path)
     except Exception as exc:
         print(f"Failed to build help docs: {exc}", file=sys.stderr)
         return 1

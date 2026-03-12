@@ -6,6 +6,12 @@ Updated: 2026-03-12
 
 Version: 2
 
+## Project Links
+
+- [Repository](https://github.com/valttiuef/FastData-Py)
+- [Releases](https://github.com/valttiuef/FastData-Py/releases)
+- [Issue Tracker](https://github.com/valttiuef/FastData-Py/issues)
+
 ## Introduction
 
 ##### Using This Help

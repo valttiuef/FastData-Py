@@ -125,29 +125,29 @@ https://valttiuef.github.io/FastData-Py/
 
 # GUI
 
-## Data
+### Data
 
 <img src="resources/screenshots/data.png" width="600" alt="Data screenshot">
 
-## Charts
+### Charts
 
 <img src="resources/screenshots/charts.png" width="600" alt="Charts screenshot">
 
-## Statistics
+### Statistics
 
 <img src="resources/screenshots/statistics.png" width="600" alt="Statistics screenshot">
 
-## SOM
+### SOM
 
 <img src="resources/screenshots/som.png" width="600" alt="SOM screenshot">
 <img src="resources/screenshots/som_features.png" width="600" alt="SOM features screenshot">
 <img src="resources/screenshots/som_timeline.png" width="600" alt="SOM timeline screenshot">
 
-## Regression
+### Regression
 
 <img src="resources/screenshots/regression.png" width="600" alt="Regression screenshot">
 
-## Chat / Help System
+### Chat / Help System
 
 <img src="resources/screenshots/chat.png" width="600" alt="Chat/Help system screenshot">
 
@@ -162,16 +162,11 @@ FastData-Py can be installed using the official Windows installer (recommended) 
 ## Option 1 – Install via Windows Installer (Recommended)
 
 1. Go to the latest release page:
-
 https://github.com/valttiuef/FastData-Py/releases
 
 2. Download the installer from the newest version (for example v0.1.1).
 
 3. Run the installer and follow the setup instructions.
-
-4. Launch FastData-Py from the Windows Start Menu.
-
-This is the recommended option for most users working with industrial or research datasets.
 
 ---
 
@@ -250,7 +245,7 @@ Always review upstream licenses if you add or redistribute binaries.
 
 # TODO / Known Issues
 
-## Forecasting (scikit-learn)
+### Forecasting (scikit-learn)
 
 - Disabled until a suitable long-term implementation strategy is finalized.
 - Active forecasting currently uses scikit-learn models with manual time-based splits.
@@ -258,35 +253,26 @@ Always review upstream licenses if you add or redistribute binaries.
 
 src/backend/services/legacy_forecasting/forecasting_service_sktime.py
 
----
-
-## Translations
+### Translations
 
 - Current translations are only examples and incomplete.
 - Proper translation files should be created if multilingual support is required.
 
----
-
-## LLM Integration
+### LLM Integration
 
 The current integration is intentionally lightweight and can be extended.
 
 Possible improvements include:
 
-- conversation history using saved logs
 - improved message structure for clearer interactions
 - explanations of underlying models (decision trees, linear regression, etc.)
 
----
-
-## Database Structure
+### Database Structure
 
 - Separate databases are currently used for logs, selections, and measurements.
 - Consolidating everything into a single database may simplify usage and data sharing.
 
----
-
-## Cross-Platform Compatibility
+### Cross-Platform Compatibility
 
 The application has primarily been tested on Windows.
 
