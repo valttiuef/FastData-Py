@@ -469,7 +469,7 @@ class DataTab(TabWidget):
                 logger.warning("Failed to apply exclusive-end viewport for hourly bucket selection.", exc_info=True)
             flt = self._build_filters()
             if flt:
-                self._set_monthly_chart_title(flt.clone_with_range(start_ts, end_ts))
+                self._sync_monthly_chart_title(flt.clone_with_range(start_ts, end_ts))
                 self.data_info.setText(
                     self._build_data_info_text(flt, start_ts, end_ts, rows=len(series_df))
                 )
@@ -521,6 +521,20 @@ class DataTab(TabWidget):
         except Exception:
             logger.warning("Exception in _set_monthly_chart_title", exc_info=True)
 
+    # @ai(gpt-5, codex-cli, fix, 2026-03-13)
+    def _sync_monthly_chart_title(self, flt: DataFilters | None) -> None:
+        try:
+            has_data = bool(self.monthly_chart.series.barSets())
+        except Exception:
+            has_data = False
+        if has_data:
+            self._set_monthly_chart_title(flt)
+            return
+        try:
+            self.monthly_chart.set_title("")
+        except Exception:
+            logger.warning("Exception in _sync_monthly_chart_title", exc_info=True)
+
     # --- chart interactions
     def _on_chart_range_changed(self, start_ts, end_ts):
         """
@@ -556,7 +570,7 @@ class DataTab(TabWidget):
         # info line
         flt = self._build_filters()
         if flt:
-            self._set_monthly_chart_title(flt.clone_with_range(start_ts, end_ts))
+            self._sync_monthly_chart_title(flt.clone_with_range(start_ts, end_ts))
             self.data_info.setText(
                 self._build_data_info_text(flt, start_ts, end_ts, rows=len(series_df))
             )
@@ -919,7 +933,7 @@ class DataTab(TabWidget):
             except Exception:
                 logger.warning("Failed to restore requested X-range after reload.", exc_info=True)
         title_filters = flt.clone_with_range(effective_start, effective_end)
-        self._set_monthly_chart_title(title_filters)
+        self._sync_monthly_chart_title(title_filters)
 
         self.data_info.setText(
             self._build_data_info_text(flt, b0, b1, rows=len(series_df))
@@ -933,6 +947,7 @@ class DataTab(TabWidget):
         self._owned_base_cache_key = None
         try:
             self.monthly_chart.clear()
+            self.monthly_chart.set_title("")
         except Exception:
             logger.warning("Exception in _clear_charts", exc_info=True)
         try:

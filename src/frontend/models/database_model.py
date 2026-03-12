@@ -17,7 +17,14 @@ from backend.data_db import Database
 from backend.data_db.repositories.feature_tags import normalize_tag
 from backend.settings_db import SelectionSettingsDatabase
 from .settings_model import SettingsModel
-from .selection_settings import FeatureLabelFilter, SelectionSettingsPayload, FeatureValueFilter, normalize_filter_scope
+from .selection_settings import (
+    SELECTION_MODE_EXCLUDE,
+    FeatureLabelFilter,
+    FeatureValueFilter,
+    SelectionSettingsPayload,
+    normalize_filter_scope,
+    normalize_selection_mode,
+)
 from ..threading.runner import run_in_thread
 from ..threading.utils import run_in_main_thread
 
@@ -541,6 +548,7 @@ class DatabaseModel(QObject):
         if dest == old_path:
             self.refresh_selection_database()
 
+    # @ai(gpt-5, codex-cli, fix, 2026-03-13)
     def reset_selection_database(self) -> None:
         """Reset the selection settings DB to the default Dataset."""
         old_path = self._selection_db_path
@@ -554,7 +562,12 @@ class DatabaseModel(QObject):
         db.close()
         self._settings.set_selection_db_path(default_path)
         if default_path == old_path:
+            # SettingsModel does not emit a path-changed signal when the path
+            # is unchanged, so reset in-memory selection state explicitly.
+            self._selection_payload_key = None
+            self.apply_selection_payload(None)
             self.refresh_selection_database()
+            self.load_selection_state()
 
     # ------------------------------------------------------------------
     # High-level metadata/helpers – used by view models
@@ -790,13 +803,8 @@ class DatabaseModel(QObject):
             self._emit_in_main_thread(self.selection_state_changed)
             self._emit_selected_features()
             return
-        selected_ids: set[int] = set()
         selections_enabled = bool(payload.selections_enabled())
-        if selections_enabled:
-            selected_ids = {int(fid) for fid in (payload.feature_ids or []) if fid is not None}
-            if not selected_ids and payload.feature_labels:
-                selected_ids = self._resolve_feature_ids_from_labels(payload.feature_labels)
-            selected_ids = self._resolve_existing_feature_ids(selected_ids)
+        selected_ids = self._selected_ids_from_payload(payload)
         self._selection_features_filter_enabled = selections_enabled
         self._selected_feature_ids = selected_ids
         self._filtered_feature_ids = set(self._selected_feature_ids)
@@ -826,6 +834,8 @@ class DatabaseModel(QObject):
         new_features: Sequence[dict],
     ) -> Optional[SelectionSettingsPayload]:
         if payload is None or not payload.selections_enabled():
+            return None
+        if payload.normalized_selection_mode() == SELECTION_MODE_EXCLUDE:
             return None
         if not payload.feature_ids and not payload.feature_labels:
             return None
@@ -905,6 +915,18 @@ class DatabaseModel(QObject):
             payload = SelectionSettingsPayload.from_dict(record.get("payload"))
         except Exception:
             return False
+        if payload.selections_use_exclude_mode():
+            # Exclude-mode payloads implicitly include future features.
+            self._selection_payload_key = None
+            try:
+                self.apply_selection_payload(payload)
+            except Exception:
+                logger.warning(
+                    "Failed to refresh exclude-mode selection payload after feature import.",
+                    exc_info=True,
+                )
+                return False
+            return True
         updated_payload = self._merge_new_features_into_active_selection_payload(payload, features)
         if updated_payload is None:
             return False
@@ -931,22 +953,7 @@ class DatabaseModel(QObject):
     def _resolve_existing_feature_ids(self, feature_ids: set[int]) -> set[int]:
         if not feature_ids:
             return set()
-        try:
-            db = self._ensure_database()
-            features = self._normalize_feature_frame_columns(db.all_features())
-        except Exception:
-            try:
-                features = self.all_features_df()
-            except Exception:
-                return set(feature_ids)
-        if features is None or features.empty or "feature_id" not in features.columns:
-            return set()
-        existing_ids: set[int] = set()
-        for value in features["feature_id"].tolist():
-            try:
-                existing_ids.add(int(value))
-            except Exception:
-                continue
+        existing_ids = self._all_existing_feature_ids()
         if not existing_ids:
             return set()
         return {int(fid) for fid in feature_ids if int(fid) in existing_ids}
@@ -954,11 +961,15 @@ class DatabaseModel(QObject):
     def _selection_payload_key_for(self, payload: Optional[SelectionSettingsPayload]) -> tuple:
         if payload is None:
             return ("none",)
+        selection_mode = payload.normalized_selection_mode()
         feature_ids = tuple(sorted(int(fid) for fid in (payload.feature_ids or []) if fid is not None))
         feature_labels = tuple(sorted(str(label) for label in (payload.feature_labels or []) if str(label).strip()))
         filter_state = self._normalize_filter_state(payload.filters or {})
         filters_key = self._freeze_value(filter_state)
         preprocessing_key = self._freeze_value(payload.preprocessing or {})
+        existing_ids_key: tuple[int, ...] = ()
+        if bool(payload.selections_enabled()) and selection_mode == SELECTION_MODE_EXCLUDE:
+            existing_ids_key = tuple(sorted(self._all_existing_feature_ids()))
         feature_filters_key = tuple(
             sorted(
                 (
@@ -988,12 +999,51 @@ class DatabaseModel(QObject):
             feature_labels,
             filters_key,
             preprocessing_key,
+            selection_mode,
+            existing_ids_key,
             feature_filters_key,
             feature_label_filters_key,
             bool(payload.selections_enabled()),
             bool(payload.filters_enabled()),
             bool(payload.preprocessing_enabled()),
         )
+
+    def _all_existing_feature_ids(self) -> set[int]:
+        try:
+            db = self._ensure_database()
+            features = self._normalize_feature_frame_columns(db.all_features())
+        except Exception:
+            try:
+                features = self.all_features_df()
+            except Exception:
+                return set()
+        if features is None or features.empty or "feature_id" not in features.columns:
+            return set()
+        existing_ids: set[int] = set()
+        for value in features["feature_id"].tolist():
+            try:
+                existing_ids.add(int(value))
+            except Exception:
+                continue
+        return existing_ids
+
+    def _selected_ids_from_payload(self, payload: SelectionSettingsPayload) -> set[int]:
+        if payload is None or not payload.selections_enabled():
+            return set()
+        selection_mode = normalize_selection_mode(payload.selection_mode)
+        if selection_mode == SELECTION_MODE_EXCLUDE:
+            disabled_ids = {int(fid) for fid in (payload.feature_ids or []) if fid is not None}
+            if not disabled_ids and payload.feature_labels:
+                disabled_ids = self._resolve_feature_ids_from_labels(payload.feature_labels)
+            disabled_ids = self._resolve_existing_feature_ids(disabled_ids)
+            all_ids = self._all_existing_feature_ids()
+            if not all_ids:
+                return set()
+            return {int(fid) for fid in all_ids if int(fid) not in disabled_ids}
+        selected_ids = {int(fid) for fid in (payload.feature_ids or []) if fid is not None}
+        if not selected_ids and payload.feature_labels:
+            selected_ids = self._resolve_feature_ids_from_labels(payload.feature_labels)
+        return self._resolve_existing_feature_ids(selected_ids)
 
     def _freeze_value(self, value: object) -> tuple:
         if isinstance(value, dict):
@@ -3004,20 +3054,19 @@ class DatabaseModel(QObject):
                 self._emit_selected_features()
                 return
 
-            selected_ids: set[int] = set()
             selections_enabled = bool(payload.selections_enabled())
-            if selections_enabled:
-                selected_ids = {int(fid) for fid in (payload.feature_ids or []) if fid is not None}
-                if not selected_ids and payload.feature_labels:
-                    resolved = self._resolve_feature_ids_from_labels(payload.feature_labels)
-                    if resolved:
-                        selected_ids = resolved
-                    else:
-                        logger.warning(
-                            "Selection payload labels did not resolve to any feature IDs: %s",
-                            list(payload.feature_labels or []),
-                        )
-                selected_ids = self._resolve_existing_feature_ids(selected_ids)
+            selected_ids = self._selected_ids_from_payload(payload)
+            if (
+                selections_enabled
+                and payload.normalized_selection_mode() != SELECTION_MODE_EXCLUDE
+                and not (payload.feature_ids or [])
+                and not selected_ids
+                and payload.feature_labels
+            ):
+                logger.warning(
+                    "Selection payload labels did not resolve to any feature IDs: %s",
+                    list(payload.feature_labels or []),
+                )
             self._selection_features_filter_enabled = selections_enabled
             self._selected_feature_ids = selected_ids
             self._filtered_feature_ids = set(self._selected_feature_ids)
@@ -3105,14 +3154,14 @@ class DatabaseModel(QObject):
         values: Optional[Sequence[Any]],
         selection: Optional[Sequence[Any]],
     ) -> Optional[list[Any]]:
-        sel = [item for item in (selection or []) if item not in (None, "")]
-        if not sel:
-            return list(values) if values is not None else None
-        if not values:
-            return list(sel)
-        values_list = list(values)
-        keep = [item for item in values_list if item in sel]
-        return keep
+        # @ai(gpt-5, codex-cli, fix, 2026-03-13)
+        # Selection-saved scopes are defaults. Explicit runtime scopes from UI
+        # should override them instead of being intersected/restricted.
+        requested = None if values is None else [item for item in values if item not in (None, "")]
+        if requested is not None:
+            return list(requested)
+        saved = [item for item in (selection or []) if item not in (None, "")]
+        return list(saved) if saved else None
 
     def _max_ts(
         self,

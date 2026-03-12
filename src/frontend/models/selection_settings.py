@@ -24,12 +24,30 @@ FILTER_SCOPE_CHOICES = (
     FILTER_SCOPE_LOCAL,
 )
 
+SELECTION_MODE_INCLUDE = "include"
+SELECTION_MODE_EXCLUDE = "exclude"
+SELECTION_MODE_CHOICES = (
+    SELECTION_MODE_INCLUDE,
+    SELECTION_MODE_EXCLUDE,
+)
+
 
 def normalize_filter_scope(value: object, *, default: str = FILTER_SCOPE_SYSTEM) -> str:
     if isinstance(value, bool):
         return FILTER_SCOPE_GLOBAL if value else FILTER_SCOPE_LOCAL
     text = str(value or "").strip().lower()
     if text in FILTER_SCOPE_CHOICES:
+        return text
+    return default
+
+
+def normalize_selection_mode(
+    value: object,
+    *,
+    default: str = SELECTION_MODE_INCLUDE,
+) -> str:
+    text = str(value or "").strip().lower()
+    if text in SELECTION_MODE_CHOICES:
         return text
     return default
 
@@ -152,6 +170,7 @@ class SelectionSettingsPayload:
     include_selections: Optional[bool] = None
     include_filters: Optional[bool] = None
     include_preprocessing: Optional[bool] = None
+    selection_mode: Optional[str] = None
 
     def selections_enabled(self) -> bool:
         return True if self.include_selections is None else bool(self.include_selections)
@@ -161,6 +180,14 @@ class SelectionSettingsPayload:
 
     def preprocessing_enabled(self) -> bool:
         return True if self.include_preprocessing is None else bool(self.include_preprocessing)
+
+    def normalized_selection_mode(self) -> str:
+        if self.selection_mode is None:
+            return SELECTION_MODE_INCLUDE
+        return normalize_selection_mode(self.selection_mode)
+
+    def selections_use_exclude_mode(self) -> bool:
+        return self.normalized_selection_mode() == SELECTION_MODE_EXCLUDE
 
     def to_dict(self) -> dict:
         payload = {
@@ -177,6 +204,8 @@ class SelectionSettingsPayload:
             payload["include_filters"] = bool(self.include_filters)
         if self.include_preprocessing is not None:
             payload["include_preprocessing"] = bool(self.include_preprocessing)
+        if self.selection_mode is not None:
+            payload["selection_mode"] = normalize_selection_mode(self.selection_mode)
         return payload
 
     @classmethod
@@ -212,6 +241,7 @@ class SelectionSettingsPayload:
         include_selections_raw = payload.get("include_selections")
         include_filters_raw = payload.get("include_filters")
         include_preprocessing_raw = payload.get("include_preprocessing")
+        selection_mode_raw = payload.get("selection_mode")
         return cls(
             feature_ids=feature_ids,
             feature_labels=feature_labels,
@@ -228,6 +258,11 @@ class SelectionSettingsPayload:
             include_preprocessing=(
                 None if include_preprocessing_raw is None else bool(include_preprocessing_raw)
             ),
+            selection_mode=(
+                None
+                if selection_mode_raw is None
+                else normalize_selection_mode(selection_mode_raw)
+            ),
         )
 
 
@@ -238,8 +273,12 @@ __all__ = [
     "FILTER_SCOPE_IMPORT",
     "FILTER_SCOPE_LOCAL",
     "FILTER_SCOPE_SYSTEM",
+    "SELECTION_MODE_CHOICES",
+    "SELECTION_MODE_EXCLUDE",
+    "SELECTION_MODE_INCLUDE",
     "FeatureValueFilter",
     "FeatureLabelFilter",
     "SelectionSettingsPayload",
     "normalize_filter_scope",
+    "normalize_selection_mode",
 ]

@@ -11,7 +11,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from backend.models import ImportOptions
-from frontend.models.hybrid_pandas_model import HybridPandasModel
+from frontend.models.hybrid_pandas_model import DataFilters, HybridPandasModel
 from frontend.models.selection_settings import SelectionSettingsPayload
 from frontend.models.settings_model import SettingsModel
 
@@ -274,6 +274,190 @@ def test_delete_active_selection_reverts_to_default_state(tmp_path: Path) -> Non
         assert model.selection_filters == {}
         assert model.selection_preprocessing == {}
         assert not model.features_df().empty
+    finally:
+        model._close_database()
+        model._close_selection_database()
+
+
+def test_exclude_mode_selection_enables_new_imported_features_across_scopes(tmp_path: Path) -> None:
+    model = _build_model(tmp_path, app_name="FastDataSelectionExcludeModeImport")
+    try:
+        csv_a = tmp_path / "selection-exclude-a.csv"
+        _write_csv(
+            csv_a,
+            [
+                {"timestamp": "2026-01-01 00:00:00", "FeatureA": 1.0},
+                {"timestamp": "2026-01-01 01:00:00", "FeatureA": 2.0},
+            ],
+        )
+        model.import_files(
+            [str(csv_a)],
+            ImportOptions(
+                system_name="System A",
+                dataset_name="Dataset A",
+                use_duckdb_csv_import=True,
+            ),
+        )
+        before_features = model.features_df_unconstrained()
+        before_ids = {int(value) for value in before_features["feature_id"].tolist()}
+        assert before_ids
+        disabled_id = sorted(before_ids)[0]
+
+        exclude_payload = SelectionSettingsPayload(
+            include_selections=True,
+            include_filters=False,
+            include_preprocessing=False,
+            feature_ids=[disabled_id],
+            selection_mode="exclude",
+        )
+        setting_id = model.save_selection_setting(
+            name="Exclude Mode Active",
+            payload=exclude_payload.to_dict(),
+            notes="",
+            activate=True,
+        )
+        assert setting_id is not None
+        model.apply_selection_payload(exclude_payload)
+        assert disabled_id not in model.selected_feature_ids
+
+        csv_b = tmp_path / "selection-exclude-b.csv"
+        _write_csv(
+            csv_b,
+            [
+                {"timestamp": "2026-01-02 00:00:00", "FeatureB": 5.0},
+                {"timestamp": "2026-01-02 01:00:00", "FeatureB": 6.0},
+            ],
+        )
+        model.import_files(
+            [str(csv_b)],
+            ImportOptions(
+                system_name="System B",
+                dataset_name="Dataset B",
+                use_duckdb_csv_import=True,
+            ),
+        )
+
+        after_features = model.features_df_unconstrained()
+        after_ids = {int(value) for value in after_features["feature_id"].tolist()}
+        new_ids = after_ids.difference(before_ids)
+        assert new_ids
+        assert new_ids.issubset(model.selected_feature_ids)
+        assert disabled_id not in model.selected_feature_ids
+
+        saved = model.selection_setting(int(setting_id))
+        assert saved is not None
+        saved_payload = SelectionSettingsPayload.from_dict(saved.get("payload"))
+        assert saved_payload.selection_mode == "exclude"
+        assert disabled_id in set(saved_payload.feature_ids or [])
+    finally:
+        model._close_database()
+        model._close_selection_database()
+
+
+def test_reset_selection_database_same_path_clears_runtime_selection_state(tmp_path: Path) -> None:
+    model = _build_model(tmp_path, app_name="FastDataSelectionResetSamePath")
+    try:
+        csv_a = tmp_path / "selection-reset-same-path-a.csv"
+        _write_csv(
+            csv_a,
+            [
+                {"timestamp": "2026-01-01 00:00:00", "FeatureA": 1.0},
+                {"timestamp": "2026-01-01 01:00:00", "FeatureA": 2.0},
+            ],
+        )
+        model.import_files(
+            [str(csv_a)],
+            ImportOptions(
+                system_name="System A",
+                dataset_name="Dataset A",
+                use_duckdb_csv_import=True,
+            ),
+        )
+
+        before_features = model.features_df_unconstrained()
+        before_ids = sorted(int(value) for value in before_features["feature_id"].tolist())
+        assert before_ids
+        selected_id = before_ids[0]
+
+        payload = SelectionSettingsPayload(
+            include_selections=True,
+            include_filters=False,
+            include_preprocessing=False,
+            feature_ids=[selected_id],
+        )
+        model.save_selection_setting(
+            name="Active Selection",
+            payload=payload.to_dict(),
+            notes="",
+            activate=True,
+        )
+        model.apply_selection_payload(payload)
+        assert model.selected_feature_ids == {selected_id}
+
+        current_selection_db_path = Path(model.selection_settings_path)
+        model._settings.default_selection_db_path = lambda: current_selection_db_path
+        model.reset_selection_database()
+
+        assert model.active_selection_setting() is None
+        assert model.selected_feature_ids == set()
+        assert model.selection_filters == {}
+        assert model.selection_preprocessing == {}
+
+        csv_b = tmp_path / "selection-reset-same-path-b.csv"
+        _write_csv(
+            csv_b,
+            [
+                {"timestamp": "2026-01-02 00:00:00", "FeatureB": 5.0},
+                {"timestamp": "2026-01-02 01:00:00", "FeatureB": 6.0},
+            ],
+        )
+        model.import_files(
+            [str(csv_b)],
+            ImportOptions(
+                system_name="System A",
+                dataset_name="Dataset A",
+                use_duckdb_csv_import=True,
+            ),
+        )
+        assert not model.features_df().empty
+    finally:
+        model._close_database()
+        model._close_selection_database()
+
+
+def test_selection_scope_filters_apply_as_defaults_when_request_omits_scope(tmp_path: Path) -> None:
+    model = _build_model(tmp_path, app_name="FastDataSelectionScopeDefaults")
+    try:
+        model.apply_selection_payload(
+            SelectionSettingsPayload(
+                include_selections=False,
+                include_filters=True,
+                include_preprocessing=False,
+                filters={"systems": ["System A"]},
+            )
+        )
+        merged = model.merge_with_selection_filters(DataFilters(features=[]))
+        assert merged.systems == ["System A"]
+    finally:
+        model._close_database()
+        model._close_selection_database()
+
+
+def test_selection_scope_filters_do_not_override_explicit_requested_scope(tmp_path: Path) -> None:
+    model = _build_model(tmp_path, app_name="FastDataSelectionScopeOverride")
+    try:
+        model.apply_selection_payload(
+            SelectionSettingsPayload(
+                include_selections=False,
+                include_filters=True,
+                include_preprocessing=False,
+                filters={"systems": ["System A"]},
+            )
+        )
+        merged = model.merge_with_selection_filters(
+            DataFilters(features=[], systems=["System B"])
+        )
+        assert merged.systems == ["System B"]
     finally:
         model._close_database()
         model._close_selection_database()

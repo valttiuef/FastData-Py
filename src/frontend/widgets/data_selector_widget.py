@@ -198,7 +198,7 @@ class DataSelectorViewModel(QObject):
     def _on_database_changed(self, *_args) -> None:
         # @ai(gpt-5, codex, fix, 2026-03-11)
         if self._selection_refresh_pending:
-            self._finish_selection_refresh()
+            self._finish_selection_refresh(trigger_feature_reload=False)
         try:
             self.refresh_from_model()
         except Exception:
@@ -232,30 +232,33 @@ class DataSelectorViewModel(QObject):
             return
         self._apply_selection_state_to_widget()
         if self._widget.features_widget is None:
-            self._finish_selection_refresh()
+            self._finish_selection_refresh(trigger_feature_reload=False)
             return
         if self._widget.features_widget.use_selection_filter:
-            # Selection-filtered feature lists are refreshed through selected_features_changed.
-            self._finish_selection_refresh()
+            # Selection-filtered lists still need one final scope-filter apply
+            # after loading settings, otherwise system/dataset/tag constraints
+            # can remain stale while data-fetch filters are already updated.
+            self._finish_selection_refresh(trigger_feature_reload=True)
             return
         try:
             self._selection_refresh_waiting_features_reload = True
             self._widget.features_widget.reload_features()
         except Exception:
             logger.warning("Exception in _apply_selection_state_after_filters_refresh", exc_info=True)
-            self._finish_selection_refresh()
+            self._finish_selection_refresh(trigger_feature_reload=False)
 
     def _on_features_reloaded(self, _df: object) -> None:
         if not self._selection_refresh_pending or not self._selection_refresh_waiting_features_reload:
             return
-        self._finish_selection_refresh()
+        self._finish_selection_refresh(trigger_feature_reload=False)
 
-    def _finish_selection_refresh(self) -> None:
+    # @ai(gpt-5, codex-cli, fix, 2026-03-13)
+    def _finish_selection_refresh(self, *, trigger_feature_reload: bool = False) -> None:
         if not self._selection_refresh_pending:
             return
         self._selection_refresh_pending = False
         self._selection_refresh_waiting_features_reload = False
-        self._widget.end_feature_reload_batch(trigger_reload=False)
+        self._widget.end_feature_reload_batch(trigger_reload=bool(trigger_feature_reload))
         self._widget.end_data_requirements_batch()
 
     def _apply_selection_state_to_widget(self) -> None:
@@ -346,7 +349,7 @@ class DataSelectorViewModel(QObject):
             end=self._widget.filters_widget.end_timestamp(),
             group_ids=self._widget.filters_widget.selected_group_ids(),
             months=self._widget.filters_widget.selected_months(),
-            systems=None,
+            systems=self._widget.filters_widget.selected_systems(),
             datasets=self._widget.filters_widget.selected_datasets_for_data_scope(),
             import_ids=self._widget.filters_widget.selected_import_ids_for_data_scope(),
         )
@@ -555,7 +558,11 @@ class DataSelectorViewModel(QObject):
                 if datasets is not None
                 else self._widget.filters_widget.selected_datasets_for_data_scope()
             ),
-            systems=None,
+            systems=(
+                list(systems)
+                if systems is not None
+                else self._widget.filters_widget.selected_systems()
+            ),
             import_ids=self._widget.filters_widget.selected_import_ids_for_data_scope(),
         )
         params = self._resolved_preprocessing_params(
@@ -630,7 +637,11 @@ class DataSelectorViewModel(QObject):
                 if datasets is not None
                 else self._widget.filters_widget.selected_datasets_for_data_scope()
             ),
-            systems=None,
+            systems=(
+                list(systems)
+                if systems is not None
+                else self._widget.filters_widget.selected_systems()
+            ),
             import_ids=self._widget.filters_widget.selected_import_ids_for_data_scope(),
         )
         params = self._resolved_preprocessing_params(

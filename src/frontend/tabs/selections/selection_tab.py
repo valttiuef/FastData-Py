@@ -16,7 +16,12 @@ from ...localization import tr
 
 from ...models.database_model import DatabaseModel
 from ...utils import toast_error, toast_info, toast_success, toast_warn
-from ...models.selection_settings import FILTER_SCOPE_CHOICES, SelectionSettingsPayload, normalize_filter_scope
+from ...models.selection_settings import (
+    FILTER_SCOPE_CHOICES,
+    SELECTION_MODE_EXCLUDE,
+    SelectionSettingsPayload,
+    normalize_filter_scope,
+)
 from ...widgets.fast_table import FastPandasProxyModel, FastTable
 from ...widgets.panel import Panel
 from ..tab_widget import TabWidget
@@ -66,6 +71,7 @@ class SelectionsTab(TabWidget):
         self._settings_with_default: List[dict] = []
         self._select_all_default = True
         self._pending_toast_action: Optional[str] = None
+        self._group_filters_refresh_pending = False
         super().__init__(parent)
 
         # QObject-derived helpers must be created after the QWidget base class
@@ -195,7 +201,7 @@ class SelectionsTab(TabWidget):
         self._table_model.set_features(df)
         self._table_model.apply_selection(self._current_payload, select_all_by_default=self._select_all_default)
         self._reapply_table_sort()
-        self._refresh_group_filters_for_enabled_group_features()
+        self._queue_group_filter_refresh()
         if self._pending_toast_action == "reload_features":
             self._pending_toast_action = None
             try:
@@ -288,13 +294,23 @@ class SelectionsTab(TabWidget):
         # Its options are used as save defaults, not as an empty "select nothing" filter.
         payload_to_apply = payload if (record and record.get("id")) else None
         self._apply_active_selection_payload(payload_to_apply)
-        self._refresh_group_filters_for_enabled_group_features()
+        self._queue_group_filter_refresh()
         if self._pending_toast_action == "activate_setting":
             self._pending_toast_action = None
             try:
                 toast_success(tr("Selection setting activated."), title=tr("Selections"))
             except Exception:
                 logger.warning("Exception in _on_active_setting_changed", exc_info=True)
+
+    def _queue_group_filter_refresh(self) -> None:
+        if self._group_filters_refresh_pending:
+            return
+        self._group_filters_refresh_pending = True
+        QTimer.singleShot(0, self._flush_group_filter_refresh)
+
+    def _flush_group_filter_refresh(self) -> None:
+        self._group_filters_refresh_pending = False
+        self._refresh_group_filters_for_enabled_group_features()
 
     def _apply_active_selection_payload(self, payload: Optional[SelectionSettingsPayload]) -> None:
         try:
@@ -536,8 +552,9 @@ class SelectionsTab(TabWidget):
         self._view_model.refresh_features()
 
     def _gather_payload(self) -> SelectionSettingsPayload:
-        selected_features, filters = self._table_model.selection_state()
-        selected_labels, label_filters = self._table_model.selection_state_labels()
+        _, filters = self._table_model.selection_state()
+        _, label_filters = self._table_model.selection_fallback_state()
+        excluded_features, excluded_labels = self._table_model.selection_exclusion_state()
         selector_settings = self.sidebar.get_selection_settings()
         payload_options = self.sidebar.payload_options()
         include_selections = bool(payload_options.get("include_selections"))
@@ -546,8 +563,8 @@ class SelectionsTab(TabWidget):
         filter_state = dict(selector_settings.get("filters") or {})
         preprocessing = dict(selector_settings.get("preprocessing") or {})
         return SelectionSettingsPayload(
-            feature_ids=selected_features if include_selections else [],
-            feature_labels=selected_labels if include_selections else [],
+            feature_ids=excluded_features if include_selections else [],
+            feature_labels=excluded_labels if include_selections else [],
             filters=filter_state if include_filters else {},
             preprocessing=preprocessing if include_preprocessing else {},
             feature_filters=filters if include_selections else [],
@@ -555,6 +572,7 @@ class SelectionsTab(TabWidget):
             include_selections=include_selections,
             include_filters=include_filters,
             include_preprocessing=include_preprocessing,
+            selection_mode=SELECTION_MODE_EXCLUDE if include_selections else None,
         )
 
     def _on_save_setting(self) -> None:
@@ -629,7 +647,7 @@ class SelectionsTab(TabWidget):
             except Exception:
                 continue
         if keys.intersection({"selected", "type"}):
-            self._refresh_group_filters_for_enabled_group_features()
+            self._queue_group_filter_refresh()
         if not keys.intersection({"filter_min", "filter_max", "filter_scope"}):
             return
         # Do not apply value filters immediately; wait for selection settings save/activate.

@@ -9,10 +9,12 @@ from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from ...models.selection_settings import (
     FILTER_SCOPE_CHOICES,
     FILTER_SCOPE_SYSTEM,
+    SELECTION_MODE_EXCLUDE,
     FeatureLabelFilter,
     FeatureValueFilter,
     SelectionSettingsPayload,
     normalize_filter_scope,
+    normalize_selection_mode,
 )
 
 
@@ -239,17 +241,27 @@ class FeatureSelectionTableModel(QAbstractTableModel):
             return
         self._last_selection_key = selection_key
         selections_enabled = bool(payload.selections_enabled()) if payload else False
-        selected_ids = set(
-            int(fid)
-            for fid in ((payload.feature_ids if (payload and selections_enabled) else []) or [])
-            if fid is not None
-        )
-        selected_labels = set(
-            str(label)
-            for label in ((payload.feature_labels if (payload and selections_enabled) else []) or [])
-            if str(label).strip()
-        )
-        use_labels = not bool(selected_ids) and bool(selected_labels)
+        selection_mode = normalize_selection_mode(payload.selection_mode if payload else None)
+        selected_ids: set[int] = set()
+        selected_labels: set[str] = set()
+        excluded_ids: set[int] = set()
+        excluded_labels: set[str] = set()
+        if payload and selections_enabled:
+            if selection_mode == SELECTION_MODE_EXCLUDE:
+                excluded_ids = {int(fid) for fid in (payload.feature_ids or []) if fid is not None}
+                excluded_labels = {
+                    str(label)
+                    for label in (payload.feature_labels or [])
+                    if str(label).strip()
+                }
+            else:
+                selected_ids = {int(fid) for fid in (payload.feature_ids or []) if fid is not None}
+                selected_labels = {
+                    str(label)
+                    for label in (payload.feature_labels or [])
+                    if str(label).strip()
+                }
+        use_labels = selection_mode != SELECTION_MODE_EXCLUDE and not bool(selected_ids) and bool(selected_labels)
         filters: Dict[int, FeatureValueFilter] = {}
         if payload and selections_enabled:
             for flt in payload.feature_filters:
@@ -266,6 +278,20 @@ class FeatureSelectionTableModel(QAbstractTableModel):
             return
         top_left = self.index(0, 0)
         bottom_right = self.index(len(self._rows) - 1, self.columnCount() - 1)
+        visible_ids: set[int] = set()
+        visible_labels: set[str] = set()
+        for row in self._rows:
+            fid = row.get("feature_id")
+            if fid not in (None, ""):
+                try:
+                    visible_ids.add(int(fid))
+                except Exception:
+                    pass
+            label = str(row.get("notes") or "").strip()
+            if label:
+                visible_labels.add(label)
+        has_id_overlap = bool(selected_ids and visible_ids.intersection(selected_ids))
+        has_label_overlap = bool(use_labels and visible_labels.intersection(selected_labels))
         if use_labels:
             label_counts: Dict[str, int] = {}
             for row in self._rows:
@@ -282,18 +308,37 @@ class FeatureSelectionTableModel(QAbstractTableModel):
         for row in self._rows:
             fid = row.get("feature_id")
             label = row.get("notes") or ""
-            if selected_ids:
-                try:
-                    row["selected"] = bool(int(fid) in selected_ids)
-                except Exception:
-                    row["selected"] = False
+            if selection_mode == SELECTION_MODE_EXCLUDE:
+                is_excluded = False
+                if fid not in (None, ""):
+                    try:
+                        is_excluded = int(fid) in excluded_ids
+                    except Exception:
+                        is_excluded = False
+                if not is_excluded and str(label).strip():
+                    is_excluded = str(label).strip() in excluded_labels
+                row["selected"] = not is_excluded
+            elif selected_ids:
+                if has_id_overlap:
+                    try:
+                        row["selected"] = bool(int(fid) in selected_ids)
+                    except Exception:
+                        row["selected"] = False
+                else:
+                    row["selected"] = True
             elif use_labels:
-                row["selected"] = bool(str(label) in selected_labels)
+                if has_label_overlap:
+                    row["selected"] = bool(str(label) in selected_labels)
+                else:
+                    row["selected"] = True
             else:
                 row["selected"] = bool(select_all_by_default)
             flt = None
-            if fid is not None:
-                flt = filters.get(int(fid))
+            if fid not in (None, ""):
+                try:
+                    flt = filters.get(int(fid))
+                except Exception:
+                    flt = None
             if flt is None and use_label_filters and label:
                 flt = label_filters.get(str(label))
             if flt:
@@ -310,6 +355,7 @@ class FeatureSelectionTableModel(QAbstractTableModel):
     def _selection_key(self, payload: Optional[SelectionSettingsPayload], *, select_all_by_default: bool) -> tuple:
         if payload is None:
             return ("none", bool(select_all_by_default))
+        selection_mode = normalize_selection_mode(payload.selection_mode)
         selections_enabled = bool(payload.selections_enabled())
         selected = tuple(sorted(int(fid) for fid in (payload.feature_ids or []) if fid is not None))
         selected_labels = tuple(sorted(str(label) for label in (payload.feature_labels or []) if str(label).strip()))
@@ -342,6 +388,7 @@ class FeatureSelectionTableModel(QAbstractTableModel):
             selected_labels,
             filters,
             label_filters,
+            selection_mode,
             bool(select_all_by_default),
             selections_enabled,
         )
@@ -450,19 +497,66 @@ class FeatureSelectionTableModel(QAbstractTableModel):
                 )
         return selected, filters
 
+    def selection_fallback_state(self) -> Tuple[List[str], List[FeatureLabelFilter]]:
+        selected: List[str] = []
+        filters: List[FeatureLabelFilter] = []
+        for row in self._rows:
+            if row.get("feature_id") not in (None, ""):
+                continue
+            label = str(row.get("notes") or "").strip()
+            if not label:
+                continue
+            if row.get("selected"):
+                selected.append(label)
+            if row.get("filter_min") is not None or row.get("filter_max") is not None:
+                filters.append(
+                    FeatureLabelFilter(
+                        label=label,
+                        min_value=row.get("filter_min"),
+                        max_value=row.get("filter_max"),
+                        scope=normalize_filter_scope(row.get("filter_scope")),
+                    )
+                )
+        return selected, filters
+
+    def selection_exclusion_state(self) -> Tuple[List[int], List[str]]:
+        excluded_ids: List[int] = []
+        excluded_labels: List[str] = []
+        for row in self._rows:
+            if row.get("selected"):
+                continue
+            fid = row.get("feature_id")
+            if fid not in (None, ""):
+                try:
+                    excluded_ids.append(int(fid))
+                    continue
+                except Exception:
+                    pass
+            label = str(row.get("notes") or "").strip()
+            if label:
+                excluded_labels.append(label)
+        return excluded_ids, excluded_labels
+
     def set_rows_selected(self, rows: List[int], enabled: bool) -> None:
         selected_col = next(
             (idx for idx, (key, _label) in enumerate(self.COLUMN_DEFINITIONS) if key == "selected"),
             0,
         )
+        changed_rows: List[int] = []
         for row_index in rows:
             if 0 <= row_index < len(self._rows):
                 if self._rows[row_index].get("selected") != bool(enabled):
                     self._rows[row_index]["selected"] = bool(enabled)
                     if 0 <= row_index < len(self._df.index):
                         self._df.iat[row_index, selected_col] = bool(enabled)
-                    idx = self.index(row_index, selected_col)
-                    self.dataChanged.emit(idx, idx, [Qt.ItemDataRole.CheckStateRole, Qt.ItemDataRole.DisplayRole])
+                    changed_rows.append(int(row_index))
+        if not changed_rows:
+            return
+        self.dataChanged.emit(
+            self.index(min(changed_rows), selected_col),
+            self.index(max(changed_rows), selected_col),
+            [Qt.ItemDataRole.CheckStateRole, Qt.ItemDataRole.DisplayRole],
+        )
 
     def _normalize_value(self, value: Any) -> Any:
         if value is None:

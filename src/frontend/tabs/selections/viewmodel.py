@@ -15,7 +15,11 @@ import pandas as pd
 from PySide6.QtCore import QObject, Signal
 
 from ...models.database_model import DatabaseModel
-from ...models.selection_settings import SelectionSettingsPayload, normalize_filter_scope
+from ...models.selection_settings import (
+    SelectionSettingsPayload,
+    normalize_filter_scope,
+    normalize_selection_mode,
+)
 from ...threading.runner import run_in_thread
 from ...threading.utils import run_in_main_thread
 
@@ -297,6 +301,8 @@ class SelectionsViewModel(QObject):
         if payload is None or not new_features:
             return None
         if not payload.selections_enabled():
+            return None
+        if payload.selections_use_exclude_mode():
             return None
         # Keep explicit "none selected" settings intact.
         if not payload.feature_ids and not payload.feature_labels:
@@ -594,6 +600,7 @@ class SelectionsViewModel(QObject):
             tuple(sorted(payload.feature_labels or [])),
             self._payload_filters_key(payload.filters),
             self._payload_filters_key(payload.preprocessing),
+            normalize_selection_mode(payload.selection_mode),
             bool(payload.selections_enabled()),
             bool(payload.filters_enabled()),
             bool(payload.preprocessing_enabled()),
