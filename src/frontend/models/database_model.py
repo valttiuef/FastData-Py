@@ -554,6 +554,11 @@ class DatabaseModel(QObject):
         self._features_cache_version += 1
         self._last_selected_features_key = None
 
+    def _invalidate_group_metadata_cache(self) -> None:
+        """Clear caches that back filter group options."""
+        self._groups_cache = None
+        self._feature_group_kinds_cache = None
+
     @staticmethod
     def _empty_imports_frame() -> pd.DataFrame:
         return pd.DataFrame(
@@ -1431,6 +1436,7 @@ class DatabaseModel(QObject):
             if remaining_same_kind <= 0:
                 db.group_value_aliases_repo.delete_by_kinds(con, [kind_text])
 
+        self._invalidate_group_metadata_cache()
         self._emit_in_main_thread(self.features_list_changed)
         self._emit_in_main_thread(self.groups_changed)
         return {
@@ -1822,7 +1828,12 @@ class DatabaseModel(QObject):
                 how="inner",
                 validate="many_to_one",
             )
-            merged["import_id"] = pd.to_numeric(merged.get("import_id"), errors="coerce").fillna(-1).astype(int)
+            import_values = (
+                merged["import_id"]
+                if "import_id" in merged.columns
+                else pd.Series([-1] * len(merged), index=merged.index)
+            )
+            merged["import_id"] = pd.to_numeric(import_values, errors="coerce").fillna(-1).astype(int)
             merged = merged[
                 ["start_ts", "end_ts", "system_id", "dataset_id", "import_id", "group_id"]
             ].drop_duplicates()
@@ -1841,6 +1852,7 @@ class DatabaseModel(QObject):
                 """
             )
 
+        self._invalidate_group_metadata_cache()
         self._emit_in_main_thread(self.features_list_changed)
         self._emit_in_main_thread(self.groups_changed)
         return {
@@ -1898,6 +1910,7 @@ class DatabaseModel(QObject):
             con.register("new_group_labels_only_from_model", labels_df[["label", "kind"]])
             db.group_labels_repo.insert_new_labels(con, "new_group_labels_only_from_model")
 
+        self._invalidate_group_metadata_cache()
         self._emit_in_main_thread(self.features_list_changed)
         self._emit_in_main_thread(self.groups_changed)
         return {

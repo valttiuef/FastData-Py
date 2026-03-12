@@ -501,6 +501,7 @@ class SomSidebar(SidebarWidget):
         feature_names = [
             name for payload in selected_payloads if (name := self._feature_display_name(payload))
         ]
+        filters_widget = self.data_selector.filters_widget
 
         def _on_fetch_result(frame_token: str) -> None:
             data_frame = self.data_selector.resolve_dataframe_token(frame_token, consume=True)
@@ -516,6 +517,21 @@ class SomSidebar(SidebarWidget):
                 self._view_model.train_som(
                     feature_names,
                     feature_payloads=selected_payloads,
+                    start=filters_widget.start_timestamp() if filters_widget is not None else None,
+                    end=filters_widget.end_timestamp() if filters_widget is not None else None,
+                    systems=filters_widget.selected_systems() if filters_widget is not None else None,
+                    datasets=(
+                        filters_widget.selected_datasets_for_data_scope()
+                        if filters_widget is not None
+                        else None
+                    ),
+                    import_ids=(
+                        filters_widget.selected_import_ids_for_data_scope()
+                        if filters_widget is not None
+                        else None
+                    ),
+                    group_ids=filters_widget.selected_group_ids() if filters_widget is not None else None,
+                    months=filters_widget.selected_months() if filters_widget is not None else None,
                     map_shape=(map_width, map_height),
                     sigma=self.sigma_spin.value(),
                     learning_rate=self.lr_spin.value(),

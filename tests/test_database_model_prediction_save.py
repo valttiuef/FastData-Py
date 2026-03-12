@@ -213,3 +213,161 @@ def test_save_feature_with_measurements_reuses_predictions_import(tmp_path: Path
     assert len(import_rows) == 1
     assert len(mapped_rows) == 1
     assert int(mapped_rows[0][0]) == int(import_rows[0][0])
+
+
+def test_insert_group_labels_and_points_without_import_id_uses_default_scope(tmp_path: Path) -> None:
+    database_path = tmp_path / "group-save-no-import-id.duckdb"
+    settings = SettingsModel(
+        organization="FastDataTests",
+        application="FastDataGroupSaveNoImportId",
+    )
+    settings.set_database_path(database_path)
+    model = DatabaseModel(settings)
+    try:
+        labels_df = pd.DataFrame({"label": ["Cluster A", "Cluster B"]})
+        points_df = pd.DataFrame(
+            {
+                "start_ts": pd.to_datetime(["2026-01-01 00:00:00", "2026-01-01 01:00:00"]),
+                "end_ts": pd.to_datetime(["2026-01-01 00:30:00", "2026-01-01 01:30:00"]),
+                "label": ["Cluster A", "Cluster B"],
+                "system_id": [5, 5],
+                "dataset_id": [6, 6],
+            }
+        )
+
+        summary = model.insert_group_labels_and_points(
+            kind="som_timeline_cluster",
+            labels_df=labels_df,
+            points_df=points_df,
+            replace_kind=True,
+        )
+
+        assert int(summary["group_labels"]) == 2
+        assert int(summary["group_points"]) == 2
+
+        with model.db.connection() as con:
+            scope_rows = con.execute(
+                """
+                SELECT gl.label, gls.system_id, gls.dataset_id, gls.import_id
+                FROM group_label_scopes gls
+                JOIN group_labels gl ON gl.id = gls.group_id
+                WHERE gl.kind = ?
+                ORDER BY gl.label ASC
+                """,
+                ["som_timeline_cluster"],
+            ).fetchall()
+    finally:
+        model._close_database()
+
+    assert scope_rows == [
+        ("Cluster A", 5, 6, -1),
+        ("Cluster B", 5, 6, -1),
+    ]
+
+
+def test_insert_group_labels_and_points_with_import_id_preserves_values(tmp_path: Path) -> None:
+    database_path = tmp_path / "group-save-with-import-id.duckdb"
+    settings = SettingsModel(
+        organization="FastDataTests",
+        application="FastDataGroupSaveWithImportId",
+    )
+    settings.set_database_path(database_path)
+    model = DatabaseModel(settings)
+    try:
+        labels_df = pd.DataFrame({"label": ["Cluster A"]})
+        points_df = pd.DataFrame(
+            {
+                "start_ts": pd.to_datetime(["2026-01-01 00:00:00"]),
+                "end_ts": pd.to_datetime(["2026-01-01 00:30:00"]),
+                "label": ["Cluster A"],
+                "system_id": [8],
+                "dataset_id": [9],
+                "import_id": [10],
+            }
+        )
+
+        summary = model.insert_group_labels_and_points(
+            kind="som_timeline_cluster",
+            labels_df=labels_df,
+            points_df=points_df,
+            replace_kind=True,
+        )
+
+        assert int(summary["group_labels"]) == 1
+        assert int(summary["group_points"]) == 1
+
+        with model.db.connection() as con:
+            scope_row = con.execute(
+                """
+                SELECT gls.system_id, gls.dataset_id, gls.import_id
+                FROM group_label_scopes gls
+                JOIN group_labels gl ON gl.id = gls.group_id
+                WHERE gl.kind = ? AND gl.label = ?
+                LIMIT 1
+                """,
+                ["som_timeline_cluster", "Cluster A"],
+            ).fetchone()
+    finally:
+        model._close_database()
+
+    assert scope_row == (8, 9, 10)
+
+
+def test_insert_group_labels_and_points_refreshes_groups_cache_after_replace(tmp_path: Path) -> None:
+    database_path = tmp_path / "group-save-refresh-cache.duckdb"
+    settings = SettingsModel(
+        organization="FastDataTests",
+        application="FastDataGroupSaveRefreshCache",
+    )
+    settings.set_database_path(database_path)
+    model = DatabaseModel(settings)
+    try:
+        kind = "som_timeline_cluster"
+        old_labels_df = pd.DataFrame({"label": ["Cluster Old"]})
+        old_points_df = pd.DataFrame(
+            {
+                "start_ts": pd.to_datetime(["2026-01-01 00:00:00"]),
+                "end_ts": pd.to_datetime(["2026-01-01 00:30:00"]),
+                "label": ["Cluster Old"],
+                "system_id": [1],
+                "dataset_id": [1],
+            }
+        )
+        model.insert_group_labels_and_points(
+            kind=kind,
+            labels_df=old_labels_df,
+            points_df=old_points_df,
+            replace_kind=True,
+        )
+
+        initial_groups = model.groups_df(respect_selection=False)
+        initial_kind_labels = set(
+            initial_groups.loc[initial_groups["kind"] == kind, "label"].astype(str).tolist()
+        )
+        assert initial_kind_labels == {"Cluster Old"}
+
+        new_labels_df = pd.DataFrame({"label": ["Cluster New"]})
+        new_points_df = pd.DataFrame(
+            {
+                "start_ts": pd.to_datetime(["2026-01-01 01:00:00"]),
+                "end_ts": pd.to_datetime(["2026-01-01 01:30:00"]),
+                "label": ["Cluster New"],
+                "system_id": [1],
+                "dataset_id": [1],
+            }
+        )
+        model.insert_group_labels_and_points(
+            kind=kind,
+            labels_df=new_labels_df,
+            points_df=new_points_df,
+            replace_kind=True,
+        )
+
+        refreshed_groups = model.groups_df(respect_selection=False)
+        refreshed_kind_labels = set(
+            refreshed_groups.loc[refreshed_groups["kind"] == kind, "label"].astype(str).tolist()
+        )
+    finally:
+        model._close_database()
+
+    assert refreshed_kind_labels == {"Cluster New"}

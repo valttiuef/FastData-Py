@@ -711,11 +711,126 @@ class SomViewModel(QObject):
             points_df = timeline.rename(columns={"ts": "start_ts"}).copy()
             points_df = points_df[["start_ts", "end_ts", "label"]].drop_duplicates().reset_index(drop=True)
 
+        scope_rows = self._timeline_group_scope_rows()
+        if scope_rows is not None and not scope_rows.empty:
+            scoped = scope_rows.copy()
+            scoped["system_id"] = pd.to_numeric(scoped.get("system_id"), errors="coerce")
+            scoped["dataset_id"] = pd.to_numeric(scoped.get("dataset_id"), errors="coerce")
+            scoped["import_id"] = pd.to_numeric(scoped.get("import_id"), errors="coerce")
+            scoped = scoped.dropna(subset=["system_id", "dataset_id"])
+            scoped = scoped[scoped["dataset_id"] > 0]
+            scoped = scoped[["system_id", "dataset_id", "import_id"]].drop_duplicates().reset_index(drop=True)
+            if not scoped.empty:
+                points_df = (
+                    points_df.assign(_scope_join_key=1)
+                    .merge(scoped.assign(_scope_join_key=1), on="_scope_join_key", how="inner")
+                    .drop(columns=["_scope_join_key"])
+                    .reset_index(drop=True)
+                )
+
         return {
             "clusters_saved": int(len(normalized_names)),
             "group_labels": int(labels_df["label"].nunique()),
             "group_points": int(len(points_df)),
         }, labels_df, points_df
+
+    def _timeline_group_scope_rows(self) -> pd.DataFrame:
+        columns = ["system_id", "dataset_id", "import_id"]
+        filters = self._last_training_context.get("filters") if isinstance(self._last_training_context, dict) else {}
+        if not isinstance(filters, dict):
+            filters = {}
+
+        systems = [str(item).strip() for item in (filters.get("systems") or []) if str(item).strip()]
+        datasets = [str(item).strip() for item in (filters.get("datasets") or []) if str(item).strip()]
+        import_ids: list[int] = []
+        for item in (filters.get("import_ids") or []):
+            if item is None:
+                continue
+            try:
+                import_ids.append(int(item))
+            except Exception:
+                continue
+        feature_payloads = self._last_training_context.get("feature_payloads") if isinstance(self._last_training_context, dict) else []
+        feature_ids: list[int] = []
+        for payload in feature_payloads or []:
+            fid = self._safe_feature_id(payload)
+            if fid is not None:
+                feature_ids.append(int(fid))
+
+        try:
+            db = self._ensure_data_model().db
+            with db.connection() as con:
+                if import_ids:
+                    ph = ",".join(["?"] * len(import_ids))
+                    frame = con.execute(
+                        f"""
+                        SELECT DISTINCT
+                            ds.system_id AS system_id,
+                            i.dataset_id AS dataset_id,
+                            i.id AS import_id
+                        FROM imports i
+                        JOIN datasets ds ON ds.id = i.dataset_id
+                        WHERE i.id IN ({ph})
+                        ORDER BY ds.system_id, i.dataset_id, i.id
+                        """,
+                        import_ids,
+                    ).df()
+                elif systems or datasets:
+                    where: list[str] = []
+                    params: list[object] = []
+                    if systems:
+                        ph = ",".join(["?"] * len(systems))
+                        where.append(f"sy.name IN ({ph})")
+                        params.extend(systems)
+                    if datasets:
+                        ph = ",".join(["?"] * len(datasets))
+                        where.append(f"ds.name IN ({ph})")
+                        params.extend(datasets)
+                    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+                    frame = con.execute(
+                        f"""
+                        SELECT DISTINCT
+                            ds.system_id AS system_id,
+                            ds.id AS dataset_id,
+                            CAST(-1 AS INTEGER) AS import_id
+                        FROM datasets ds
+                        JOIN systems sy ON sy.id = ds.system_id
+                        {where_sql}
+                        ORDER BY ds.system_id, ds.id
+                        """,
+                        params,
+                    ).df()
+                elif feature_ids:
+                    ph = ",".join(["?"] * len(feature_ids))
+                    frame = con.execute(
+                        f"""
+                        SELECT DISTINCT
+                            fdm.system_id AS system_id,
+                            fdm.dataset_id AS dataset_id,
+                            CAST(-1 AS INTEGER) AS import_id
+                        FROM feature_dataset_map fdm
+                        WHERE fdm.feature_id IN ({ph})
+                        ORDER BY fdm.system_id, fdm.dataset_id
+                        """,
+                        feature_ids,
+                    ).df()
+                else:
+                    frame = pd.DataFrame(columns=columns)
+        except Exception:
+            frame = pd.DataFrame(columns=columns)
+
+        if frame is None or frame.empty:
+            return pd.DataFrame(columns=columns)
+        normalized = frame.copy()
+        for column in columns:
+            normalized[column] = pd.to_numeric(normalized.get(column), errors="coerce")
+        normalized = (
+            normalized.dropna(subset=["system_id", "dataset_id"])
+            .astype({"system_id": int, "dataset_id": int, "import_id": int})
+            .drop_duplicates()
+            .reset_index(drop=True)
+        )
+        return normalized.loc[:, columns]
 
     @staticmethod
     def _timeline_point_end_times(ts: pd.Series) -> pd.Series:
@@ -941,6 +1056,7 @@ class SomViewModel(QObject):
         end: Optional[pd.Timestamp] = None,
         systems: Optional[Sequence[str]] = None,
         datasets: Optional[Sequence[str]] = None,
+        import_ids: Optional[Sequence[int]] = None,
         group_ids: Optional[Sequence[int]] = None,
         months: Optional[Sequence[int]] = None,
         preprocessing: Optional[dict] = None,
@@ -982,6 +1098,7 @@ class SomViewModel(QObject):
             end=end,
             systems=systems,
             datasets=datasets,
+            import_ids=import_ids,
             group_ids=group_ids,
             preprocessing=params,
         )
@@ -1087,6 +1204,7 @@ class SomViewModel(QObject):
                     "group_ids": list(group_ids) if group_ids else None,
                     "systems": list(systems) if systems else None,
                     "datasets": list(datasets) if datasets else None,
+                    "import_ids": list(import_ids) if import_ids else None,
                 }
             ),
             "preprocessing": normalize_for_json(params),
@@ -1179,6 +1297,7 @@ class SomViewModel(QObject):
         end: Optional[pd.Timestamp] = None,
         systems: Optional[Sequence[str]] = None,
         datasets: Optional[Sequence[str]] = None,
+        import_ids: Optional[Sequence[int]] = None,
         group_ids: Optional[Sequence[int]] = None,
         months: Optional[Sequence[int]] = None,
         preprocessing: Optional[dict] = None,
@@ -1210,6 +1329,7 @@ class SomViewModel(QObject):
                         end=end,
                         systems=systems,
                         datasets=datasets,
+                        import_ids=import_ids,
                         group_ids=group_ids,
                         months=months,
                         preprocessing=preprocessing,
