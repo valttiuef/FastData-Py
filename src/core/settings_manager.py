@@ -16,12 +16,15 @@ from core.paths import (
     get_default_database_path,
     get_default_selection_db_path,
     get_default_log_database_path,
+    get_default_exports_directory,
 )
 
 class SettingsManager:
     def __init__(self, organization="MyCompany", application="MyApp"):
         self.settings = QSettings(organization, application)
         self._secret_service = f"{organization}/{application}"
+        # Ensure the default export target exists from first launch.
+        get_default_exports_directory()
 
     def get_db_path(self) -> Path:
         path_str = self.settings.value("db_path", "")
@@ -150,10 +153,17 @@ class SettingsManager:
 
     # @ai(gpt-5, codex-cli, feature, 2026-03-11)
     def get_file_dialog_directory(self, scope: str, fallback: Path | None = None) -> Path:
-        key = f"file_dialog_dir/{str(scope or 'default').strip().lower() or 'default'}"
+        normalized_scope = str(scope or "default").strip().lower() or "default"
+        key = f"file_dialog_dir/{normalized_scope}"
         value = self.settings.value(key, "")
         if value:
             return Path(str(value))
+        if normalized_scope == "database":
+            # Keep all database dialogs aligned to the measurement DB folder
+            # until the user explicitly picks a directory.
+            return self.default_db_path().parent
+        if normalized_scope == "export":
+            return get_default_exports_directory()
         return Path(fallback) if fallback is not None else Path.cwd()
 
     # @ai(gpt-5, codex-cli, feature, 2026-03-11)

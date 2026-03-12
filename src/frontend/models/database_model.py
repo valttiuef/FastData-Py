@@ -475,6 +475,7 @@ class DatabaseModel(QObject):
         """Reset to the default database path (recreate if necessary)."""
         old_path = self._path
         default_path = self._settings.default_database_path()
+        default_path.parent.mkdir(parents=True, exist_ok=True)
         # Always release current DB before recreating the default file.
         self._close_database()
         if default_path.exists():
@@ -544,6 +545,7 @@ class DatabaseModel(QObject):
         """Reset the selection settings DB to the default Dataset."""
         old_path = self._selection_db_path
         default_path = self._settings.default_selection_db_path()
+        default_path.parent.mkdir(parents=True, exist_ok=True)
         if default_path.exists():
             if default_path == self._selection_db_path:
                 self._close_selection_database()

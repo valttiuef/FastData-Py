@@ -33,7 +33,7 @@ def _get_base_path() -> Path:
 
 def _get_user_data_path() -> Path:
     """
-    Get the user data directory for application settings and user databases.
+    Get the platform-specific user data directory for non-database app data.
     
     On Windows: %LOCALAPPDATA%/FastData
     On macOS: ~/Library/Application Support/FastData
@@ -50,6 +50,18 @@ def _get_user_data_path() -> Path:
         base = Path.home() / ".local" / "share"
     
     return base / "FastData"
+
+
+def _get_documents_database_root_path() -> Path:
+    """
+    Get the default root directory for user database files.
+
+    Returns:
+        Path to the database root under the user's Documents folder.
+    """
+    root = Path.home() / "Documents" / "FastData"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
 
 
 # ============================================================================
@@ -163,7 +175,8 @@ def get_default_database_path() -> Path:
     Returns:
         Absolute path to the default database file as a Path object.
     """
-    db_folder = _get_user_data_path() / "databases"
+    # @ai(gpt-5, codex-cli, refactor, 2026-03-12)
+    db_folder = _get_documents_database_root_path() / "Measurements"
     db_folder.mkdir(parents=True, exist_ok=True)
     return db_folder / "FastData.duckdb"
 
@@ -177,7 +190,8 @@ def get_default_selection_db_path() -> Path:
     Returns:
         Absolute path to the default selection database file as a Path object.
     """
-    db_folder = _get_user_data_path() / "selection_settings"
+    # @ai(gpt-5, codex-cli, refactor, 2026-03-12)
+    db_folder = _get_documents_database_root_path() / "Settings"
     db_folder.mkdir(parents=True, exist_ok=True)
     return db_folder / "selections.db"
 
@@ -191,14 +205,29 @@ def get_default_log_database_path() -> Path:
     Returns:
         Absolute path to the default log database file as a Path object.
     """
-    db_folder = _get_user_data_path() / "logs"
+    # @ai(gpt-5, codex-cli, refactor, 2026-03-12)
+    db_folder = _get_documents_database_root_path() / "Logs"
     db_folder.mkdir(parents=True, exist_ok=True)
-    return db_folder / "application.db"
+    return db_folder / "history.db"
 
 
 # ============================================================================
 # DIRECTORY FUNCTIONS
 # ============================================================================
+
+# @ai(gpt-5, codex-cli, feature, 2026-03-12)
+def get_default_exports_directory() -> Path:
+    """
+    Get the default directory for exported files.
+
+    Creates the directory if it doesn't exist.
+
+    Returns:
+        Absolute path to the default export directory as a Path object.
+    """
+    export_folder = _get_documents_database_root_path() / "Exports"
+    export_folder.mkdir(parents=True, exist_ok=True)
+    return export_folder
 
 
 def get_base_directory() -> Path:

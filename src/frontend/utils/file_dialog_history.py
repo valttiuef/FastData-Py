@@ -6,6 +6,8 @@ from typing import Any
 from PySide6.QtCore import QCoreApplication, QSettings
 from PySide6.QtWidgets import QWidget
 
+from core.paths import get_default_database_path, get_default_exports_directory
+
 
 def _settings_key(scope: str) -> str:
     normalized = str(scope or "default").strip().lower() or "default"
@@ -38,6 +40,7 @@ def _resolve_settings_model(parent: QWidget | None) -> Any | None:
 
 # @ai(gpt-5, codex-cli, feature, 2026-03-11)
 def get_dialog_directory(parent: QWidget | None, scope: str, fallback: Path | str | None = None) -> Path:
+    normalized_scope = str(scope or "default").strip().lower() or "default"
     fallback_path = Path(fallback) if fallback is not None else Path.cwd()
     model = _resolve_settings_model(parent)
     if model is not None and hasattr(model, "get_file_dialog_directory"):
@@ -50,6 +53,10 @@ def get_dialog_directory(parent: QWidget | None, scope: str, fallback: Path | st
     value = settings.value(_settings_key(scope), "")
     if value:
         return Path(str(value))
+    if normalized_scope == "database":
+        return get_default_database_path().parent
+    if normalized_scope == "export":
+        return get_default_exports_directory()
     return fallback_path
 
 

@@ -33,7 +33,7 @@ def _default_selection_payload() -> SelectionSettingsPayload:
     # @ai(gpt-5, codex-cli, fix, 2026-03-10)
     """Default payload for the built-in startup selection state."""
     return SelectionSettingsPayload(
-        include_selections=False,
+        include_selections=True,
         include_filters=False,
         include_preprocessing=False,
     )
@@ -220,11 +220,7 @@ class SelectionsTab(TabWidget):
             created_at="",
             auto_load=False,
             is_active=False,
-            payload=SelectionSettingsPayload(
-                include_selections=False,
-                include_filters=False,
-                include_preprocessing=False,
-            ),
+            payload=_default_selection_payload(),
         )
 
     def _on_settings_loaded(self, records: List[dict]) -> None:
@@ -288,7 +284,10 @@ class SelectionsTab(TabWidget):
         self._on_scope_filters_changed()
         target_id = record.get("id") if record else None
         self._select_setting_in_list(target_id)
-        self._apply_active_selection_payload(payload)
+        # Keep the built-in default setting non-restrictive in the active model.
+        # Its options are used as save defaults, not as an empty "select nothing" filter.
+        payload_to_apply = payload if (record and record.get("id")) else None
+        self._apply_active_selection_payload(payload_to_apply)
         self._refresh_group_filters_for_enabled_group_features()
         if self._pending_toast_action == "activate_setting":
             self._pending_toast_action = None
@@ -297,8 +296,11 @@ class SelectionsTab(TabWidget):
             except Exception:
                 logger.warning("Exception in _on_active_setting_changed", exc_info=True)
 
-    def _apply_active_selection_payload(self, payload: SelectionSettingsPayload) -> None:
+    def _apply_active_selection_payload(self, payload: Optional[SelectionSettingsPayload]) -> None:
         try:
+            if payload is None:
+                self._database_model.apply_selection_payload(None)
+                return
             self._database_model.apply_selection_payload(SelectionSettingsPayload.from_dict(payload.to_dict()))
         except Exception:
             logger.warning("Exception in _apply_active_selection_payload", exc_info=True)

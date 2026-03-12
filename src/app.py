@@ -3,6 +3,7 @@ import os
 import ctypes
 import logging
 import faulthandler
+import atexit
 
 from qt_compat import ensure_qt
 ensure_qt()
@@ -31,6 +32,61 @@ from backend.services.logging.storage import crash_log_path
 
 logger = logging.getLogger(__name__)
 _FAULT_LOG_HANDLE = None
+_FAULT_HANDLER_ENABLED_BY_APP = False
+_FAULT_CLEANUP_REGISTERED = False
+
+
+def _is_debugger_active() -> bool:
+    if sys.gettrace() is not None:
+        return True
+    return any(name in sys.modules for name in ("debugpy", "pydevd"))
+
+
+def _close_fault_logging() -> None:
+    global _FAULT_LOG_HANDLE
+    global _FAULT_HANDLER_ENABLED_BY_APP
+    handle = _FAULT_LOG_HANDLE
+    if handle is None:
+        return
+    try:
+        if _FAULT_HANDLER_ENABLED_BY_APP and faulthandler.is_enabled():
+            faulthandler.disable()
+    except Exception:
+        logger.debug("Failed to disable faulthandler during shutdown", exc_info=True)
+    try:
+        handle.flush()
+        handle.close()
+    except Exception:
+        logger.debug("Failed to close crash log file handle", exc_info=True)
+    finally:
+        _FAULT_LOG_HANDLE = None
+        _FAULT_HANDLER_ENABLED_BY_APP = False
+
+
+def _enable_fault_logging() -> None:
+    global _FAULT_LOG_HANDLE
+    global _FAULT_HANDLER_ENABLED_BY_APP
+    if _is_debugger_active():
+        logger.info("Debugger detected; skipping faulthandler crash capture.")
+        return
+    handle = None
+    try:
+        handle = crash_log_path().open("a", encoding="utf-8")
+        try:
+            handle.write("=== faulthandler session start ===\n")
+            handle.flush()
+        except Exception:
+            pass
+        faulthandler.enable(file=handle, all_threads=True)
+        _FAULT_LOG_HANDLE = handle
+        _FAULT_HANDLER_ENABLED_BY_APP = True
+    except Exception:
+        if handle is not None:
+            try:
+                handle.close()
+            except Exception:
+                pass
+        logger.exception("Failed to enable faulthandler crash logging")
 
 
 def _install_qt_message_bridge() -> None:
@@ -95,21 +151,15 @@ def _fatal_startup_error(app, splash, message: str, exc: Exception | None = None
         logger.warning("Failed to restore cursor after startup error", exc_info=True)
 
 
-# @ai(gpt-5, codex, bugfix, 2026-02-27)
+# @ai(gpt-5, codex, bugfix, 2026-03-12)
 def main():
     configure_logging(name="app.startup")
     install_global_exception_hooks()
-    try:
-        global _FAULT_LOG_HANDLE
-        _FAULT_LOG_HANDLE = crash_log_path().open("a", encoding="utf-8")
-        try:
-            _FAULT_LOG_HANDLE.write("=== faulthandler session start ===\n")
-            _FAULT_LOG_HANDLE.flush()
-        except Exception:
-            pass
-        faulthandler.enable(file=_FAULT_LOG_HANDLE, all_threads=True)
-    except Exception:
-        logger.exception("Failed to enable faulthandler crash logging")
+    global _FAULT_CLEANUP_REGISTERED
+    if not _FAULT_CLEANUP_REGISTERED:
+        atexit.register(_close_fault_logging)
+        _FAULT_CLEANUP_REGISTERED = True
+    _enable_fault_logging()
     _install_qt_message_bridge()
 
     # Windows taskbar icon
@@ -118,6 +168,10 @@ def main():
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)
 
     app = QApplication(sys.argv)
+    try:
+        app.aboutToQuit.connect(_close_fault_logging)
+    except Exception:
+        logger.debug("Failed to bind crash-log cleanup to aboutToQuit", exc_info=True)
     app.setStyle("Fusion")  # OK to keep
 
     settings_manager = SettingsManager("Visima", "FastData")

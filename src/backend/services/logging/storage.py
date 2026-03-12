@@ -74,8 +74,10 @@ def load_log_database(path: Path) -> LoggingDatabase:
 
 
 def create_log_database(path: Optional[Path] = None) -> LoggingDatabase:
+    # @ai(gpt-5, codex-cli, fix, 2026-03-12)
     """Create a new empty database at ``path`` (or default Dataset)."""
     target = Path(path) if path else default_log_db_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
     with _db_lock:
         global _shared_db
         if _shared_db is not None and _shared_db.path == target:

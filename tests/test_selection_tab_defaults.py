@@ -11,9 +11,9 @@ if str(src_dir) not in sys.path:
 from frontend.tabs.selections.selection_tab import _default_selection_payload
 
 
-def test_default_selection_payload_disables_filters_and_preprocessing() -> None:
+def test_default_selection_payload_enables_selections_only() -> None:
     payload = _default_selection_payload()
 
-    assert payload.selections_enabled() is False
+    assert payload.selections_enabled() is True
     assert payload.filters_enabled() is False
     assert payload.preprocessing_enabled() is False

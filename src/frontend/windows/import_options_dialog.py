@@ -734,7 +734,7 @@ class ImportOptionsDialog(QDialog):
         btns.rejected.connect(self.reject)
         root.addWidget(btns)
 
-        self.resize(920, self.sizeHint().height())
+        self.resize(900, self.sizeHint().height())
 
         # Initial preview
         self._set_preview_loading()

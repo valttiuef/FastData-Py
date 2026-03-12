@@ -57,17 +57,20 @@ RESOURCE PATHS:
 DATABASE PATHS:
 -   get_default_database_path() → Path
         Path to the default measurement database
-        Location: %LOCALAPPDATA%/FastData/databases/FastData.duckdb (Windows)
-                  ~/.local/share/FastData/databases/FastData.duckdb (Linux)
-                  ~/Library/Application Support/FastData/databases/FastData.duckdb (macOS)
+        Location: ~/Documents/FastData/Measurements/FastData.duckdb
 
 -   get_default_selection_db_path() → Path
         Path to the default selection settings database
-        Location: %LOCALAPPDATA%/FastData/selection_settings/selections.db
+        Location: ~/Documents/FastData/Settings/selections.db
 
 -   get_default_log_database_path() → Path
         Path to the default log database
-        Location: %LOCALAPPDATA%/FastData/logs/application.db
+        Location: ~/Documents/FastData/Logs/history.db
+
+EXPORT PATHS:
+-   get_default_exports_directory() → Path
+        Path to the default export directory
+        Location: ~/Documents/FastData/Exports
 
 
 DIRECTORY FUNCTIONS:
@@ -105,13 +108,15 @@ HOW IT WORKS:
 1. DEVELOPMENT MODE:
    - _get_base_path() returns the repository root (2 levels up from src/core/paths.py)
    - All resource paths are resolved relative to the repo root
-   - All user data is stored in platform-specific user directories
+   - Default databases are stored under ~/Documents/FastData/*
+   - Other user data can still use platform-specific user directories
 
 2. PYINSTALLER BUNDLE MODE:
    - _get_base_path() detects sys._MEIPASS (set by PyInstaller)
    - Returns the temporary extraction directory
    - All resource paths are resolved relative to this directory
-   - All user data is still stored in platform-specific user directories
+   - Default databases are still stored under ~/Documents/FastData/*
+   - Other user data can still use platform-specific user directories
 
 This ensures that the application always finds its resources correctly, whether
 running from source or from a distributed executable.
