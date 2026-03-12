@@ -848,12 +848,11 @@ class ChartsTab(TabWidget):
             grouped.pivot(index="period", columns="feature", values="value")
             .reindex(full)
             .reindex(columns=features)
-            .fillna(0.0)
         )
 
         labels = [self._format_period_label(level, per) for per in pivot.index]
         export_df = pivot.reset_index(drop=True)
-        export_df.insert(0, "label", labels)
+        export_df.insert(0, tr("Period"), labels)
         return export_df, level
 
     @staticmethod
@@ -873,21 +872,124 @@ class ChartsTab(TabWidget):
             return start.strftime("%Y-%m-%d")
         return start.strftime("%Y-%m-%d %H:00")
 
+    @staticmethod
+    def _correlation_export_frame(payload: dict[str, object] | None) -> pd.DataFrame:
+        if not isinstance(payload, dict):
+            return pd.DataFrame()
+
+        rows: list[dict[str, object]] = []
+        entries = payload.get("entries")
+        if isinstance(entries, list):
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                feature = entry.get("feature")
+                try:
+                    label = feature.display_name() if feature is not None else ""
+                except Exception:
+                    label = ""
+                label = str(label or "").strip()
+                if not label:
+                    continue
+                corr_value = pd.to_numeric(entry.get("correlation"), errors="coerce")
+                if pd.isna(corr_value):
+                    continue
+                rows.append({"Feature": label, "Correlation": float(corr_value)})
+
+        if not rows:
+            labels = payload.get("labels")
+            values = payload.get("values")
+            if isinstance(labels, list) and isinstance(values, list):
+                for label, value in zip(labels, values):
+                    text = str(label or "").strip()
+                    corr_value = pd.to_numeric(value, errors="coerce")
+                    if not text or pd.isna(corr_value):
+                        continue
+                    rows.append({"Feature": text, "Correlation": float(corr_value)})
+
+        if not rows:
+            return pd.DataFrame()
+        return pd.DataFrame(rows, columns=["Feature", "Correlation"])
+
+    @staticmethod
+    def _prepare_time_series_export_frame(frame: pd.DataFrame | None, *, feature_count: int) -> pd.DataFrame:
+        if frame is None or frame.empty:
+            return pd.DataFrame()
+        feature_cols = ChartsTab._feature_columns(frame, feature_count)
+        if not feature_cols:
+            feature_cols = [col for col in frame.columns if col != "t"]
+        export_columns = []
+        if "t" in frame.columns:
+            export_columns.append("t")
+        export_columns.extend(feature_cols)
+        export_columns = [col for col in export_columns if col in frame.columns]
+        if not export_columns:
+            return pd.DataFrame()
+        out = frame.loc[:, export_columns].copy()
+        if "t" in out.columns:
+            out["t"] = pd.to_datetime(out["t"], errors="coerce")
+            out = out.dropna(subset=["t"]).sort_values("t", kind="stable")
+        return out.reset_index(drop=True)
+
+    @staticmethod
+    def _prepare_scatter_export_frame(
+        frame: pd.DataFrame | None,
+        *,
+        feature_count: int,
+    ) -> tuple[pd.DataFrame, list[str]]:
+        if frame is None or frame.empty:
+            return pd.DataFrame(), []
+        scatter_cols = ChartsTab._feature_columns(frame, feature_count)
+        if len(scatter_cols) not in (2, 3):
+            return pd.DataFrame(), []
+        out = frame.loc[:, scatter_cols].copy()
+        for col in scatter_cols:
+            out[col] = pd.to_numeric(out[col], errors="coerce")
+        out = out.dropna(subset=scatter_cols).reset_index(drop=True)
+        if out.empty:
+            return pd.DataFrame(), []
+        return out, list(scatter_cols)
+
     def _export_results(self) -> None:
-        fetch_requests: list[tuple[int, ChartCard, list[FeatureSelection], list[dict]]] = []
+        fetch_requests: list[tuple[int, ChartCard, str, list[FeatureSelection], list[dict]]] = []
         for idx, card in enumerate(self._chart_cards, start=1):
+            chart_type = card.chart_type()
+            if chart_type not in {"monthly", "time_series", "scatter"}:
+                continue
             selected_features = [f for f in card.selected_features() if isinstance(f, FeatureSelection)]
             if not selected_features:
                 continue
             fetch_requests.append(
-                (idx, card, selected_features, [self._feature_payload(sel) for sel in selected_features])
+                (
+                    idx,
+                    card,
+                    chart_type,
+                    selected_features,
+                    [self._feature_payload(sel) for sel in selected_features],
+                )
             )
-        if not fetch_requests:
-            toast_info(tr("No chart data available to export."), title=tr("Charts"), tab_key="charts")
-            return
 
         datasets: dict[str, pd.DataFrame] = {}
         chart_specs: dict[str, dict[str, object]] = {}
+        for idx, card in enumerate(self._chart_cards, start=1):
+            if card.chart_type() != "correlation_bar":
+                continue
+            corr_df = self._correlation_export_frame(self._correlation_bar_payload)
+            if corr_df.empty:
+                continue
+            name = tr("Chart {index} (correlation ranking)").format(index=idx)
+            datasets[name] = corr_df
+            chart_specs[name] = {
+                "type": "monthly",
+                "x_column": "Feature",
+                "y_columns": ["Correlation"],
+                "title": name,
+            }
+
+        if not fetch_requests and not datasets:
+            toast_info(tr("No chart data available to export."), title=tr("Charts"), tab_key="charts")
+            return
+
         request_index = 0
         export_button = getattr(self.sidebar, "btn_export", None)
         if export_button is not None:
@@ -902,17 +1004,22 @@ class ChartsTab(TabWidget):
             *,
             idx: int,
             card: ChartCard,
+            chart_type: str,
             selected_features: list[FeatureSelection],
             frame: pd.DataFrame | None,
         ) -> None:
             if frame is None or frame.empty:
                 return
-            chart_type = card.chart_type()
             try:
                 if chart_type == "monthly":
                     frame, _chart_level = self._aggregate_monthly_export_frame(frame)
+                elif chart_type == "time_series":
+                    frame = self._prepare_time_series_export_frame(frame, feature_count=len(selected_features))
                 elif chart_type == "scatter":
-                    pass
+                    frame, scatter_cols = self._prepare_scatter_export_frame(
+                        frame,
+                        feature_count=len(selected_features),
+                    )
                 else:
                     return
             except Exception:
@@ -923,8 +1030,6 @@ class ChartsTab(TabWidget):
             datasets[name] = frame.copy()
             columns = [str(c) for c in frame.columns]
             if chart_type == "scatter":
-                feature_count = len(selected_features)
-                scatter_cols = self._feature_columns(frame, feature_count)
                 if len(scatter_cols) == 2:
                     chart_specs[name] = {
                         "type": "scatter",
@@ -947,7 +1052,7 @@ class ChartsTab(TabWidget):
             if request_index >= len(fetch_requests):
                 _finish_collection()
                 return
-            idx, card, selected_features, feature_payloads = fetch_requests[request_index]
+            idx, card, chart_type, selected_features, feature_payloads = fetch_requests[request_index]
             request_index += 1
 
             def _on_result(frame_token: str) -> None:
@@ -955,6 +1060,7 @@ class ChartsTab(TabWidget):
                 _process_frame(
                     idx=idx,
                     card=card,
+                    chart_type=chart_type,
                     selected_features=selected_features,
                     frame=frame,
                 )

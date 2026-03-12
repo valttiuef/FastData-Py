@@ -297,6 +297,17 @@ class RegressionTab(TabWidget):
                 description=tr("One row per model run"),
             )
         ]
+        for run in all_runs:
+            run_key = str(getattr(run, "key", "")).strip()
+            if not run_key:
+                continue
+            options.append(
+                ExportOption(
+                    key=f"model::{run_key}",
+                    label=self.results_panel.run_label(run),
+                    description=tr("Prediction rows for this run"),
+                )
+            )
         default_keys = ["summary"] + [f"model::{key}" for key in default_model_keys]
         dialog = ExportSelectionDialog(
             title=tr("Export regression results"),

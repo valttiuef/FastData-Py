@@ -48,7 +48,7 @@ from .feature_map_tab import (
     FEATURE_TABLE_COLUMN_LABELS,
 )
 from .sidebar import SomSidebar
-from .timeline_tab import TimelineTabWidget
+from .timeline_tab import TIMELINE_TABLE_COLUMN_LABELS, TimelineTabWidget
 from ..tab_widget import TabWidget
 
 
@@ -787,6 +787,47 @@ class SomTab(TabWidget):
         self._sync_cluster_controls()
         self._update_timeline_cluster_map()
 
+    def _table_frame_from_widget(self, table: Any) -> pd.DataFrame:
+        if table is None:
+            return pd.DataFrame()
+        model = table.model()
+        if model is None:
+            return pd.DataFrame()
+        headers = [
+            str(model.headerData(col, Qt.Orientation.Horizontal, Qt.ItemDataRole.DisplayRole) or "")
+            for col in range(model.columnCount())
+        ]
+        rows: list[list[object]] = []
+        for row in range(model.rowCount()):
+            values: list[object] = []
+            for col in range(model.columnCount()):
+                values.append(model.data(model.index(row, col), Qt.ItemDataRole.DisplayRole))
+            rows.append(values)
+        return pd.DataFrame(rows, columns=headers)
+
+    def _feature_table_export_dataframe(self) -> pd.DataFrame:
+        table_df = self._table_frame_from_widget(getattr(self, "feature_table", None))
+        if not table_df.empty:
+            return table_df
+        fallback = self._feature_positions_dataframe()
+        if fallback.empty:
+            return pd.DataFrame()
+        normalized = self._normalize_feature_table_dataframe(fallback)
+        return normalized.rename(
+            columns={column: self._FEATURE_TABLE_COLUMN_LABELS.get(column, column) for column in normalized.columns}
+        )
+
+    def _timeline_table_export_dataframe(self) -> pd.DataFrame:
+        table_df = self._table_frame_from_widget(getattr(self, "timeline_table", None))
+        if not table_df.empty:
+            return table_df
+        base = self._timeline_display_df.copy() if self._timeline_display_df is not None else pd.DataFrame()
+        if base.empty:
+            base = self._timeline_dataframe()
+        if base is None or base.empty:
+            return pd.DataFrame()
+        return base.rename(columns={column: TIMELINE_TABLE_COLUMN_LABELS.get(column, column) for column in base.columns})
+
     # @ai(gpt-5, codex, refactor, 2026-03-11)
     def _on_export_requested(self) -> None:
         if not self._result:
@@ -794,19 +835,17 @@ class SomTab(TabWidget):
             return
 
         datasets: dict[str, pd.DataFrame] = {}
-        feature_df = self._feature_positions_dataframe()
+        feature_df = self._feature_table_export_dataframe()
         if not feature_df.empty:
-            datasets[tr("Feature clusters")] = feature_df
+            datasets[tr("Feature table")] = feature_df
 
-        timeline_df = self._timeline_dataframe()
+        timeline_df = self._timeline_table_export_dataframe()
         if not timeline_df.empty:
-            datasets[tr("Timeline")] = timeline_df
-        elif self._timeline_display_df is not None and not self._timeline_display_df.empty:
-            datasets[tr("Timeline")] = self._timeline_display_df.copy()
+            datasets[tr("Timeline table")] = timeline_df
 
         correlations = getattr(self._result, "correlations", pd.DataFrame())
         if isinstance(correlations, pd.DataFrame) and not correlations.empty:
-            corr_export = correlations.copy().reset_index().rename(columns={"index": "feature"})
+            corr_export = correlations.copy().reset_index().rename(columns={"index": "Feature"})
             datasets[tr("Feature correlations")] = corr_export
 
         distance_map = getattr(self._result, "distance_map", None)
@@ -823,8 +862,8 @@ class SomTab(TabWidget):
 
         metrics_df = pd.DataFrame(
             [
-                {"metric": "quantization_error", "value": getattr(self._result, "quantization_error", None)},
-                {"metric": "topographic_error", "value": getattr(self._result, "topographic_error", None)},
+                {"Metric": tr("Quantization error"), "Value": getattr(self._result, "quantization_error", None)},
+                {"Metric": tr("Topographic error"), "Value": getattr(self._result, "topographic_error", None)},
             ]
         )
         datasets[tr("SOM metrics")] = metrics_df

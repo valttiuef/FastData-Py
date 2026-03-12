@@ -163,24 +163,90 @@ class StatisticsPreview(Panel):
         self._current_mode = mode
         self._current_group_column = group_column
 
-    def export_frames(self) -> dict[str, pd.DataFrame]:
+    # @ai(gpt-5, codex, refactor, 2026-03-12)
+    def export_frames(
+        self,
+        *,
+        include_summary_table: bool = True,
+        include_feature_data: bool = True,
+        selected_feature_keys: Optional[set[str]] = None,
+        include_raw_statistics: bool = False,
+    ) -> dict[str, pd.DataFrame]:
         datasets: dict[str, pd.DataFrame] = {}
-        if self._preview_df is not None:
+        if include_raw_statistics and self._preview_df is not None:
             datasets[tr("Raw statistics")] = self._preview_df.copy()
 
-        model = self.preview_table.model()
-        if model is not None:
-            table_df = self._model_to_frame(model)
-            if not table_df.empty:
-                datasets[tr("Summary table")] = table_df
+        if include_summary_table:
+            summary_df = self.export_summary_table_frame()
+            if not summary_df.empty:
+                datasets[tr("Summary table")] = summary_df
 
-        selected = self._selected_row_info()
-        if selected is not None:
-            selected_df = self._filter_preview(selected)
-            if not selected_df.empty:
-                datasets[tr("Selected feature series")] = selected_df
+        if include_feature_data:
+            feature_df = self.export_feature_series_frame(selected_feature_keys=selected_feature_keys)
+            if not feature_df.empty:
+                datasets[tr("Feature data")] = feature_df
 
         return datasets
+
+    # @ai(gpt-5, codex, refactor, 2026-03-12)
+    def export_summary_table_frame(self) -> pd.DataFrame:
+        model = self.preview_table.model()
+        if model is None:
+            return pd.DataFrame()
+        return self._model_to_frame(model)
+
+    # @ai(gpt-5, codex, refactor, 2026-03-12)
+    def export_feature_options(self) -> list[tuple[str, str]]:
+        rows = self._feature_selections_from_table()
+        return [(key, label) for key, label, _selection in rows]
+
+    # @ai(gpt-5, codex, refactor, 2026-03-12)
+    def default_selected_feature_export_keys(self) -> list[str]:
+        selected_infos = self._selected_row_infos()
+        selected_keys: list[str] = []
+        seen: set[str] = set()
+        for selection in selected_infos:
+            key = self._feature_selection_key(selection)
+            if key in seen:
+                continue
+            seen.add(key)
+            selected_keys.append(key)
+        if selected_keys:
+            return selected_keys
+        return [key for key, _label, _selection in self._feature_selections_from_table()]
+
+    # @ai(gpt-5, codex, refactor, 2026-03-12)
+    def export_feature_series_frame(self, *, selected_feature_keys: Optional[set[str]] = None) -> pd.DataFrame:
+        rows = self._feature_selections_from_table()
+        if not rows:
+            return pd.DataFrame()
+
+        if selected_feature_keys is None:
+            defaults = self.default_selected_feature_export_keys()
+            selected_keys = set(defaults) if defaults else None
+        else:
+            selected_keys = set(selected_feature_keys)
+        parts: list[pd.DataFrame] = []
+        for key, _label, selection in rows:
+            if selected_keys is not None and key not in selected_keys:
+                continue
+            subset = self._filter_preview(selection)
+            if subset is None or subset.empty:
+                continue
+            parts.append(subset.copy())
+
+        if not parts:
+            return pd.DataFrame()
+        combined = pd.concat(parts, axis=0, ignore_index=True)
+        combined = combined.drop_duplicates(ignore_index=True)
+        sort_columns = [
+            column
+            for column in ("base_name", "source", "unit", "statistic", "t", "group_value", "value")
+            if column in combined.columns
+        ]
+        if sort_columns:
+            combined = combined.sort_values(sort_columns, kind="stable").reset_index(drop=True)
+        return combined
 
     def _model_to_frame(self, model) -> pd.DataFrame:
         headers = [
@@ -386,32 +452,101 @@ class StatisticsPreview(Panel):
             model.setData(index, value, Qt.ItemDataRole.EditRole)
 
     def _selected_row_info(self) -> Optional[dict]:
+        selected_rows = self._selected_row_infos()
+        if selected_rows:
+            return selected_rows[0]
+        return None
+
+    def _selected_row_infos(self) -> list[dict]:
         model = self.preview_table.model()
         if model is None:
-            return None
+            return []
         sel_model = self.preview_table.selectionModel()
         if sel_model is None:
-            return None
+            return []
         indexes = sel_model.selectedIndexes()
         if not indexes:
-            return None
-        row = int(indexes[0].row())
-        row_payload = {}
-        for col in range(model.columnCount()):
-            header = model.headerData(col, Qt.Orientation.Horizontal, Qt.ItemDataRole.DisplayRole)
-            if header is None:
+            return []
+        selected_rows = sorted({int(index.row()) for index in indexes if index.isValid()})
+        selections: list[dict] = []
+        seen: set[str] = set()
+        for row in selected_rows:
+            row_payload = self._model_row_payload(model, row)
+            parsed = self._selection_from_table_row(row_payload)
+            if parsed is None:
+                parsed = self._resolve_selection_from_display(row_payload)
+            if parsed is None:
                 continue
-            value = model.data(model.index(row, col), Qt.ItemDataRole.DisplayRole)
-            row_payload[str(header)] = value
-        parsed = self._selection_from_table_row(row_payload)
-        if parsed is not None:
-            return parsed
-        resolved = self._resolve_selection_from_display(row_payload)
-        if resolved is not None:
-            return resolved
-        if row_payload:
-            return row_payload
-        return None
+            key = self._feature_selection_key(parsed)
+            if key in seen:
+                continue
+            seen.add(key)
+            selections.append(parsed)
+        return selections
+
+    def _feature_selections_from_table(self) -> list[tuple[str, str, dict]]:
+        model = self.preview_table.model()
+        if model is None:
+            return []
+        rows: list[tuple[str, str, dict]] = []
+        seen: set[str] = set()
+        for row in range(model.rowCount()):
+            row_payload = self._model_row_payload(model, row)
+            parsed = self._selection_from_table_row(row_payload)
+            if parsed is None:
+                parsed = self._resolve_selection_from_display(row_payload)
+            if parsed is None:
+                continue
+            key = self._feature_selection_key(parsed)
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append((key, self._feature_selection_label(row_payload, parsed), parsed))
+        return rows
+
+    def _feature_selection_label(self, row_payload: dict, selection: dict) -> str:
+        name = self._normalize_display_value(row_payload.get("Name")) or self._normalize_display_value(
+            selection.get("base_name")
+        )
+        source = self._normalize_display_value(row_payload.get("Source")) or self._normalize_display_value(
+            selection.get("source")
+        )
+        unit = self._normalize_display_value(row_payload.get("Unit")) or self._normalize_display_value(
+            selection.get("unit")
+        )
+        type_text = self._normalize_display_value(row_payload.get("Type"))
+        if not type_text:
+            statistic = self._normalize_display_value(selection.get("statistic"))
+            original = self._normalize_display_value(selection.get("original_qualifier"))
+            type_text = statistic
+            if original:
+                type_text = f"{statistic} ({original})" if statistic else original
+        parts = [name]
+        if source:
+            parts.append(source)
+        if unit:
+            parts.append(unit)
+        if type_text:
+            parts.append(type_text)
+        return " | ".join(part for part in parts if part) or name or tr("Feature")
+
+    @staticmethod
+    def _feature_selection_key(selection: dict) -> str:
+        def _norm(value: object) -> str:
+            if value is None:
+                return ""
+            text = str(value).strip()
+            return text.lower()
+
+        return "||".join(
+            [
+                _norm(selection.get("base_name")),
+                _norm(selection.get("source")),
+                _norm(selection.get("unit")),
+                _norm(selection.get("statistic")),
+                _norm(selection.get("original_qualifier")),
+            ]
+        )
 
     def _selection_from_table_row(self, row_payload: dict) -> Optional[dict]:
         if not isinstance(row_payload, dict) or not row_payload:

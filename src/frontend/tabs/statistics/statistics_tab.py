@@ -162,25 +162,73 @@ class StatisticsTab(TabWidget):
             logger.warning("Exception in _on_statistics_warning", exc_info=True)
 
     def _on_export_requested(self) -> None:
-        datasets = self._preview_panel.export_frames()
-        if not datasets:
+        summary_df = self._preview_panel.export_summary_table_frame()
+        feature_options = self._preview_panel.export_feature_options()
+        if summary_df.empty and not feature_options:
             toast_info(tr("Gather statistics before exporting."), title=tr("Statistics"), tab_key="statistics")
             return
-        options = [ExportOption(key=name, label=name) for name in datasets.keys()]
+
+        option_items: list[ExportOption] = []
+        default_selected_keys: list[str] = []
+        if not summary_df.empty:
+            option_items.append(
+                ExportOption(
+                    key="summary",
+                    label=tr("Summary table"),
+                    description=tr("Table shown in preview"),
+                )
+            )
+            default_selected_keys.append("summary")
+
+        feature_keys_set = {key for key, _label in feature_options}
+        default_feature_keys = [
+            key for key in self._preview_panel.default_selected_feature_export_keys() if key in feature_keys_set
+        ]
+        if not default_feature_keys:
+            default_feature_keys = [key for key, _label in feature_options]
+
+        for key, label in feature_options:
+            option_items.append(
+                ExportOption(
+                    key=f"feature::{key}",
+                    label=label,
+                    description=tr("Include in feature data"),
+                )
+            )
+        default_selected_keys.extend([f"feature::{key}" for key in default_feature_keys])
+
         dialog = ExportSelectionDialog(
             title=tr("Export statistics"),
-            heading=tr("Choose which statistics outputs to export and in which format."),
-            options=options,
+            heading=tr("Choose summary table and feature rows to include in the exported feature data."),
+            options=option_items,
+            default_selected_keys=default_selected_keys,
             parent=self,
         )
         if dialog.exec() != ExportSelectionDialog.DialogCode.Accepted:
             return
-        selected = dialog.selected_keys()
-        if not selected:
+        selected_keys = set(dialog.selected_keys())
+        if not selected_keys:
             toast_info(tr("Select at least one export item."), title=tr("Export"), tab_key="statistics")
             return
 
-        chosen = {name: datasets[name] for name in selected if name in datasets}
+        chosen = {}
+        if "summary" in selected_keys and not summary_df.empty:
+            chosen[tr("Summary table")] = summary_df
+
+        selected_feature_keys = {
+            key.split("feature::", 1)[1]
+            for key in selected_keys
+            if key.startswith("feature::")
+        }
+        if selected_feature_keys:
+            feature_df = self._preview_panel.export_feature_series_frame(selected_feature_keys=selected_feature_keys)
+            if not feature_df.empty:
+                chosen[tr("Feature data")] = feature_df
+
+        if not chosen:
+            toast_info(tr("No data available for selected export options."), title=tr("Export"), tab_key="statistics")
+            return
+
         plan = prepare_dataframes_export_plan(
             parent=self,
             title=tr("Export statistics"),
