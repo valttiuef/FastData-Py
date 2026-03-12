@@ -17,6 +17,7 @@ from backend.models import ImportOptions
 from frontend.models.database_model import DatabaseModel
 from frontend.models.settings_model import SettingsModel
 from frontend.models.hybrid_pandas_model import HybridPandasModel, DataFilters, FeatureSelection
+from frontend.models.selection_settings import FILTER_SCOPE_SYSTEM, FeatureValueFilter
 from frontend.tabs.data.import_preview_logic import build_import_preview_payload
 
 
@@ -465,6 +466,71 @@ def test_hybrid_model_load_base_respects_dataset_filters(temp_db: Database, tmp_
 
         assert values_a == [1.0, 2.0]
         assert values_b == [5.0, 6.0]
+    finally:
+        model._close_database()
+
+
+# @ai(gpt-5, codex, test, 2026-03-12)
+def test_hybrid_model_value_filter_applies_before_zoom_aggregation(temp_db: Database, tmp_path: Path):
+    csv_path = tmp_path / "hybrid_value_filter_zoom.csv"
+    start = pd.Timestamp("2026-02-01 00:00:00")
+    lines = ["Time,Gate"]
+    for idx in range(60):
+        ts = (start + pd.Timedelta(minutes=idx)).strftime("%Y-%m-%d %H:%M:%S")
+        value = 1 if idx == 15 else 0
+        lines.append(f"{ts},{value}")
+    csv_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    opts = ImportOptions(
+        system_name="SysHybridValueFilter",
+        dataset_name="DataHybridValueFilter",
+        csv_header_rows=1,
+        auto_detect_datetime=False,
+        date_column="Time",
+        use_duckdb_csv_import=True,
+    )
+    temp_db.import_file(csv_path, opts)
+
+    settings = SettingsModel(organization="FastDataTests", application="FastDataHybridValueFilter")
+    settings.set_database_path(temp_db.path)
+    model = HybridPandasModel(settings)
+
+    try:
+        features = temp_db.list_features(
+            systems=["SysHybridValueFilter"],
+            datasets=["DataHybridValueFilter"],
+        )
+        assert not features.empty
+        feature_id = int(features.iloc[0]["feature_id"])
+        selection = FeatureSelection(feature_id=feature_id, base_name="Gate")
+
+        model._small_threshold = 0
+        model._value_filters = [
+            FeatureValueFilter(
+                feature_id=feature_id,
+                max_value=0.5,
+                scope=FILTER_SCOPE_SYSTEM,
+            )
+        ]
+
+        filters = DataFilters(
+            features=[selection],
+            start=start,
+            end=start + pd.Timedelta(minutes=60),
+            systems=["SysHybridValueFilter"],
+            datasets=["DataHybridValueFilter"],
+        )
+        model.load_base(filters, timestep="600", fill="none", agg="avg")
+        frame = model.base_dataframe()
+
+        assert not frame.empty
+        assert int(model._base_cadence_secs or 0) == 600
+        assert len(frame) == 6
+        value_columns = [c for c in frame.columns if c != "t"]
+        assert value_columns
+        values = pd.to_numeric(frame[value_columns[0]], errors="coerce").dropna()
+        assert not values.empty
+        assert not (values > 1e-12).any()
     finally:
         model._close_database()
 
@@ -990,6 +1056,57 @@ def test_query_raw_csv_value_filters_can_use_other_csv_columns(temp_db: Database
     )
     assert len(filtered) == 1
     assert pd.to_numeric(filtered["v"], errors="coerce").dropna().tolist() == [20.0]
+
+
+def test_query_zoom_csv_value_filters_honor_scope_field(temp_db: Database, tmp_path: Path):
+    csv_path = tmp_path / "csv_zoom_scope_value_filter.csv"
+    start = pd.Timestamp("2026-02-01 00:00:00")
+    lines = ["Time,Gate"]
+    for idx in range(60):
+        ts = (start + pd.Timedelta(minutes=idx)).strftime("%Y-%m-%d %H:%M:%S")
+        value = 1 if idx == 15 else 0
+        lines.append(f"{ts},{value}")
+    csv_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    opts = ImportOptions(
+        system_name="SysCsvZoomScope",
+        dataset_name="DataCsvZoomScope",
+        csv_header_rows=1,
+        auto_detect_datetime=False,
+        date_column="Time",
+        csv_delimiter=",",
+        use_duckdb_csv_import=True,
+    )
+    temp_db.import_file(csv_path, opts)
+
+    features = temp_db.list_features(systems=["SysCsvZoomScope"], datasets=["DataCsvZoomScope"])
+    assert not features.empty
+    gate_feature = features[features["name"].astype(str) == "Gate"]
+    assert not gate_feature.empty
+    gate_feature_id = int(gate_feature.iloc[0]["feature_id"])
+
+    zoomed = temp_db.query_zoom(
+        systems=["SysCsvZoomScope"],
+        datasets=["DataCsvZoomScope"],
+        feature_ids=[gate_feature_id],
+        start=start,
+        end=start + pd.Timedelta(minutes=60),
+        target_points=6,
+        step_seconds=600,
+        agg="avg",
+        value_filters=[
+            {
+                "feature_id": gate_feature_id,
+                "max_value": 0.5,
+                "scope": "system",
+                "apply_globally": False,
+            }
+        ],
+    )
+    assert not zoomed.empty
+    values = pd.to_numeric(zoomed["v"], errors="coerce").dropna()
+    assert not values.empty
+    assert not (values > 1e-12).any()
 
 
 def test_import_preview_guesses_force_meta_columns_only_when_guess_enabled(tmp_path: Path):

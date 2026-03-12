@@ -882,6 +882,7 @@ class HybridPandasModel(DatabaseModel):
                 return "none"
         return "explicit"
 
+    # @ai(gpt-5, codex, fix, 2026-03-12)
     def _fetch_window(self, *, start, end, use_raw: bool, agg: str, filters: "DataFilters", step_seconds: int | None = None) -> pd.DataFrame:
         """
         Run the appropriate query (raw/zoom) and normalize.
@@ -918,6 +919,8 @@ class HybridPandasModel(DatabaseModel):
             zoom_kwargs["agg"] = agg
             if step_seconds is not None:
                 zoom_kwargs["step_seconds"] = int(step_seconds)
+            if self._value_filters:
+                zoom_kwargs["value_filters"] = [dict(flt.to_dict()) for flt in self._value_filters]
             df = self.db.query_zoom(**zoom_kwargs)
 
         filtered_df = self._apply_value_filters_to_long(df)

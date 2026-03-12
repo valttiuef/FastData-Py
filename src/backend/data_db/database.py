@@ -2252,6 +2252,7 @@ class Database:
                 feature_id = int(item.get("feature_id"))
             except Exception:
                 continue
+            scope = str(item.get("scope") or "").strip().lower()
             min_value = item.get("min_value")
             max_value = item.get("max_value")
             try:
@@ -2264,7 +2265,11 @@ class Database:
                 max_value = None
             if min_value is None and max_value is None:
                 continue
-            if not bool(item.get("apply_globally", False)):
+            # For zoom/path SQL prefiltering, apply all non-local scopes.
+            # Local scope must remain post-query because it should not drop peer rows.
+            if scope == "local":
+                continue
+            if not scope and not bool(item.get("apply_globally", False)):
                 continue
             per_feature_filters[feature_id] = {
                 "min_value": min_value,
