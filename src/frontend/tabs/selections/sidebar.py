@@ -227,27 +227,8 @@ class Sidebar(SidebarWidget):
     def filter_state(self) -> dict:
         return self.data_selector.get_settings().get("filters", {})
 
-    def apply_filter_state(self, state: dict | None) -> None:
-        self.data_selector.apply_settings({"preprocessing": self.preprocessing_parameters(), "filters": state or {}})
-
     def get_selection_settings(self) -> dict:
         return self.data_selector.get_settings()
 
     def apply_selection_settings(self, settings: dict | None) -> None:
         self.data_selector.apply_settings(settings or {})
-
-    def set_systems(self, items: list[tuple[str, object]], *, check_all: bool = True) -> None:
-        if self.filters_widget is not None:
-            self.filters_widget.set_systems(items, check_all=check_all)
-
-    def set_datasets(self, items: list[tuple[str, object]], *, check_all: bool = True) -> None:
-        if self.filters_widget is not None:
-            self.filters_widget.set_datasets(items, check_all=check_all)
-
-    def set_groups(self, df) -> None:
-        if self.filters_widget is not None:
-            self.filters_widget.set_groups(df)
-
-    def set_tags(self, items: list[tuple[str, object]], *, check_all: bool = True) -> None:
-        if self.filters_widget is not None:
-            self.filters_widget.set_tags(items, check_all=check_all)

@@ -57,9 +57,13 @@ _MODULE_MAP: Dict[str, str] = {
 
 
 def __getattr__(name: str) -> Any:
+    if name.startswith("__") and name.endswith("__"):
+        raise AttributeError(name)
+
     module_name = _MODULE_MAP.get(name)
     if module_name is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
     module = import_module(f"{__name__}{module_name}")
     value = getattr(module, name)
     globals()[name] = value

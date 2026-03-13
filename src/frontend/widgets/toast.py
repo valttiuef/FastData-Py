@@ -225,11 +225,9 @@ class ToastManager:
         # layout constants
         self.margin_right = 26
         self.margin_bottom = 22
-        self.margin_left = 16
-        self.margin_top = 16
 
         # Visible gap between cards. Set to 0 so cards sit directly on top of each other.
-        self.gap = 0
+        self.gap = 6
 
         self.default_msec_by_kind = {
             "info": 3600,
@@ -458,7 +456,6 @@ class ToastManager:
 
                 w, h = toast.width(), toast.height()
                 top_margin = toast.visual_top_margin()
-                bottom_margin = toast.visual_bottom_margin()
                 visual_height = toast.visual_height()
 
                 top_y = y - visual_height - top_margin

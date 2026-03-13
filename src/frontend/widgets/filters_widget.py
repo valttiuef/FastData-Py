@@ -161,19 +161,6 @@ class FiltersWidgetViewModel(QObject):
     def _on_groups_changed(self) -> None:
         self._emit_groups()
 
-    def _emit_systems(self) -> None:
-        systems: Iterable[str] = []
-        if self._model is not None:
-            try:
-                systems = self._model.list_systems()
-            except Exception:
-                systems = []
-        items = [(str(name), str(name)) for name in systems]
-        self.systems_updated.emit(items)
-
-    def _emit_datasets(self) -> None:
-        self.datasets_updated.emit(self.datasets_for_systems(None))
-
     def _emit_groups(
         self,
         *,
@@ -192,26 +179,6 @@ class FiltersWidgetViewModel(QObject):
             except Exception:
                 df = pd.DataFrame(columns=["group_id", "kind", "label"])
         self.groups_updated.emit(df)
-
-    def _emit_tags(
-        self,
-        *,
-        systems: Optional[list[str]] = None,
-        datasets: Optional[list[str]] = None,
-        import_ids: Optional[list[int]] = None,
-    ) -> None:
-        tags: Iterable[str] = []
-        if self._model is not None:
-            try:
-                tags = self._model.list_feature_tags(
-                    systems=systems,
-                    datasets=datasets,
-                    import_ids=import_ids,
-                )
-            except Exception:
-                tags = []
-        items = [(str(tag), str(tag)) for tag in tags]
-        self.tags_updated.emit(items)
 
     # @ai(gpt-5, codex, feature, 2026-03-11)
     def refresh_groups_and_tags_sync(
@@ -282,9 +249,6 @@ class FiltersWidgetViewModel(QObject):
     def _on_group_remove_failed(self, message: str) -> None:
         self._remove_running = False
         self.group_remove_failed.emit(message)
-
-    def refresh_imports(self, systems: Optional[list[str]], datasets: Optional[list[str]]) -> None:
-        self.refresh_imports_sync(systems, datasets)
 
     def datasets_for_systems(
         self,
@@ -375,7 +339,7 @@ class FiltersWidgetViewModel(QObject):
         except Exception:
             return []
 
-    def refresh_datasets_sync(
+    def refresh_datasets(
         self,
         systems: Optional[list[str]],
         *,
@@ -387,7 +351,7 @@ class FiltersWidgetViewModel(QObject):
             return
         self.datasets_updated.emit(list(items))
 
-    def refresh_imports_sync(
+    def refresh_imports(
         self,
         systems: Optional[list[str]],
         datasets: Optional[list[str]],
@@ -1151,7 +1115,7 @@ class FiltersWidget(CollapsibleSection):
                 empty_placeholder="No datasets available",
                 default_placeholder="All datasets",
             )
-            self._filters_view_model.refresh_imports_sync(
+            self._filters_view_model.refresh_imports(
                 self.selected_systems(),
                 self.selected_datasets(),
                 on_result=_apply_imports,
@@ -1173,7 +1137,7 @@ class FiltersWidget(CollapsibleSection):
                 token=token,
             )
 
-        self._filters_view_model.refresh_datasets_sync(
+        self._filters_view_model.refresh_datasets(
             self.selected_systems(),
             on_result=_apply_datasets,
         )
@@ -1204,7 +1168,7 @@ class FiltersWidget(CollapsibleSection):
                 token=token,
             )
 
-        self._filters_view_model.refresh_imports_sync(
+        self._filters_view_model.refresh_imports(
             self.selected_systems(),
             self.selected_datasets(),
             on_result=_apply_imports,

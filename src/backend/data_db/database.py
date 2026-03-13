@@ -1605,31 +1605,6 @@ class Database:
         with self.connection() as con:
             return con.execute(sql, params).df()
 
-    def find_duplicate_import_id(
-        self,
-        *,
-        system_name: str,
-        dataset_name: str,
-        file_path: PathLike,
-    ) -> Optional[int]:
-        path = as_path(file_path)
-        if not path.exists():
-            return None
-        file_sha = file_sha256(path)
-        with self.connection() as con:
-            row = con.execute(
-                """
-                SELECT i.id
-                FROM imports i
-                JOIN datasets d ON d.id = i.dataset_id
-                JOIN systems s ON s.id = d.system_id
-                WHERE s.name = ? AND d.name = ? AND i.file_sha256 = ?
-                LIMIT 1
-                """,
-                [str(system_name), str(dataset_name), str(file_sha)],
-            ).fetchone()
-        return int(row[0]) if row else None
-
     def _feature_tag_maps(self) -> tuple[dict[int, list[str]], dict[int, list[str]]]:
         try:
             with self.connection() as con:

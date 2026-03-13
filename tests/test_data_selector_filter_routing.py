@@ -226,7 +226,6 @@ def test_selection_filtered_refresh_triggers_final_feature_filter_apply():
         _finish_selection_refresh = DataSelectorViewModel._finish_selection_refresh
 
         def __init__(self) -> None:
-            self._initial_filters_refresh_pending = False
             self._selection_refresh_pending = True
             self._selection_refresh_waiting_features_reload = False
             self._widget = _StubWidget()

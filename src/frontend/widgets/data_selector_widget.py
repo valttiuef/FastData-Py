@@ -164,7 +164,6 @@ class DataSelectorViewModel(QObject):
         self._initial_selection_apply_pending = False
         self._selection_refresh_pending = False
         self._selection_refresh_waiting_features_reload = False
-        self._initial_filters_refresh_pending = False
 
         self._widget.filters_changed.connect(self.filters_changed)
         self._widget.preprocessing_changed.connect(self.preprocessing_changed)
@@ -184,13 +183,11 @@ class DataSelectorViewModel(QObject):
     def refresh_from_model(self) -> None:
         """Refresh filter choices and feature list from the current model."""
         if self._widget.filters_widget is not None:
-            self._initial_filters_refresh_pending = True
             self._initial_selection_apply_pending = True
             try:
                 self._widget.filters_widget.refresh_filters()
             except Exception:
                 logger.warning("Exception in refresh_from_model", exc_info=True)
-                self._initial_filters_refresh_pending = False
                 self._initial_selection_apply_pending = False
                 try:
                     self._apply_selection_state_to_widget()
@@ -238,7 +235,6 @@ class DataSelectorViewModel(QObject):
 
     def _apply_selection_state_after_filters_refresh(self) -> None:
         if self._selection_refresh_pending:
-            self._initial_filters_refresh_pending = False
             self._initial_selection_apply_pending = False
             self._apply_selection_state_to_widget()
 
@@ -259,7 +255,6 @@ class DataSelectorViewModel(QObject):
             return
 
         if self._initial_selection_apply_pending:
-            self._initial_filters_refresh_pending = False
             self._initial_selection_apply_pending = False
             try:
                 self._apply_selection_state_to_widget()
@@ -267,7 +262,6 @@ class DataSelectorViewModel(QObject):
                 logger.warning("Exception in _apply_selection_state_after_filters_refresh", exc_info=True)
             return
 
-        self._initial_filters_refresh_pending = False
         self._widget._on_filters_changed()
 
     def _on_features_reloaded(self, _df: object) -> None:

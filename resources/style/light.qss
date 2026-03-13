@@ -534,7 +534,6 @@ QLabel#DataSubInfo {
 QWidget#toastCard {
     background-color: rgba(241, 241, 241, 246);
     border: 1px solid rgba(181, 181, 181, 188);
-    border-bottom-color: transparent;
     border-radius: 10px;
 }
 

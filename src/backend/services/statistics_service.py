@@ -655,45 +655,6 @@ class StatisticsService:
         return seconds_map.get(seconds, f"{seconds}s")
 
     @staticmethod
-    def _apply_value_filters_long(df: pd.DataFrame, value_filters: Sequence[dict]) -> pd.DataFrame:
-        if df is None or df.empty or not value_filters:
-            return df
-        if "feature_id" not in df.columns or "v" not in df.columns:
-            return df
-        out = df.copy()
-        for flt in value_filters:
-            try:
-                fid = int(flt.get("feature_id"))
-            except Exception:
-                continue
-            min_value = flt.get("min_value")
-            max_value = flt.get("max_value")
-            apply_globally = bool(flt.get("apply_globally"))
-            mask = out["feature_id"] == fid
-            if not mask.any():
-                continue
-            series = pd.to_numeric(out.loc[mask, "v"], errors="coerce")
-            allowed = pd.Series(True, index=series.index)
-            if min_value is not None:
-                try:
-                    allowed &= series >= float(min_value)
-                except Exception:
-                    logger.warning("Exception in _apply_value_filters_long", exc_info=True)
-            if max_value is not None:
-                try:
-                    allowed &= series < float(max_value)
-                except Exception:
-                    logger.warning("Exception in _apply_value_filters_long", exc_info=True)
-            if apply_globally:
-                bad_index = series.index[~allowed]
-                bad_times = out.loc[bad_index, "t"]
-                if not bad_times.empty:
-                    out = out[~out["t"].isin(bad_times)]
-            else:
-                out.loc[series.index[~allowed], "v"] = np.nan
-        return out
-
-    @staticmethod
     def _timestep_to_freq(value) -> Optional[str]:
         if value is None:
             return None
@@ -875,94 +836,6 @@ class StatisticsService:
             }
         )
 
-    def _apply_postprocess(
-        self,
-        df: pd.DataFrame,
-        *,
-        freq: Optional[str],
-        fill: str,
-        moving_average,
-    ) -> pd.DataFrame:
-        if df is None or df.empty:
-            return df
-        d = df.copy()
-        d["t"] = ensure_series_naive(pd.to_datetime(d["t"], errors="coerce"))
-        d = d.dropna(subset=["t"]).sort_values("t")
-        if d.empty:
-            return d
-        idx = d["t"]
-        series = d.set_index("t")["value"].astype(float)
-        if freq:
-            full_idx = pd.date_range(idx.min().floor(freq), idx.max().ceil(freq), freq=freq)
-            series = series.reindex(full_idx)
-        if fill == "prev":
-            series = series.ffill().bfill()
-        elif fill == "next":
-            series = series.bfill().ffill()
-        elif fill == "zero":
-            series = series.fillna(0.0)
-        # moving average
-        window = self._resolve_moving_average_window(moving_average, freq)
-        if window is not None:
-            try:
-                series = series.rolling(window, min_periods=1).mean()
-            except Exception:
-                logger.warning("Exception in _apply_postprocess", exc_info=True)
-        out = series.reset_index().rename(columns={"index": "t", 0: "value"})
-        out["t"] = ensure_series_naive(out["t"])
-        return out
-
-    def _preprocess_group(
-        self,
-        group: pd.DataFrame,
-        *,
-        freq: Optional[str],
-        fill: str,
-        moving_average,
-    ) -> pd.DataFrame:
-        """Apply preprocessing (resample, fill, moving average) to a group before statistics calculation."""
-        if group is None or group.empty:
-            return pd.DataFrame(columns=["t", "v"])
-        
-        data = group[["t", "v"]].copy()
-        data["t"] = ensure_series_naive(pd.to_datetime(data["t"], errors="coerce"))
-        data = data.dropna(subset=["t"]).sort_values("t")
-        if data.empty:
-            return pd.DataFrame(columns=["t", "v"])
-
-        ma_window = self._resolve_moving_average_window(moving_average, freq)
-
-        # If no preprocessing is needed, return as-is
-        if freq is None and fill == "none" and ma_window is None:
-            return data
-        
-        idx = data["t"]
-        series = data.set_index("t")["v"].astype(float)
-        
-        # Resample to target frequency
-        if freq:
-            # Aggregate values within each time bucket using mean
-            series = series.resample(freq).mean()
-        
-        # Fill empty values
-        if fill == "prev":
-            series = series.ffill().bfill()
-        elif fill == "next":
-            series = series.bfill().ffill()
-        elif fill == "zero":
-            series = series.fillna(0.0)
-
-        # Apply moving average
-        if ma_window is not None:
-            try:
-                series = series.rolling(ma_window, min_periods=1).mean()
-            except Exception:
-                logger.warning("Exception in _preprocess_group", exc_info=True)
-        
-        out = series.reset_index().rename(columns={"index": "t", series.name: "v"})
-        out["t"] = ensure_series_naive(out["t"])
-        return out
-
     def _join_group_points(
         self,
         df: pd.DataFrame,
@@ -1067,48 +940,6 @@ class StatisticsService:
         except Exception:
             logger.warning("Exception in _estimate_timeframe_group_count", exc_info=True)
             return 0
-
-    def _apply_group_ids_filter_long(
-        self,
-        df: pd.DataFrame,
-        *,
-        group_ids: Sequence[int],
-        start: Optional[pd.Timestamp],
-        end: Optional[pd.Timestamp],
-        match_freq: Optional[str] = None,
-    ) -> pd.DataFrame:
-        if df is None or df.empty or not group_ids:
-            return df
-        if self._db is None:
-            return df
-        try:
-            ids = [int(g) for g in group_ids if g is not None]
-        except Exception:
-            return df
-        if not ids:
-            return df
-        group_points = self._db.group_points(ids, start=start, end=end)
-        if group_points is None or group_points.empty:
-            return df.iloc[0:0]
-        ranges = group_points.copy()
-        ranges["start_ts"] = ensure_series_naive(pd.to_datetime(ranges["start_ts"], errors="coerce"))
-        ranges["end_ts"] = ensure_series_naive(pd.to_datetime(ranges["end_ts"], errors="coerce"))
-        ranges = ranges.dropna(subset=["start_ts", "end_ts"])
-        ranges = ranges[ranges["end_ts"] >= ranges["start_ts"]]
-        if ranges.empty:
-            return df.iloc[0:0]
-
-        out = df.copy()
-        out["t"] = ensure_series_naive(pd.to_datetime(out["t"], errors="coerce"))
-        out = out.dropna(subset=["t"])
-        if out.empty:
-            return out
-        assigned = self._assign_group_timeframe_values(
-            ts=out["t"],
-            ranges=ranges,
-            match_freq=match_freq,
-        )
-        return out[assigned.notna()]
 
     @staticmethod
     def _assign_group_timeframe_values(

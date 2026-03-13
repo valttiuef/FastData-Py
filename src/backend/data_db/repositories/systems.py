@@ -23,25 +23,6 @@ class SystemsRepository:
         return [r[0] for r in con.execute("SELECT name FROM systems ORDER BY name;").fetchall()]
 
     @staticmethod
-    def systems_for_filters(con: duckdb.DuckDBPyConnection, names: Iterable[str]) -> List[int]:
-        placeholders = ",".join(["?"] * len(list(names)))
-        sql = f"SELECT id FROM systems WHERE name IN ({placeholders});"
-        return [r[0] for r in con.execute(sql, list(names)).fetchall()]
-
-    @staticmethod
-    def list_names_with_datasets(
-        con: duckdb.DuckDBPyConnection, system: Optional[str]
-    ) -> List[str]:
-        if system:
-            sql = """
-                SELECT d.name FROM datasets d
-                JOIN systems s ON s.id = d.system_id
-                WHERE s.name = ? ORDER BY d.name;
-            """
-            return [r[0] for r in con.execute(sql, [system]).fetchall()]
-        return [r[0] for r in con.execute("SELECT name FROM datasets ORDER BY name;").fetchall()]
-
-    @staticmethod
     def delete_by_id(con: duckdb.DuckDBPyConnection, system_id: int) -> None:
         """Delete system and cascade to related datasets/features/imports/groups/models."""
         from .datasets import DatasetsRepository

@@ -80,7 +80,6 @@ class ChatWindow(QWidget):
                 resolved_help = None
         self._help_viewmodel = resolved_help
         self._stored_api_key: Optional[str] = None
-        self._restoring_llm_settings = False
         self._pending_openai_key_test = False
 
         self._messages: list[_ChatMessage] = []
@@ -355,7 +354,6 @@ class ChatWindow(QWidget):
 
     # ------------------------------------------------------------------
     def _restore_llm_settings(self) -> None:
-        self._restoring_llm_settings = True
         provider = self._settings_model.llm_provider or "openai"
         try:
             self._provider_selector.blockSignals(True)
@@ -383,7 +381,6 @@ class ChatWindow(QWidget):
             self._on_provider_changed(self._provider_selector.currentIndex())
         finally:
             self._provider_selector.blockSignals(False)
-            self._restoring_llm_settings = False
 
     def _set_model_value(self, value: str) -> None:
         text = (value or "").strip()
@@ -778,29 +775,6 @@ class ChatWindow(QWidget):
             return
 
         self._append_message("assistant", event.message, turn_id=str(event.turn_id or ""))
-
-    def _rebuild_from_log(self) -> None:
-        self._messages = []
-        self._streaming_index = None
-        self._saw_llm_log_for_stream = False
-        self._suppress_next_llm_log = None
-        self._suppress_next_llm_error_log = None
-        self._pending_stream_append.clear()
-
-        for entry in self._log_view_model.log_model.entries():
-            if entry.origin == "chat":
-                self._messages.append(_ChatMessage(role="user", content=entry.message, turn_id=str(entry.turn_id or "")))
-            elif entry.origin == "llm":
-                role = "error" if entry.level >= 40 else "assistant"
-                self._messages.append(_ChatMessage(role=role, content=entry.message, turn_id=str(entry.turn_id or "")))
-            elif entry.origin == "llm_thinking":
-                turn_id = str(entry.turn_id or "")
-                for msg in reversed(self._messages):
-                    if msg.turn_id == turn_id and msg.role in {"assistant", "error"}:
-                        msg.thinking = entry.message
-                        break
-
-        self._rebuild_chat_list()
 
     def _append_message(self, role: str, content: str, *, turn_id: str = "") -> None:
         self._messages.append(_ChatMessage(role=role, content=content, turn_id=turn_id))

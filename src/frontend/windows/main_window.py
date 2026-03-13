@@ -451,19 +451,6 @@ class MainWindow(QMainWindow):
             if schedule_next:
                 QTimer.singleShot(0, self._load_next_pending_tab)
 
-    def _preload_lazy_tabs_for_startup(self, start_percent: int, end_percent: int) -> None:
-        total = len(self._tab_specs)
-        if total <= 0:
-            return
-        span = max(end_percent - start_percent, 0)
-        for index, spec in enumerate(self._tab_specs, start=1):
-            percent = start_percent + round(span * (index / total))
-            self._report_startup_status(
-                self.tr("Loading {name} features...").format(name=spec.label),
-                percent,
-            )
-            self._load_tab(spec, schedule_next=False)
-
     def _fill_placeholder(self, spec: _TabSpec, widget: QWidget) -> None:
         container = self._placeholder_containers.get(spec.help_key)
         if container is None:
@@ -1265,10 +1252,6 @@ class MainWindow(QMainWindow):
 
     def available_languages(self) -> dict[str, str]:
         return {"en": self.tr("English"), "fi": self.tr("Finnish")}
-
-    # @ai(gpt-5, codex, refactor, 2026-03-03)
-    def change_language(self, language_code: str) -> None:
-        self.apply_language(language_code, apply_runtime=False)
 
     def show_about_dialog(self):
         window = AboutWindow(self)

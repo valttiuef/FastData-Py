@@ -215,10 +215,6 @@ class LogService(logging.Handler):
             self._listeners.clear()
             self._logger_listeners.clear()
 
-    def get_logger_names(self) -> List[str]:
-        with self._lock:
-            return sorted(self._logger_names)
-
     def _mirror_streams(self) -> None:
         if self._stdout_proxy is None:
             self._stdout_proxy = _StreamProxy(sys.stdout, self, logging.INFO, "stdout")

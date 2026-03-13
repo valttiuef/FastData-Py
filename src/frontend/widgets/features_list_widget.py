@@ -539,11 +539,6 @@ class FeaturesListWidget(QGroupBox):
         self._invalidate_selection_cache()
         selection.clearSelection()
 
-    def clear_selection_and_suppress_autoselect(self) -> None:
-        self._suppress_autoselect = True
-        self._selection_memory_ids.clear()
-        self.clear_selection()
-
     def _on_database_changed_reset_selection(self, *_args) -> None:
         had_selection = bool(self._selection_memory_ids) or bool(self._visible_selected_feature_ids())
         self._selection_memory_ids.clear()

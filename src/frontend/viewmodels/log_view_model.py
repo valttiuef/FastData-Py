@@ -67,9 +67,6 @@ class LogViewModel(QObject):
     def set_api_key(self, value: Optional[str]) -> None:
         self._api_key = value or None
 
-    def set_context(self, value: Optional[str]) -> None:
-        self._default_context = value or None
-
     def set_model_name(self, value: Optional[str]) -> None:
         self._model_name = value or None
 
@@ -211,9 +208,6 @@ class LogViewModel(QObject):
 
     def set_log_database(self, path: Path) -> None:
         self.log_model.set_database(path)
-
-    def clear_log_database(self) -> Path:
-        return self.log_model.clear_storage()
 
     def clear_chat_history(self) -> None:
         self.log_model.clear_chat_history()
