@@ -422,14 +422,11 @@ class DataTab(TabWidget):
             flt: DataFilters containing feature and time information
             start_ts: Start timestamp
             end_ts: End timestamp
-            rows: Number of rows (if None, fetches from current_dataframe)
+            rows: Number of rows
         
         Returns:
             Formatted info text string
         """
-        if rows is None:
-            rows = len(self._view_model.current_dataframe())
-        
         s = self._format_date(start_ts)
         e = self._format_date(end_ts)
         names, _ = self._build_feature_label_list(flt.features)
