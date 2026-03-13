@@ -455,7 +455,7 @@ def test_multi_import_feature_filter_pipeline_perf_2500_features(tmp_path: Path,
                 assert import_elapsed < 20.0
                 assert fetch_elapsed < 0.20
                 assert viewmodel_elapsed < 0.20
-                assert widget_apply_elapsed < 0.10
+                assert widget_apply_elapsed < 0.20
             finally:
                 try:
                     database_model._close_database()

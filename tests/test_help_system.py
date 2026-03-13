@@ -330,7 +330,7 @@ class TestHelpWidgets:
         button = InfoButton("test.key", viewmodel)
         
         assert button is not None
-        assert button.text() == "ⓘ"
+        assert button.text() == "ℹ"
         assert button.toolTip() == "Test tooltip"
 
     def test_info_button_set_help_key(self, help_manager, qapp):

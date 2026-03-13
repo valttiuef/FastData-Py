@@ -18,9 +18,9 @@ from frontend.style.regression_colors import (
 
 
 def test_regression_semantic_colors_are_stable() -> None:
-    assert regression_actual_color().name().lower() == "#5b8ff9"
-    assert regression_train_color().name().lower() == "#5ad8a6"
-    assert regression_validation_color().name().lower() == "#f6bd16"
+    assert regression_actual_color().name().lower() == "#4e79f7"
+    assert regression_train_color().name().lower() == "#59a14f"
+    assert regression_validation_color().name().lower() == "#f28e2b"
     assert regression_test_color().name().lower() == "#e8684a"
 
 

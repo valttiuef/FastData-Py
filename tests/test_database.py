@@ -337,7 +337,6 @@ def test_hybrid_model_loads_rows_from_duckdb_csv_import(temp_db: Database, tmp_p
             features=[FeatureSelection.from_payload(payload)],
             systems=["SysHybridCsv"],
             datasets=["DataHybridCsv"],
-            Datasets=["DataHybridCsv"],
         )
         model.load_base(filters, timestep="none", fill="none", agg="avg")
         frame = model.base_dataframe()

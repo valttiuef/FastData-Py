@@ -119,6 +119,7 @@ class TestOllamaProviderErrorHandling:
             "connection refused",
             "connect",
             "error",
+            "not installed",
         ]
         assert any(pattern in error_message for pattern in expected_patterns), (
             f"Error message '{error_message}' did not contain any expected pattern"

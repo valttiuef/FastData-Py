@@ -19,13 +19,13 @@ from frontend.style.group_colors import (
 
 
 def test_group_palette_uses_updated_lead_blue() -> None:
-    assert GROUP_COLORS[0].lower() == "#5b8ff9"
-    assert LIGHT_GROUP_COLORS[0].lower() == "#5b8ff9"
+    assert GROUP_COLORS[0].lower() == "#4e79f7"
+    assert LIGHT_GROUP_COLORS[0].lower() == "#4e79f7"
 
 
 def test_dark_group_palette_uses_explicit_theme_palette() -> None:
-    assert DARK_GROUP_COLORS[0].lower() == "#7aa8ff"
-    assert group_color_for_index(0, dark_theme=True).name().lower() == "#7aa8ff"
+    assert DARK_GROUP_COLORS[0].lower() == "#7aa2ff"
+    assert group_color_for_index(0, dark_theme=True).name().lower() == "#7aa2ff"
 
 
 def test_group_color_cycle_wraps_without_generated_shading() -> None:

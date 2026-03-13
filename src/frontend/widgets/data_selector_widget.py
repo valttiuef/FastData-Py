@@ -303,7 +303,7 @@ class DataSelectorViewModel(QObject):
 
         requested_datasets = [
             str(value).strip()
-            for value in (state.get("datasets") or state.get("Datasets") or [])
+            for value in (state.get("datasets") or [])
             if str(value).strip()
         ]
         if requested_datasets:
@@ -311,10 +311,8 @@ class DataSelectorViewModel(QObject):
             matched_datasets = [value for value in requested_datasets if value in available_dataset_set]
             if matched_datasets:
                 state["datasets"] = list(dict.fromkeys(matched_datasets))
-                state["Datasets"] = list(state["datasets"])
             else:
                 state.pop("datasets", None)
-                state.pop("Datasets", None)
 
         requested_import_ids: list[int] = []
         for value in state.get("import_ids") or []:
@@ -1126,13 +1124,13 @@ class DataSelectorWidget(QGroupBox):
             try:
                 datasets = list(self.filters_widget.selected_datasets_for_data_scope())
             except Exception:
-                datasets = list(state.get("datasets") or state.get("Datasets") or [])
+                datasets = list(state.get("datasets") or [])
             try:
                 import_ids = list(self.filters_widget.selected_import_ids_for_data_scope())
             except Exception:
                 import_ids = list(state.get("import_ids") or [])
         else:
-            datasets = list(state.get("datasets") or state.get("Datasets") or [])
+            datasets = list(state.get("datasets") or [])
             import_ids = list(state.get("import_ids") or [])
         # Keep reload key scoped to filters that must change fetched data.
         return {
