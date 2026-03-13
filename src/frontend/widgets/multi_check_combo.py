@@ -200,17 +200,19 @@ class MultiCheckCombo(QComboBox):
 
     def selected_values(self) -> list:
         out: List[Any] = []
-        m: QStandardItemModel = self.model()  # type: ignore[assignment]
+        m: QStandardItemModel = self.model()
         for row in range(m.rowCount()):
             it = m.item(row)
-            if it and not self._is_action_item(it) and it.checkState() == Qt.CheckState.Checked:  # type: ignore
+            if it and not self._is_action_item(it) and it.checkState() == Qt.CheckState.Checked:
                 out.append(it.data(Qt.ItemDataRole.UserRole))
         return out
 
-    # @ai(gpt-5, codex, fix, 2026-03-11)
     def set_selected_values(self, values: Iterable[Any]):
-        vs = set(values or [])
-        m: QStandardItemModel = self.model()  # type: ignore[assignment]
+        target_values = list(values or [])
+        before = self.selected_values()
+        vs = set(target_values)
+
+        m: QStandardItemModel = self.model()
         self._internal_change = True
         try:
             m.blockSignals(True)
@@ -219,7 +221,7 @@ class MultiCheckCombo(QComboBox):
                 if not it or self._is_action_item(it):
                     continue
                 val = it.data(Qt.ItemDataRole.UserRole)
-                it.setCheckState(Qt.CheckState.Checked if val in vs else Qt.CheckState.Unchecked)  # type: ignore
+                it.setCheckState(Qt.CheckState.Checked if val in vs else Qt.CheckState.Unchecked)
         finally:
             m.blockSignals(False)
             self._internal_change = False
@@ -227,15 +229,17 @@ class MultiCheckCombo(QComboBox):
         if self._preserve_missing_selected_values:
             remembered = list(self._remembered_selected_values or [])
             ordered = [value for value in remembered if value in vs]
-            extras = [value for value in values or [] if value in vs and value not in ordered]
+            extras = [value for value in target_values if value in vs and value not in ordered]
             self._remembered_selected_values = ordered + extras
         else:
-            self._remembered_selected_values = list(values or [])
+            self._remembered_selected_values = list(target_values)
+
         self._enforce_max_checked()
         self._refresh_summary()
         self._clear_current_index(self.lineEdit().text() if self.lineEdit() is not None else None)
 
-        if not self.signalsBlocked():
+        after = self.selected_values()
+        if after != before and not self.signalsBlocked():
             self.selection_changed.emit()
 
     def clear_selection(self) -> None:

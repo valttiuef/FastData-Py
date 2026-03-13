@@ -157,15 +157,20 @@ class DataSelectorViewModel(QObject):
         parent: Optional[QObject] = None,
     ) -> None:
         super().__init__(parent)
+
         self._widget = widget
         self._data_model: Optional[HybridPandasModel] = None
+
+        self._initial_selection_apply_pending = False
         self._selection_refresh_pending = False
         self._selection_refresh_waiting_features_reload = False
         self._initial_filters_refresh_pending = False
+
         self._widget.filters_changed.connect(self.filters_changed)
         self._widget.preprocessing_changed.connect(self.preprocessing_changed)
         self._widget.features_selection_changed.connect(self.features_selection_changed)
         self._widget.data_requirements_changed.connect(self.data_requirements_changed)
+
         if self._widget.filters_widget is not None:
             self._widget.filters_widget.filters_refreshed.connect(self._apply_selection_state_after_filters_refresh)
         if self._widget.features_widget is not None:
@@ -179,16 +184,24 @@ class DataSelectorViewModel(QObject):
     def refresh_from_model(self) -> None:
         """Refresh filter choices and feature list from the current model."""
         if self._widget.filters_widget is not None:
-            self._initial_filters_refresh_pending = self._widget.features_widget is not None
+            self._initial_filters_refresh_pending = True
+            self._initial_selection_apply_pending = True
             try:
                 self._widget.filters_widget.refresh_filters()
             except Exception:
                 logger.warning("Exception in refresh_from_model", exc_info=True)
                 self._initial_filters_refresh_pending = False
-        try:
-            self._apply_selection_state_to_widget()
-        except Exception:
-            logger.warning("Exception in refresh_from_model", exc_info=True)
+                self._initial_selection_apply_pending = False
+                try:
+                    self._apply_selection_state_to_widget()
+                except Exception:
+                    logger.warning("Exception in refresh_from_model", exc_info=True)
+        else:
+            try:
+                self._apply_selection_state_to_widget()
+            except Exception:
+                logger.warning("Exception in refresh_from_model", exc_info=True)
+
         if self._widget.features_widget is not None and self._widget.filters_widget is None:
             try:
                 self._widget.features_widget.reload_features()
@@ -224,32 +237,38 @@ class DataSelectorViewModel(QObject):
             self._apply_selection_state_after_filters_refresh()
 
     def _apply_selection_state_after_filters_refresh(self) -> None:
-        # Normal refresh path: filter options were refreshed, but we are not in the
-        # middle of applying a saved selection state. Notify the widget once.
-        if not self._selection_refresh_pending:
+        if self._selection_refresh_pending:
             self._initial_filters_refresh_pending = False
-            self._widget._on_filters_changed()
+            self._initial_selection_apply_pending = False
+            self._apply_selection_state_to_widget()
+
+            if self._widget.features_widget is None:
+                self._finish_selection_refresh(trigger_feature_reload=False)
+                return
+
+            if self._widget.features_widget.use_selection_filter:
+                self._finish_selection_refresh(trigger_feature_reload=True)
+                return
+
+            try:
+                self._selection_refresh_waiting_features_reload = True
+                self._widget.features_widget.reload_features()
+            except Exception:
+                logger.warning("Exception in _apply_selection_state_after_filters_refresh", exc_info=True)
+                self._finish_selection_refresh(trigger_feature_reload=False)
+            return
+
+        if self._initial_selection_apply_pending:
+            self._initial_filters_refresh_pending = False
+            self._initial_selection_apply_pending = False
+            try:
+                self._apply_selection_state_to_widget()
+            except Exception:
+                logger.warning("Exception in _apply_selection_state_after_filters_refresh", exc_info=True)
             return
 
         self._initial_filters_refresh_pending = False
-        self._apply_selection_state_to_widget()
-
-        if self._widget.features_widget is None:
-            self._finish_selection_refresh(trigger_feature_reload=False)
-            return
-
-        if self._widget.features_widget.use_selection_filter:
-            # Let the batched feature-scope refresh happen once after the saved
-            # filter state has been restored.
-            self._finish_selection_refresh(trigger_feature_reload=True)
-            return
-
-        try:
-            self._selection_refresh_waiting_features_reload = True
-            self._widget.features_widget.reload_features()
-        except Exception:
-            logger.warning("Exception in _apply_selection_state_after_filters_refresh", exc_info=True)
-            self._finish_selection_refresh(trigger_feature_reload=False)
+        self._widget._on_filters_changed()
 
     def _on_features_reloaded(self, _df: object) -> None:
         if not self._selection_refresh_pending or not self._selection_refresh_waiting_features_reload:

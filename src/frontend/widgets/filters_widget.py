@@ -886,39 +886,58 @@ class FiltersWidget(CollapsibleSection):
         _set_qdt(self.dt_from, state.get("start"))
         _set_qdt(self.dt_to, state.get("end"))
 
-        wanted_systems = [
-            str(v).strip()
-            for v in (self._state_values(state, "systems") or [])
-            if str(v).strip()
-        ]
-        wanted_datasets = [
-            str(v).strip()
-            for v in (self._state_values(state, "datasets", legacy_key="Datasets") or [])
-            if str(v).strip()
-        ]
+        raw_systems = self._state_values(state, "systems")
+        wanted_systems: list[str] | None = None
+        if raw_systems is not None:
+            wanted_systems = [
+                str(v).strip()
+                for v in raw_systems
+                if str(v).strip()
+            ]
 
-        wanted_import_ids: list[int] = []
-        for value in (self._state_values(state, "import_ids") or []):
-            try:
-                wanted_import_ids.append(int(value))
-            except Exception:
-                continue
+        raw_datasets = self._state_values(state, "datasets", legacy_key="Datasets")
+        wanted_datasets: list[str] | None = None
+        if raw_datasets is not None:
+            wanted_datasets = [
+                str(v).strip()
+                for v in raw_datasets
+                if str(v).strip()
+            ]
 
-        wanted_months: list[int] = []
-        for value in (state.get("months") or []):
-            try:
-                wanted_months.append(int(value))
-            except Exception:
-                continue
+        raw_import_ids = self._state_values(state, "import_ids")
+        wanted_import_ids: list[int] | None = None
+        if raw_import_ids is not None:
+            wanted_import_ids = []
+            for value in raw_import_ids:
+                try:
+                    wanted_import_ids.append(int(value))
+                except Exception:
+                    continue
 
-        wanted_group_ids: list[int] = []
-        for value in (state.get("group_ids") or []):
-            try:
-                wanted_group_ids.append(int(value))
-            except Exception:
-                continue
+        raw_months = state.get("months")
+        wanted_months: list[int] | None = None
+        if raw_months is not None:
+            wanted_months = []
+            for value in raw_months:
+                try:
+                    wanted_months.append(int(value))
+                except Exception:
+                    continue
 
-        wanted_tags = [str(v) for v in (state.get("tags") or []) if str(v).strip()]
+        raw_group_ids = state.get("group_ids")
+        wanted_group_ids: list[int] | None = None
+        if raw_group_ids is not None:
+            wanted_group_ids = []
+            for value in raw_group_ids:
+                try:
+                    wanted_group_ids.append(int(value))
+                except Exception:
+                    continue
+
+        raw_tags = state.get("tags")
+        wanted_tags: list[str] | None = None
+        if raw_tags is not None:
+            wanted_tags = [str(v).strip() for v in raw_tags if str(v).strip()]
 
         # 1) systems
         self._select_values_or_all(self.systems_combo, wanted_systems)
@@ -944,7 +963,10 @@ class FiltersWidget(CollapsibleSection):
         )
 
         # 5) restore months
-        self.months_combo.set_selected_values(wanted_months)
+        if wanted_months is None:
+            self.months_combo.set_selected_values(self._all_combo_values(self.months_combo))
+        else:
+            self.months_combo.set_selected_values(wanted_months)
 
         # 6) restore groups that still exist
         available_group_ids: set[int] = set()
@@ -955,15 +977,22 @@ class FiltersWidget(CollapsibleSection):
                 continue
             if parsed > 0:
                 available_group_ids.add(parsed)
-        self.group_combo.set_selected_values(
-            [gid for gid in wanted_group_ids if gid in available_group_ids]
-        )
+
+        if wanted_group_ids is None:
+            self.group_combo.set_selected_values([])
+        else:
+            self.group_combo.set_selected_values(
+                [gid for gid in wanted_group_ids if gid in available_group_ids]
+            )
 
         # 7) restore tags that still exist
         available_tags = {str(v) for v in self._all_combo_values(self.tags_combo) if str(v).strip()}
-        self.tags_combo.set_selected_values(
-            [tag for tag in wanted_tags if tag in available_tags]
-        )
+        if wanted_tags is None:
+            self.tags_combo.set_selected_values([])
+        else:
+            self.tags_combo.set_selected_values(
+                [tag for tag in wanted_tags if tag in available_tags]
+            )
 
     def get_settings(self) -> dict:
         return self.filter_state()

@@ -74,15 +74,16 @@ class SelectionsTab(TabWidget):
         self._group_filters_refresh_pending = False
         super().__init__(parent)
 
-        # QObject-derived helpers must be created after the QWidget base class
-        # has been initialised to avoid "base class not called" errors when we
-        # pass ``self`` as their parent.
         self._table_model.setParent(self)
         self._view_model = SelectionsViewModel(self._database_model, parent=self)
 
         self._connect_signals()
-        if self.sidebar.filters_widget is not None:
-            self.sidebar.filters_widget.refresh_filters()
+
+        # Important:
+        # Do NOT manually refresh sidebar.data_selector here.
+        # Its own DataSelectorViewModel already runs refresh_from_model() during
+        # construction. A second startup refresh here is selections-tab-specific
+        # and can overwrite the final scoped datasets/imports with all items.
         self._view_model.refresh()
 
         self._database_model.database_changed.connect(self._on_database_changed)
@@ -172,18 +173,29 @@ class SelectionsTab(TabWidget):
             logger.warning("Exception in _invoke_main_window_action", exc_info=True)
 
     # ------------------------------------------------------------------
-    # ------------------------------------------------------------------
     def _on_database_changed(self, *_args) -> None:
-        if self.sidebar.filters_widget is not None:
-            self.sidebar.filters_widget.refresh_filters()
+        # Keep the embedded DataSelectorWidget on the same refresh path as every
+        # other selector in the app. Avoid calling filters_widget.refresh_filters()
+        # directly because that bypasses the widget/viewmodel sequencing and can
+        # repopulate datasets/imports with all items.
+        try:
+            self.sidebar.data_selector.view_model.refresh_from_model()
+        except Exception:
+            logger.warning("Exception in _on_database_changed", exc_info=True)
+
         self._view_model.refresh()
 
     def _on_selection_database_changed(self, *_args) -> None:
         self._view_model._refresh_settings()
 
     def _on_features_list_changed(self) -> None:
-        if self.sidebar.filters_widget is not None:
-            self.sidebar.filters_widget.refresh_filters()
+        # Same rule as startup/database changes: let the embedded DataSelectorWidget
+        # refresh through its own view model instead of forcing a raw filter refresh.
+        try:
+            self.sidebar.data_selector.view_model.refresh_from_model()
+        except Exception:
+            logger.warning("Exception in _on_features_list_changed", exc_info=True)
+
         self._view_model.refresh_features()
 
     def _on_scope_filters_changed(self, *_args) -> None:
@@ -280,13 +292,10 @@ class SelectionsTab(TabWidget):
         self._select_setting_in_list(target_id)
 
         # Important:
-        # Do not apply settings directly to the sidebar DataSelector here.
-        # That causes the selections-tab widget to update twice:
-        #   1) local direct apply
-        #   2) global apply via DatabaseModel.selection_state_changed
-        #
-        # The shared/global path must be the single source of truth so every
-        # DataSelectorWidget updates the same way.
+        # Let DatabaseModel selection state be the single source of truth.
+        # Do not apply sidebar selector settings directly here, and do not manually
+        # trigger scope-filter handling from the current widget state. At startup
+        # that current widget state can still be the unscoped/all-data one.
         payload_to_apply = payload if (record and record.get("id")) else None
         self._apply_active_selection_payload(payload_to_apply)
 
