@@ -1,15 +1,11 @@
 from __future__ import annotations
+
 import logging
-
-logger = logging.getLogger(__name__)
-# toast.py
-
 from typing import Callable, List, Optional
 
 from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, QPoint
 from PySide6.QtGui import QColor, QFont, QPalette
 from PySide6.QtWidgets import (
-
     QApplication,
     QGraphicsDropShadowEffect,
     QHBoxLayout,
@@ -18,7 +14,10 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
 from ..localization import tr
+
+logger = logging.getLogger(__name__)
 
 
 def _is_dark(color: QColor) -> bool:
@@ -27,7 +26,12 @@ def _is_dark(color: QColor) -> bool:
 
 
 class _Toast(QWidget):
-    # @ai(gpt-5, codex-cli, refactor, 2026-03-12)
+    # Outer transparent margins reserved so the drop shadow is not clipped.
+    SHADOW_MARGIN_LEFT = 10
+    SHADOW_MARGIN_TOP = 8
+    SHADOW_MARGIN_RIGHT = 10
+    SHADOW_MARGIN_BOTTOM = 0
+
     def __init__(
         self,
         title: str,
@@ -47,7 +51,9 @@ class _Toast(QWidget):
 
         # Frameless, non-blocking, stays on top of your app
         self.setWindowFlags(
-            Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
+            Qt.WindowType.Tool
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
@@ -55,6 +61,7 @@ class _Toast(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setAutoFillBackground(False)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
         if self._on_click is not None:
             self.setCursor(Qt.CursorShape.PointingHandCursor)
 
@@ -96,6 +103,7 @@ class _Toast(QWidget):
         title_font = QFont(title_lbl.font())
         title_font.setWeight(QFont.Weight.DemiBold)
         title_lbl.setFont(title_font)
+
         msg_lbl = QLabel(message)
         msg_lbl.setObjectName("toastMsg")
         msg_lbl.setWordWrap(True)
@@ -111,8 +119,12 @@ class _Toast(QWidget):
         lay.addWidget(content)
 
         root = QHBoxLayout(self)
-        # Keep transparent margins so the drop-shadow is not clipped.
-        root.setContentsMargins(10, 8, 10, 0)
+        root.setContentsMargins(
+            self.SHADOW_MARGIN_LEFT,
+            self.SHADOW_MARGIN_TOP,
+            self.SHADOW_MARGIN_RIGHT,
+            self.SHADOW_MARGIN_BOTTOM,
+        )
         root.addWidget(bg)
 
         pal = self.palette()
@@ -143,10 +155,20 @@ class _Toast(QWidget):
         # Auto close
         QTimer.singleShot(msec, self.close_animated)
 
+    def visual_top_margin(self) -> int:
+        return self.SHADOW_MARGIN_TOP
+
+    def visual_bottom_margin(self) -> int:
+        return self.SHADOW_MARGIN_BOTTOM
+
+    def visual_height(self) -> int:
+        return max(0, self.height() - self.visual_top_margin() - self.visual_bottom_margin())
+
     def _resolve_icon(self, icon_key: str):
         style = self.style()
         if style is None:
             return None
+
         key = str(icon_key or "").strip().lower()
         icon_map = {
             "open_file": QStyle.StandardPixmap.SP_DialogOpenButton,
@@ -154,6 +176,7 @@ class _Toast(QWidget):
         pixmap_key = icon_map.get(key)
         if pixmap_key is None:
             return None
+
         try:
             return style.standardIcon(pixmap_key)
         except Exception:
@@ -166,6 +189,7 @@ class _Toast(QWidget):
                 self._on_click()
             except Exception:
                 logger.warning("Exception in mousePressEvent", exc_info=True)
+
         self.close_animated()
         event.accept()
 
@@ -191,6 +215,7 @@ class _Toast(QWidget):
 
 class ToastManager:
     """VSCode-like bottom-right notifications inside your app."""
+
     def __init__(self, anchor: Optional[QWidget] = None):
         # anchor: main window (recommended). If None, uses primary screen geometry.
         self.anchor = anchor
@@ -202,7 +227,10 @@ class ToastManager:
         self.margin_bottom = 22
         self.margin_left = 16
         self.margin_top = 16
-        self.gap = 10
+
+        # Visible gap between cards. Set to 0 so cards sit directly on top of each other.
+        self.gap = 0
+
         self.default_msec_by_kind = {
             "info": 3600,
             "success": 3600,
@@ -307,16 +335,24 @@ class ToastManager:
     ):
         if tab_key:
             self._close_tab_toasts(tab_key)
+
         self._trim_toasts(max(1, int(self.max_toasts)) - 1)
+
         geo = self._anchor_geometry()
         max_width = min(460, int(geo.width() * 0.38))
+
         if tab_key:
             activate = lambda: self._activate_tab(tab_key)
             if on_click is None:
                 on_click = activate
             else:
                 base_click = on_click
-                on_click = lambda: (activate(), base_click())
+
+                def combined_click():
+                    activate()
+                    base_click()
+
+                on_click = combined_click
 
         toast = _Toast(
             title,
@@ -345,6 +381,7 @@ class ToastManager:
                     remaining.append(toast)
             except RuntimeError:
                 continue
+
         self._toasts = remaining
         self._reposition()
 
@@ -353,23 +390,28 @@ class ToastManager:
             keep = 0
         if len(self._toasts) <= keep:
             return
+
         excess = len(self._toasts) - keep
         for toast in list(self._toasts[:excess]):
             try:
                 toast.close_animated()
             except Exception:
                 logger.warning("Exception in _trim_toasts", exc_info=True)
+
         self._toasts = self._toasts[excess:]
 
     def _activate_tab(self, tab_key: str) -> None:
         if not tab_key:
             return
+
         anchor = self.anchor
         if anchor is None:
             return
+
         handler = getattr(anchor, "activate_tab", None)
         if handler is None:
             return
+
         try:
             handler(tab_key)
         except Exception:
@@ -390,6 +432,7 @@ class ToastManager:
             except RuntimeError:
                 # Underlying C++ object already deleted (best-effort cleanup)
                 continue
+
         self._toasts = alive
         self._reposition()
 
@@ -406,13 +449,21 @@ class ToastManager:
         y_bottom = geo.y() + geo.height() - self.margin_bottom
 
         y = y_bottom
-        # Stack upwards
+
+        # Stack upwards using the visible card height, not the full widget height,
+        # because the widget includes transparent shadow margins.
         for toast in reversed(self._toasts):
             try:
                 toast.adjustSize()
+
                 w, h = toast.width(), toast.height()
-                toast.move(QPoint(x_right - w, y - h))
-                y -= (h + self.gap)
+                top_margin = toast.visual_top_margin()
+                bottom_margin = toast.visual_bottom_margin()
+                visual_height = toast.visual_height()
+
+                top_y = y - visual_height - top_margin
+                toast.move(QPoint(x_right - w, top_y))
+
+                y -= visual_height + self.gap
             except RuntimeError:
                 continue
-
