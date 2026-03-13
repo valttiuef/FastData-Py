@@ -192,7 +192,9 @@ class SomViewModel(QObject):
     def timeline_mode(self) -> str:
         if "cluster" in self._timeline_display_selected:
             return "cluster"
-        return "bmu"
+        if "bmu" in self._timeline_display_selected:
+            return "bmu"
+        return "none"
 
     def timeline_overlay_enabled(self) -> bool:
         return "selected_features" in self._timeline_display_selected
@@ -219,6 +221,8 @@ class SomViewModel(QObject):
             "selected": list(self._timeline_display_selected),
             "mode": self.timeline_mode(),
             "overlay_enabled": self.timeline_overlay_enabled(),
+            "show_bmu": self.timeline_show_bmu(),
+            "show_cluster": self.timeline_show_clusters(),
         }
 
     def set_timeline_table_dataframe(self, df: Optional[pd.DataFrame]) -> None:

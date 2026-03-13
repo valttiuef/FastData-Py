@@ -1721,43 +1721,20 @@ class SomTab(TabWidget):
             except Exception:
                 logger.warning("Exception in _update_timeline_views", exc_info=True)
 
-    def _update_timeline_chart(self, timeline_df: Optional[pd.DataFrame] = None) -> None:
-        if timeline_df is None:
-            timeline_df = self._timeline_dataframe()
-        if timeline_df is None or timeline_df.empty:
-            self.timeline_chart.clear()
-            return
-
+    def _timeline_timeseries(self, timeline_df: pd.DataFrame) -> pd.Series:
         if "index" in timeline_df.columns:
-            times = pd.to_datetime(timeline_df["index"], errors="coerce")
-        else:
-            times = pd.to_datetime(timeline_df.index, errors="coerce")
+            return pd.to_datetime(timeline_df["index"], errors="coerce")
+        return pd.to_datetime(timeline_df.index, errors="coerce")
 
-        selected_options = set(self._view_model.timeline_display_selected())
-        show_cluster = "cluster" in selected_options
-        show_bmu = "bmu" in selected_options
-        if not selected_options:
-            self.timeline_chart.clear()
-            return
 
-        mode = "cluster" if show_cluster else "bmu"
-        if show_cluster:
-            valid = (
-                self._neuron_clusters is not None
-                and getattr(self._neuron_clusters, "bmu_cluster_labels", None) is not None
-                and len(self._neuron_clusters.bmu_cluster_labels) == len(timeline_df)
-            )
-            if not valid:
-                selected = [key for key in self._view_model.timeline_display_selected() if key != "cluster"]
-                if not selected:
-                    selected = ["bmu"]
-                self._view_model.set_timeline_display_options(selected=selected)
-                mode = "bmu"
-                show_cluster = False
-
+    def _timeline_bmu_series(self, timeline_df: pd.DataFrame) -> pd.Series:
         width = 0
         if self._result and isinstance(self._result.map_shape, tuple) and len(self._result.map_shape) >= 2:
-            width = int(self._result.map_shape[1])
+            try:
+                width = int(self._result.map_shape[1])
+            except Exception:
+                width = 0
+
         bmu_x = pd.to_numeric(
             timeline_df.get("bmu_x", pd.Series(index=timeline_df.index, dtype=float)),
             errors="coerce",
@@ -1766,37 +1743,223 @@ class SomTab(TabWidget):
             timeline_df.get("bmu_y", pd.Series(index=timeline_df.index, dtype=float)),
             errors="coerce",
         )
-        bmu_numeric_all = pd.to_numeric(bmu_x * max(1, width) + bmu_y, errors="coerce")
+        return pd.to_numeric(bmu_x * max(1, width) + bmu_y, errors="coerce")
 
-        if show_cluster:
-            base_col_name = tr("Cluster")
-            base_series_raw = pd.Series(
-                self._neuron_clusters.bmu_cluster_labels,
-                index=timeline_df.index,
-                dtype=float,
+
+    def _timeline_cluster_series(
+        self,
+        timeline_df: pd.DataFrame,
+    ) -> tuple[Optional[pd.Series], dict[int, str]]:
+        valid = (
+            self._neuron_clusters is not None
+            and getattr(self._neuron_clusters, "bmu_cluster_labels", None) is not None
+            and len(self._neuron_clusters.bmu_cluster_labels) == len(timeline_df)
+        )
+        if not valid:
+            return None, {}
+
+        base_series_raw = pd.Series(
+            self._neuron_clusters.bmu_cluster_labels,
+            index=timeline_df.index,
+            dtype=float,
+        )
+        base_series = pd.to_numeric(base_series_raw, errors="coerce")
+
+        cluster_group_names: dict[int, str] = {}
+        try:
+            unique_cluster_ids = sorted({int(value) for value in base_series.dropna().tolist()})
+        except Exception:
+            unique_cluster_ids = []
+
+        for cluster_id in unique_cluster_ids:
+            custom = self._view_model.get_cluster_name(cluster_id).strip()
+            cluster_group_names[int(cluster_id)] = custom or f"{tr('Cluster')} {cluster_id}"
+
+        return base_series, cluster_group_names
+
+
+    def _timeline_hover_group_dataframe(
+        self,
+        timeline_df: pd.DataFrame,
+        times: pd.Series,
+        mask: pd.Series,
+    ) -> Optional[pd.DataFrame]:
+        cluster_display = timeline_df.get("cluster")
+        if cluster_display is None:
+            return None
+        try:
+            return pd.DataFrame(
+                {
+                    "t": pd.to_datetime(times[mask], errors="coerce"),
+                    "group": cluster_display[mask].to_numpy(),
+                }
             )
-            base_series = pd.to_numeric(base_series_raw, errors="coerce")
-            cluster_group_names: dict[int, str] = {}
-            try:
-                unique_cluster_ids = sorted(
-                    {
-                        int(value)
-                        for value in base_series.dropna().tolist()
-                    }
-                )
-            except Exception:
-                unique_cluster_ids = []
-            for cluster_id in unique_cluster_ids:
-                custom = self._view_model.get_cluster_name(cluster_id).strip()
-                cluster_group_names[int(cluster_id)] = custom or f"{tr('Cluster')} {cluster_id}"
+        except Exception:
+            logger.warning("Exception in _timeline_hover_group_dataframe", exc_info=True)
+            return None
+
+
+    def _timeline_prepare_overlay_columns(
+        self,
+        overlay_df: pd.DataFrame,
+        overlay_columns: list[str],
+    ) -> list[str]:
+        if overlay_df is None or overlay_df.empty:
+            return []
+
+        available_cols = [col for col in overlay_columns if col in overlay_df.columns]
+        if not available_cols:
+            available_cols = [col for col in overlay_df.columns if col != "t"]
+
+        return available_cols[: self._TIMELINE_OVERLAY_MAX_FEATURES]
+
+
+    def _timeline_scale_series_to_base(
+        self,
+        merged: pd.DataFrame,
+        *,
+        base_col_name: str,
+        columns_to_scale: list[str],
+    ) -> pd.DataFrame:
+        if merged.empty or not columns_to_scale or base_col_name not in merged.columns:
+            return merged
+
+        out = merged.copy()
+
+        base_numeric = pd.to_numeric(out[base_col_name], errors="coerce")
+        finite_base = base_numeric.replace([np.inf, -np.inf], np.nan).dropna()
+
+        if finite_base.empty:
+            base_min = 0.0
+            base_max = 1.0
         else:
+            base_min = float(finite_base.min())
+            base_max = float(finite_base.max())
+
+        if not np.isfinite(base_min):
+            base_min = 0.0
+        if not np.isfinite(base_max):
+            base_max = base_min + 1.0
+
+        base_range = base_max - base_min
+        if not np.isfinite(base_range) or base_range == 0.0:
+            base_range = 1.0
+
+        for col in columns_to_scale:
+            if col not in out.columns:
+                continue
+
+            numeric = pd.to_numeric(out[col], errors="coerce")
+            finite = numeric.replace([np.inf, -np.inf], np.nan).dropna()
+            if finite.empty:
+                scaled = pd.Series(np.nan, index=out.index, dtype=float)
+            else:
+                vmin = float(finite.min())
+                vmax = float(finite.max())
+                if not np.isfinite(vmin):
+                    vmin = 0.0
+                if not np.isfinite(vmax):
+                    vmax = vmin + 1.0
+                denom = vmax - vmin
+                if not np.isfinite(denom) or denom == 0.0:
+                    denom = 1.0
+                scaled = (numeric - vmin) / denom * base_range + base_min
+
+            out[f"{col} (scaled)"] = scaled
+
+        return out
+
+
+    def _timeline_finalize_chart_dataframe(self, chart_df: pd.DataFrame) -> pd.DataFrame:
+        if chart_df is None or chart_df.empty:
+            return pd.DataFrame()
+        out = chart_df.copy()
+        out["t"] = pd.to_datetime(out["t"], errors="coerce")
+        out = out.dropna(subset=["t"]).sort_values("t").reset_index(drop=True)
+        return out
+
+
+    def _update_timeline_chart(self, timeline_df: Optional[pd.DataFrame] = None) -> None:
+        if timeline_df is None:
+            timeline_df = self._timeline_dataframe()
+        if timeline_df is None or timeline_df.empty:
+            self.timeline_chart.clear()
+            return
+
+        selected_options = set(self._view_model.timeline_display_selected())
+        show_cluster = "cluster" in selected_options
+        show_bmu = "bmu" in selected_options
+        show_features = self._view_model.timeline_overlay_enabled()
+
+        if not selected_options:
+            self.timeline_chart.clear()
+            return
+
+        times = self._timeline_timeseries(timeline_df)
+        bmu_numeric_all = self._timeline_bmu_series(timeline_df)
+
+        cluster_series: Optional[pd.Series] = None
+        cluster_group_names: dict[int, str] = {}
+        if show_cluster:
+            cluster_series, cluster_group_names = self._timeline_cluster_series(timeline_df)
+            if cluster_series is None:
+                selected = [key for key in self._view_model.timeline_display_selected() if key != "cluster"]
+                if not selected:
+                    if show_bmu:
+                        selected = ["bmu"]
+                    elif show_features:
+                        selected = ["selected_features"]
+                    else:
+                        selected = ["bmu"]
+                self._view_model.set_timeline_display_options(selected=selected)
+                show_cluster = False
+
+        overlay_df = pd.DataFrame()
+        overlay_columns: list[str] = []
+        if show_features:
+            overlay_df, overlay_columns = self._timeline_overlay_dataframe()
+
+        # Case 1: selected features only
+        if not show_cluster and not show_bmu:
+            available_cols = self._timeline_prepare_overlay_columns(overlay_df, overlay_columns)
+            if overlay_df is None or overlay_df.empty or not available_cols or "t" not in overlay_df.columns:
+                self.timeline_chart.clear()
+                return
+
+            chart_df = overlay_df.loc[:, ["t", *available_cols]].copy()
+            chart_df["t"] = self._coerce_utc_naive_timestamps(chart_df["t"])
+            for col in available_cols:
+                chart_df[col] = pd.to_numeric(chart_df[col], errors="coerce")
+
+            chart_df = self._timeline_finalize_chart_dataframe(chart_df)
+            if chart_df.empty:
+                self.timeline_chart.clear()
+                return
+
+            try:
+                visible_series = [col for col in chart_df.columns if col != "t"]
+                self.timeline_chart.set_max_series(max(1, len(visible_series)))
+            except Exception:
+                logger.warning("Exception in _update_timeline_chart", exc_info=True)
+
+            self.timeline_chart.set_dataframe(chart_df)
+            self.timeline_chart.set_hover_group_series(None)
+            return
+
+        # Case 2: cluster is the base series
+        if show_cluster and cluster_series is not None:
+            base_col_name = tr("Cluster")
+            base_series = cluster_series
+            mode = "cluster"
+        else:
+            # Case 3: bmu is the base series
             base_col_name = tr("BMU")
             base_series = bmu_numeric_all
-            cluster_group_names = {}
+            mode = "bmu"
 
         base_numeric = pd.to_numeric(base_series, errors="coerce")
         mask = times.notna() & base_numeric.notna()
-        if not mask.any():
+        if not bool(mask.any()):
             self.timeline_chart.clear()
             return
 
@@ -1806,85 +1969,39 @@ class SomTab(TabWidget):
                 base_col_name: base_numeric[mask].to_numpy(dtype=float),
             }
         )
-        hover_group_df: Optional[pd.DataFrame] = None
-        cluster_display = timeline_df.get("cluster")
-        if cluster_display is not None:
-            try:
-                hover_group_df = pd.DataFrame(
-                    {
-                        "t": pd.to_datetime(times[mask], errors="coerce"),
-                        "group": cluster_display[mask].to_numpy(),
-                    }
-                )
-            except Exception:
-                logger.warning("Exception in _update_timeline_chart", exc_info=True)
-                hover_group_df = None
+        hover_group_df = self._timeline_hover_group_dataframe(timeline_df, times, mask)
 
-        overlay_df = pd.DataFrame()
-        overlay_columns: list[str] = []
         extra_overlay_cols: list[str] = []
-        if show_cluster and show_bmu:
+
+        # BMU overlay is only added when cluster is base and BMU is also selected
+        if mode == "cluster" and show_bmu:
             bmu_overlay_col = tr("BMU")
             chart_df[bmu_overlay_col] = bmu_numeric_all[mask].to_numpy(dtype=float)
             extra_overlay_cols.append(bmu_overlay_col)
-        if self._view_model.timeline_overlay_enabled():
-            overlay_df, overlay_columns = self._timeline_overlay_dataframe()
 
-        if (overlay_df is not None and not overlay_df.empty) or extra_overlay_cols:
-            available_cols = [col for col in overlay_columns if col in overlay_df.columns]
-            if not available_cols:
-                available_cols = (
-                    [col for col in overlay_df.columns if col != "t"][: self._TIMELINE_OVERLAY_MAX_FEATURES]
-                    if overlay_df is not None and not overlay_df.empty
-                    else []
-                )
-            else:
-                available_cols = available_cols[: self._TIMELINE_OVERLAY_MAX_FEATURES]
+        available_overlay_cols = self._timeline_prepare_overlay_columns(overlay_df, overlay_columns)
+        scale_input_cols = list(dict.fromkeys([*available_overlay_cols, *extra_overlay_cols]))
 
-            scale_input_cols = list(dict.fromkeys([*available_cols, *extra_overlay_cols]))
+        if scale_input_cols:
+            merged = chart_df.copy()
 
-            if scale_input_cols:
-                merged = chart_df.copy()
-                if overlay_df is not None and not overlay_df.empty and available_cols:
-                    merged = self._merge_timeline_overlay(merged, overlay_df, available_cols)
+            if overlay_df is not None and not overlay_df.empty and available_overlay_cols:
+                merged = self._merge_timeline_overlay(merged, overlay_df, available_overlay_cols)
 
-                base_vals = merged[base_col_name].to_numpy(dtype=float)
-                if base_vals.size:
-                    base_min = float(np.nanmin(base_vals))
-                    base_max = float(np.nanmax(base_vals))
-                else:
-                    base_min, base_max = 0.0, 1.0
-                if not np.isfinite(base_min):
-                    base_min = 0.0
-                if not np.isfinite(base_max):
-                    base_max = base_min + 1.0
-                base_range = base_max - base_min
-                if not np.isfinite(base_range) or base_range == 0.0:
-                    base_range = 1.0
+            merged = self._timeline_scale_series_to_base(
+                merged,
+                base_col_name=base_col_name,
+                columns_to_scale=scale_input_cols,
+            )
 
-                for col in scale_input_cols:
-                    numeric = pd.to_numeric(merged[col], errors="coerce")
-                    finite = numeric.replace([np.inf, -np.inf], np.nan).dropna()
-                    if finite.empty:
-                        scaled = pd.Series(np.nan, index=merged.index)
-                    else:
-                        vmin = float(finite.min())
-                        vmax = float(finite.max())
-                        if not np.isfinite(vmin):
-                            vmin = 0.0
-                        if not np.isfinite(vmax):
-                            vmax = vmin + 1.0
-                        denom = vmax - vmin
-                        if denom == 0.0:
-                            denom = 1.0
-                        scaled = (numeric - vmin) / denom * base_range + base_min
-                    merged[f"{col} (scaled)"] = scaled
+            merged = merged.drop(columns=[col for col in scale_input_cols if col in merged.columns])
+            chart_df = merged
 
-                merged = merged.drop(columns=scale_input_cols)
-                chart_df = merged
+        chart_df = self._timeline_finalize_chart_dataframe(chart_df)
+        if chart_df.empty:
+            self.timeline_chart.clear()
+            return
 
-        chart_df = chart_df.sort_values("t")
-        chart_df = chart_df.dropna(subset=["t"]).reset_index(drop=True)
         try:
             visible_series = [col for col in chart_df.columns if col != "t"]
             self.timeline_chart.set_max_series(max(1, len(visible_series)))
@@ -1893,7 +2010,9 @@ class SomTab(TabWidget):
 
         if mode == "cluster":
             overlay_scaled_cols = [
-                col for col in chart_df.columns if col not in {"t", base_col_name} and col.endswith("(scaled)")
+                col
+                for col in chart_df.columns
+                if col not in {"t", base_col_name} and col.endswith("(scaled)")
             ]
             self.timeline_chart.set_group_timeline(
                 chart_df,
