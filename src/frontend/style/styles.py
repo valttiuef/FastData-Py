@@ -2,6 +2,7 @@
 from __future__ import annotations
 import logging
 from typing import Optional
+from pathlib import Path
 
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QApplication
@@ -209,24 +210,33 @@ def _build_palette(theme_colors: dict[str, str]) -> QPalette:
 
     return palette
 
+def _load_stylesheet_with_paths(qss_path: Path) -> str:
+    raw = qss_path.read_text(encoding="utf-8")
+
+    style_dir = qss_path.parent.resolve().as_posix()
+    raw = raw.replace("$__STYLE_DIR__", style_dir)
+
+    return raw
 
 def apply_theme(app: QApplication, theme: str) -> None:
     if theme not in THEMES:
         raise ValueError(f"Unknown theme '{theme}'")
+
     palette = _build_palette(THEMES[theme])
     app.setPalette(palette)
+
     qss_rel_path = THEME_STYLESHEETS.get(theme)
     if not qss_rel_path:
         return
+
     try:
         p = get_resource_path(qss_rel_path)
         if p.exists():
             cache_key = str(p.resolve())
             raw = _QSS_TEMPLATE_CACHE.get(cache_key)
             if raw is None:
-                raw = p.read_text(encoding="utf-8")
+                raw = _load_stylesheet_with_paths(p)
                 _QSS_TEMPLATE_CACHE[cache_key] = raw
             app.setStyleSheet(raw)
     except Exception:
-        # Best-effort: ignore stylesheet failures and keep palette
         logger.warning("Exception in apply_theme", exc_info=True)

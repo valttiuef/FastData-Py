@@ -36,7 +36,7 @@ QCheckBox::indicator:checked,
 QAbstractItemView::indicator:checked {
     background: transparent;
     border: 1px solid #d5d5d5;
-    image: url(resources/style/checkbox_checkmark.svg);
+    image: url($__STYLE_DIR__/checkbox_checkmark.svg);
 }
 
 QCheckBox::indicator:unchecked,
