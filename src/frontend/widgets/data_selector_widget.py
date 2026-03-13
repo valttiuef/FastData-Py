@@ -257,7 +257,7 @@ class DataSelectorViewModel(QObject):
         if self._initial_selection_apply_pending:
             self._initial_selection_apply_pending = False
             try:
-                self._apply_selection_state_to_widget()
+                self._apply_selection_state_to_widget(reload_features=True)
             except Exception:
                 logger.warning("Exception in _apply_selection_state_after_filters_refresh", exc_info=True)
             return
@@ -278,7 +278,7 @@ class DataSelectorViewModel(QObject):
         self._widget.end_feature_reload_batch(trigger_reload=bool(trigger_feature_reload))
         self._widget.end_data_requirements_batch()
 
-    def _apply_selection_state_to_widget(self) -> None:
+    def _apply_selection_state_to_widget(self, *, reload_features: bool = False) -> None:
         model = self._data_model
         if model is None:
             return
@@ -290,6 +290,7 @@ class DataSelectorViewModel(QObject):
             preprocessing_state = dict(getattr(model, "selection_preprocessing", {}) or {})
         except Exception:
             preprocessing_state = {}
+
         filters_widget = self._widget.filters_widget
         if filters_widget is not None and filters_state:
             filters_state = self._sanitize_loaded_scope_filters(
@@ -304,7 +305,7 @@ class DataSelectorViewModel(QObject):
                     "filters": filters_state,
                     "preprocessing": preprocessing_state,
                 },
-                reload_features=False,
+                reload_features=reload_features,
             )
         except Exception:
             logger.warning("Exception in _apply_selection_state_to_widget", exc_info=True)

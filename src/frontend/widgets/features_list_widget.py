@@ -383,7 +383,6 @@ class FeaturesListWidget(QGroupBox):
         )
         self._view_model.features_loaded.connect(self._apply_dataframe)
         self._view_model.load_failed.connect(self._log_failure)
-        self._view_model.reload_features()
 
     # ------------------------------------------------------------------
     @property
