@@ -259,25 +259,13 @@ class SelectionsTab(TabWidget):
             payload = SelectionSettingsPayload.from_dict(payload if isinstance(payload, dict) else {})
             if not record:
                 payload = _default_selection_payload()
+
         self._current_payload = payload
         self._select_all_default = not bool(record and record.get("id")) or not payload.selections_enabled()
+
         self._view_model.set_apply_scope_filters(payload.filters_enabled())
         self._table_model.apply_selection(payload, select_all_by_default=self._select_all_default)
-        current_selector_settings = self.sidebar.get_selection_settings()
-        self.sidebar.apply_selection_settings(
-            {
-                "preprocessing": (
-                    dict(payload.preprocessing or {})
-                    if payload.preprocessing_enabled()
-                    else dict(current_selector_settings.get("preprocessing") or {})
-                ),
-                "filters": (
-                    dict(payload.filters or {})
-                    if payload.filters_enabled()
-                    else dict(current_selector_settings.get("filters") or {})
-                ),
-            }
-        )
+
         name = record.get("name") if record else ""
         notes = record.get("notes") if record else ""
         self.sidebar.set_setting_name(name or "")
@@ -287,14 +275,23 @@ class SelectionsTab(TabWidget):
             include_filters=payload.filters_enabled(),
             include_preprocessing=payload.preprocessing_enabled(),
         )
-        self._on_scope_filters_changed()
+
         target_id = record.get("id") if record else None
         self._select_setting_in_list(target_id)
-        # Keep the built-in default setting non-restrictive in the active model.
-        # Its options are used as save defaults, not as an empty "select nothing" filter.
+
+        # Important:
+        # Do not apply settings directly to the sidebar DataSelector here.
+        # That causes the selections-tab widget to update twice:
+        #   1) local direct apply
+        #   2) global apply via DatabaseModel.selection_state_changed
+        #
+        # The shared/global path must be the single source of truth so every
+        # DataSelectorWidget updates the same way.
         payload_to_apply = payload if (record and record.get("id")) else None
         self._apply_active_selection_payload(payload_to_apply)
+
         self._queue_group_filter_refresh()
+
         if self._pending_toast_action == "activate_setting":
             self._pending_toast_action = None
             try:

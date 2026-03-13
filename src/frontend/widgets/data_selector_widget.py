@@ -224,22 +224,26 @@ class DataSelectorViewModel(QObject):
             self._apply_selection_state_after_filters_refresh()
 
     def _apply_selection_state_after_filters_refresh(self) -> None:
-        if self._initial_filters_refresh_pending and not self._selection_refresh_pending:
+        # Normal refresh path: filter options were refreshed, but we are not in the
+        # middle of applying a saved selection state. Notify the widget once.
+        if not self._selection_refresh_pending:
             self._initial_filters_refresh_pending = False
             self._widget._on_filters_changed()
             return
-        if not self._selection_refresh_pending:
-            return
+
+        self._initial_filters_refresh_pending = False
         self._apply_selection_state_to_widget()
+
         if self._widget.features_widget is None:
             self._finish_selection_refresh(trigger_feature_reload=False)
             return
+
         if self._widget.features_widget.use_selection_filter:
-            # Selection-filtered lists still need one final scope-filter apply
-            # after loading settings, otherwise system/dataset/tag constraints
-            # can remain stale while data-fetch filters are already updated.
+            # Let the batched feature-scope refresh happen once after the saved
+            # filter state has been restored.
             self._finish_selection_refresh(trigger_feature_reload=True)
             return
+
         try:
             self._selection_refresh_waiting_features_reload = True
             self._widget.features_widget.reload_features()
@@ -1014,15 +1018,12 @@ class DataSelectorWidget(QGroupBox):
             layout.addWidget(self.features_widget, 1)
             self.features_widget.details_requested.connect(self._show_features_info_dialog)
 
-        # Wire inner widget signals to the composite signals
         if self.preprocessing_widget is not None:
             self.preprocessing_widget.parameters_changed.connect(self._on_preprocessing_changed)
+
         if self.filters_widget is not None:
             self.filters_widget.filters_changed.connect(self._on_filters_changed)
-            # @ai(gpt-5, codex-cli, fix, 2026-03-12)
-            # Refreshes can update selected scope values without emitting
-            # filters_changed (combos are updated with signals blocked).
-            self.filters_widget.filters_refreshed.connect(self._on_filters_changed)
+
         if self.features_widget is not None:
             self.features_widget.selection_changed.connect(self._on_features_selection_changed)
 
@@ -1053,24 +1054,44 @@ class DataSelectorWidget(QGroupBox):
             reload=True,
         )
 
-    # @ai(gpt-5, codex, fix, 2026-03-10)
     def _on_filters_changed(self, *_args) -> None:
-        """Handle all filter changes - emit signals and update data requirements."""
+        """Handle all filter changes.
+
+        - Refresh feature list when feature-scope filters changed.
+        - Emit full filters_changed whenever the actual filter state changed.
+        - Emit data requirements only when data-reload scope changed.
+        """
         if self.filters_widget is None:
-            self.filters_changed.emit({})
+            state: dict[str, Any] = {}
+            full_state_key = DataSelectorWidget._full_filter_state_key(state)
+            previous_full_key = getattr(self, "_last_filters_state_key", None)
+            if full_state_key != previous_full_key:
+                self._last_filters_state_key = full_state_key
+                self.filters_changed.emit(state)
             self._emit_data_requirements()
             return
+
         state = self.filters_widget.filter_state()
+        full_state_key = DataSelectorWidget._full_filter_state_key(state)
+        feature_state_key = DataSelectorWidget._feature_state_key(state)
         data_scope = self._data_reload_filter_state(state)
         data_state_key = DataSelectorWidget._data_state_key(data_scope)
-        feature_state_key = DataSelectorWidget._feature_state_key(state)
+
+        previous_full_key = getattr(self, "_last_filters_state_key", None)
+        full_changed = full_state_key != previous_full_key
+        feature_changed = feature_state_key != self._last_feature_filters_state_key
         data_changed = data_state_key != self._last_data_filters_state_key
-        if feature_state_key != self._last_feature_filters_state_key:
+
+        if feature_changed:
             self._last_feature_filters_state_key = feature_state_key
             self._on_feature_affecting_filters_changed()
+
+        if full_changed:
+            self._last_filters_state_key = full_state_key
+            self.filters_changed.emit(state)
+
         if data_changed:
             self._last_data_filters_state_key = data_state_key
-            self.filters_changed.emit(state)
             self._emit_data_requirements()
 
     @staticmethod
@@ -1081,12 +1102,26 @@ class DataSelectorWidget(QGroupBox):
             tuple(state.get("import_ids") or []),
             tuple(state.get("tags") or []),
         )
+    
+    @staticmethod
+    def _full_filter_state_key(state: Mapping[str, Any]) -> tuple:
+        return (
+            state.get("start"),
+            state.get("end"),
+            tuple(state.get("systems") or []),
+            tuple(state.get("datasets") or []),
+            tuple(state.get("import_ids") or []),
+            tuple(state.get("months") or []),
+            tuple(state.get("group_ids") or []),
+            tuple(state.get("tags") or []),
+        )
 
     @staticmethod
     def _data_state_key(data_scope: Mapping[str, Any]) -> tuple:
         return (
             data_scope.get("start"),
             data_scope.get("end"),
+            tuple(data_scope.get("systems") or []),
             tuple(data_scope.get("datasets") or []),
             tuple(data_scope.get("import_ids") or []),
             tuple(data_scope.get("months") or []),
@@ -1118,24 +1153,34 @@ class DataSelectorWidget(QGroupBox):
 
     def _data_reload_filter_state(self, filters: Mapping[str, Any] | None) -> dict[str, Any]:
         state = dict(filters or {})
+        systems: list[str] = []
         datasets: list[str] = []
         import_ids: list[int] = []
+
         if self.filters_widget is not None:
+            try:
+                systems = list(self.filters_widget.selected_systems())
+            except Exception:
+                systems = list(state.get("systems") or [])
+
             try:
                 datasets = list(self.filters_widget.selected_datasets_for_data_scope())
             except Exception:
                 datasets = list(state.get("datasets") or [])
+
             try:
                 import_ids = list(self.filters_widget.selected_import_ids_for_data_scope())
             except Exception:
                 import_ids = list(state.get("import_ids") or [])
         else:
+            systems = list(state.get("systems") or [])
             datasets = list(state.get("datasets") or [])
             import_ids = list(state.get("import_ids") or [])
-        # Keep reload key scoped to filters that must change fetched data.
+
         return {
             "start": state.get("start"),
             "end": state.get("end"),
+            "systems": systems,
             "datasets": datasets,
             "import_ids": import_ids,
             "months": list(state.get("months") or []),

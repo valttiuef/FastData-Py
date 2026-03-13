@@ -58,7 +58,6 @@ class FiltersWidgetViewModel(QObject):
             self._model.features_list_changed.connect(self._on_features_changed)
             self._model.groups_changed.connect(self._on_groups_changed)
 
-    # @ai(gpt-5, codex, refactor, 2026-03-11)
     def refresh_filters(
         self,
         *,
@@ -67,58 +66,6 @@ class FiltersWidgetViewModel(QObject):
         import_ids: Optional[list[int]] = None,
     ) -> None:
         model = self._model
-
-        def _load():
-            systems: Iterable[str] = []
-            datasets: list[tuple[str, str]] = []
-            groups = pd.DataFrame(columns=["group_id", "kind", "label"])
-            tags: Iterable[str] = []
-            imports: Iterable[tuple[str, int]] = []
-            if model is not None:
-                try:
-                    systems = model.list_systems()
-                except Exception:
-                    systems = []
-                try:
-                    datasets = self.datasets_for_systems(systems_scope)
-                except Exception:
-                    datasets = []
-                try:
-                    groups = model.groups_df(
-                        systems=systems_scope,
-                        datasets=datasets_scope,
-                        import_ids=import_ids_scope,
-                    )
-                except Exception:
-                    groups = pd.DataFrame(columns=["group_id", "kind", "label"])
-                try:
-                    tags = model.list_feature_tags(
-                        systems=systems_scope,
-                        datasets=datasets_scope,
-                        import_ids=import_ids_scope,
-                    )
-                except Exception:
-                    tags = []
-                try:
-                    imports = model.list_imports()
-                except Exception:
-                    imports = []
-            payload = {
-                "systems": [(str(name), str(name)) for name in systems],
-                "datasets": list(datasets),
-                "groups": groups,
-                "tags": [(str(tag), str(tag)) for tag in tags],
-                "imports": [(str(label), int(import_id)) for label, import_id in imports],
-            }
-            return payload
-
-        def _apply(payload) -> None:
-            self.systems_updated.emit(payload["systems"])
-            self.datasets_updated.emit(payload["datasets"])
-            self.groups_updated.emit(payload["groups"])
-            self.tags_updated.emit(payload["tags"])
-            self.imports_updated.emit(payload["imports"])
-            self.filters_refreshed.emit()
 
         systems_scope = (
             [str(item).strip() for item in (systems or []) if str(item).strip()]
@@ -135,6 +82,66 @@ class FiltersWidgetViewModel(QObject):
             if import_ids is not None
             else None
         )
+
+        def _load():
+            systems_items: Iterable[str] = []
+            datasets_items: list[tuple[str, str]] = []
+            groups = pd.DataFrame(columns=["group_id", "kind", "label"])
+            tags: Iterable[str] = []
+            imports_items: list[tuple[str, int]] = []
+
+            if model is not None:
+                try:
+                    systems_items = model.list_systems()
+                except Exception:
+                    systems_items = []
+
+                try:
+                    datasets_items = self.datasets_for_systems(systems_scope)
+                except Exception:
+                    datasets_items = []
+
+                try:
+                    groups = model.groups_df(
+                        systems=systems_scope,
+                        datasets=datasets_scope,
+                        import_ids=import_ids_scope,
+                    )
+                except Exception:
+                    groups = pd.DataFrame(columns=["group_id", "kind", "label"])
+
+                try:
+                    tags = model.list_feature_tags(
+                        systems=systems_scope,
+                        datasets=datasets_scope,
+                        import_ids=import_ids_scope,
+                    )
+                except Exception:
+                    tags = []
+
+                try:
+                    imports_items = self.imports_for_filters(
+                        systems_scope,
+                        datasets_scope,
+                    )
+                except Exception:
+                    imports_items = []
+
+            return {
+                "systems": [(str(name), str(name)) for name in systems_items],
+                "datasets": list(datasets_items),
+                "groups": groups,
+                "tags": [(str(tag), str(tag)) for tag in tags],
+                "imports": list(imports_items),
+            }
+
+        def _apply(payload) -> None:
+            self.systems_updated.emit(payload["systems"])
+            self.datasets_updated.emit(payload["datasets"])
+            self.groups_updated.emit(payload["groups"])
+            self.tags_updated.emit(payload["tags"])
+            self.imports_updated.emit(payload["imports"])
+            self.filters_refreshed.emit()
 
         run_in_thread(
             _load,
@@ -847,7 +854,6 @@ class FiltersWidget(CollapsibleSection):
             "start": start.isoformat() if start is not None else None,
             "end": end.isoformat() if end is not None else None,
             "systems": self.selected_systems(),
-            "Datasets": self.selected_datasets(),
             "datasets": self.selected_datasets(),
             "import_ids": self.selected_import_ids(),
             "months": self.selected_months(),
@@ -856,8 +862,10 @@ class FiltersWidget(CollapsibleSection):
         }
 
     def apply_filter_state(self, state: dict | None) -> None:
-        state = dict(state or {})
-        def _set_qdt(widget: QDateTimeEdit, value: str | None):
+        self._apply_filter_state_with_dependencies(dict(state or {}))
+
+    def _apply_filter_state_with_dependencies(self, state: dict[str, Any]) -> None:
+        def _set_qdt(widget: QDateTimeEdit, value: str | None) -> None:
             if not value:
                 return
             try:
@@ -870,29 +878,99 @@ class FiltersWidget(CollapsibleSection):
                 int(ts.microsecond / 1000),
             )
             was = widget.blockSignals(True)
-            widget.setDateTime(qdt)
-            widget.blockSignals(was)
+            try:
+                widget.setDateTime(qdt)
+            finally:
+                widget.blockSignals(was)
 
         _set_qdt(self.dt_from, state.get("start"))
         _set_qdt(self.dt_to, state.get("end"))
 
-        systems = self._state_values(state, "systems")
-        self._select_values_or_all(self.systems_combo, systems)
-        datasets = self._state_values(state, "datasets", legacy_key="Datasets")
-        self._select_values_or_all(self.datasets_combo, datasets)
-        import_ids = self._state_values(state, "import_ids")
-        self._select_int_values_or_all(self.imports_combo, import_ids)
-        months = state.get("months") or []
-        self.months_combo.set_selected_values(months)
-        groups = state.get("group_ids") or []
-        self.group_combo.set_selected_values(groups)
-        tags = state.get("tags") or []
-        self.tags_combo.set_selected_values(tags)
+        wanted_systems = [
+            str(v).strip()
+            for v in (self._state_values(state, "systems") or [])
+            if str(v).strip()
+        ]
+        wanted_datasets = [
+            str(v).strip()
+            for v in (self._state_values(state, "datasets", legacy_key="Datasets") or [])
+            if str(v).strip()
+        ]
+
+        wanted_import_ids: list[int] = []
+        for value in (self._state_values(state, "import_ids") or []):
+            try:
+                wanted_import_ids.append(int(value))
+            except Exception:
+                continue
+
+        wanted_months: list[int] = []
+        for value in (state.get("months") or []):
+            try:
+                wanted_months.append(int(value))
+            except Exception:
+                continue
+
+        wanted_group_ids: list[int] = []
+        for value in (state.get("group_ids") or []):
+            try:
+                wanted_group_ids.append(int(value))
+            except Exception:
+                continue
+
+        wanted_tags = [str(v) for v in (state.get("tags") or []) if str(v).strip()]
+
+        # 1) systems
+        self._select_values_or_all(self.systems_combo, wanted_systems)
+
+        # 2) datasets for selected systems
+        dataset_items = self._filters_view_model.datasets_for_systems(self.selected_systems())
+        self.set_datasets(dataset_items, check_all=True)
+        self._select_values_or_all(self.datasets_combo, wanted_datasets)
+
+        # 3) imports for selected systems + datasets
+        import_items = self._filters_view_model.imports_for_filters(
+            self.selected_systems(),
+            self.selected_datasets(),
+        )
+        self.set_imports(import_items, check_all=True)
+        self._select_int_values_or_all(self.imports_combo, wanted_import_ids)
+
+        # 4) groups + tags for full scope
+        self._filters_view_model.refresh_groups_and_tags_sync(
+            systems=self.selected_systems(),
+            datasets=self.selected_datasets(),
+            import_ids=self.selected_import_ids(),
+        )
+
+        # 5) restore months
+        self.months_combo.set_selected_values(wanted_months)
+
+        # 6) restore groups that still exist
+        available_group_ids: set[int] = set()
+        for value in self._all_combo_values(self.group_combo):
+            try:
+                parsed = int(value)
+            except Exception:
+                continue
+            if parsed > 0:
+                available_group_ids.add(parsed)
+        self.group_combo.set_selected_values(
+            [gid for gid in wanted_group_ids if gid in available_group_ids]
+        )
+
+        # 7) restore tags that still exist
+        available_tags = {str(v) for v in self._all_combo_values(self.tags_combo) if str(v).strip()}
+        self.tags_combo.set_selected_values(
+            [tag for tag in wanted_tags if tag in available_tags]
+        )
 
     def get_settings(self) -> dict:
         return self.filter_state()
 
     def set_settings(self, settings: dict | None) -> None:
+        state = dict(settings or {})
+
         widgets = [
             self,
             self.dt_from,
@@ -905,12 +983,24 @@ class FiltersWidget(CollapsibleSection):
             self.tags_combo,
         ]
         previous_states = [(widget, widget.blockSignals(True)) for widget in widgets]
+
+        self._begin_filters_batch()
         try:
-            self.apply_filter_state(settings or {})
+            self._apply_filter_state_with_dependencies(state)
         finally:
             for widget, was in reversed(previous_states):
                 widget.blockSignals(was)
-        self._emit_filter_change()
+            self._end_filters_batch()
+
+        self._emit_filter_change(
+            "date_range_changed",
+            "systems_changed",
+            "datasets_changed",
+            "imports_changed",
+            "months_changed",
+            "groups_changed",
+            "tags_changed",
+        )
 
     def _begin_filters_batch(self) -> None:
         self._filters_batch_depth += 1

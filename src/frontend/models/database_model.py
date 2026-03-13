@@ -3114,10 +3114,37 @@ class DatabaseModel(QObject):
             except Exception:
                 logger.warning("Exception in _normalize_filter_state", exc_info=True)
 
-        for key in ("systems", "Datasets"):
-            items = state.get(key)
-            if items:
-                normalized[key] = [str(item) for item in items if item not in (None, "")]
+        systems: list[str] = []
+        for item in state.get("systems", []) or []:
+            text = str(item).strip()
+            if text:
+                systems.append(text)
+        if systems:
+            normalized["systems"] = list(dict.fromkeys(systems))
+
+        # Support both legacy "Datasets" and current "datasets".
+        raw_datasets = state.get("datasets")
+        if raw_datasets is None:
+            raw_datasets = state.get("Datasets")
+
+        datasets: list[str] = []
+        for item in raw_datasets or []:
+            text = str(item).strip()
+            if text:
+                datasets.append(text)
+        if datasets:
+            deduped_datasets = list(dict.fromkeys(datasets))
+            normalized["datasets"] = deduped_datasets
+            normalized["Datasets"] = list(deduped_datasets)
+
+        import_ids: list[int] = []
+        for item in state.get("import_ids", []) or []:
+            try:
+                import_ids.append(int(item))
+            except Exception:
+                continue
+        if import_ids:
+            normalized["import_ids"] = list(dict.fromkeys(import_ids))
 
         gids: list[int] = []
         for item in state.get("group_ids", []) or []:
@@ -3126,7 +3153,7 @@ class DatabaseModel(QObject):
             except Exception:
                 continue
         if gids:
-            normalized["group_ids"] = gids
+            normalized["group_ids"] = list(dict.fromkeys(gids))
 
         months: list[int] = []
         for item in state.get("months", []) or []:
@@ -3137,15 +3164,15 @@ class DatabaseModel(QObject):
             if 1 <= month <= 12:
                 months.append(month)
         if months:
-            normalized["months"] = months
+            normalized["months"] = list(dict.fromkeys(months))
 
-        tags = []
+        tags: list[str] = []
         for item in state.get("tags", []) or []:
-            text = (str(item) or "").strip()
+            text = str(item).strip()
             if text:
                 tags.append(text)
         if tags:
-            normalized["tags"] = tags
+            normalized["tags"] = list(dict.fromkeys(tags))
 
         return normalized
 
