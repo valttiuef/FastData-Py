@@ -1,10 +1,7 @@
 $ISCC = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
 
-# @ai(gpt-5, codex, refactor, 2026-02-28)
-function Get-ChangelogSection {
+function Get-FullChangelog {
     param(
-        [Parameter(Mandatory = $true)]
-        [string]$Version,
         [Parameter(Mandatory = $true)]
         [string]$ChangelogPath
     )
@@ -14,27 +11,47 @@ function Get-ChangelogSection {
     }
 
     $content = Get-Content -Path $ChangelogPath -Raw
-    $escapedVersion = [regex]::Escape($Version)
-    $pattern = '(?ms)^##\s+\[' + $escapedVersion + '\]\s+-\s+.+?\r?\n([\s\S]*?)(?=^##\s+\[|\z)'
-    $match = [regex]::Match($content, $pattern)
-
-    if (-not $match.Success) {
+    if ([string]::IsNullOrWhiteSpace($content)) {
         return $null
     }
 
-    $section = $match.Groups[1].Value.Trim()
-    if ([string]::IsNullOrWhiteSpace($section)) {
+    # Keep only actual version sections that start with:
+    # ## [1.2.3] - 2026-02-28
+    $matches = [regex]::Matches(
+        $content,
+        '(?ms)^##\s+\[(.+?)\]\s+-\s+(.+?)\r?\n([\s\S]*?)(?=^##\s+\[|\z)'
+    )
+
+    if ($matches.Count -eq 0) {
         return $null
     }
 
-    return $section
+    $sections = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($match in $matches) {
+        $version = $match.Groups[1].Value.Trim()
+        $date = $match.Groups[2].Value.Trim()
+        $body = $match.Groups[3].Value.Trim()
+
+        if (-not [string]::IsNullOrWhiteSpace($body)) {
+            $sections.Add("## [$version] - $date")
+            $sections.Add($body)
+            $sections.Add("")
+        }
+    }
+
+    while ($sections.Count -gt 0 -and [string]::IsNullOrWhiteSpace($sections[$sections.Count - 1])) {
+        $sections.RemoveAt($sections.Count - 1)
+    }
+
+    return $sections -join [Environment]::NewLine
 }
 
-# @ai(gpt-5, codex, refactor, 2026-02-28)
 function Convert-ChangelogToInstallerText {
     param(
         [Parameter(Mandatory = $true)]
         [string]$Version,
+
         [Parameter(Mandatory = $false)]
         [string]$SectionMarkdown
     )
@@ -43,7 +60,7 @@ function Convert-ChangelogToInstallerText {
         return @(
             "FastData v$Version - What's New",
             "",
-            "No change log notes were found for this version."
+            "No change log notes were found."
         ) -join [Environment]::NewLine
     }
 
@@ -54,6 +71,7 @@ function Convert-ChangelogToInstallerText {
 
     foreach ($line in $lines) {
         $trimmed = $line.Trim()
+
         if ([string]::IsNullOrWhiteSpace($trimmed)) {
             if ($output.Count -gt 0 -and $output[$output.Count - 1] -ne '') {
                 $output.Add('')
@@ -61,6 +79,16 @@ function Convert-ChangelogToInstallerText {
             continue
         }
 
+        # Version heading: ## [1.2.3] - 2026-02-28
+        if ($trimmed -match '^##\s+\[(.+?)\]\s+-\s+(.+)$') {
+            if ($output.Count -gt 0 -and $output[$output.Count - 1] -ne '') {
+                $output.Add('')
+            }
+            $output.Add("Version $($Matches[1].Trim()) - $($Matches[2].Trim())")
+            continue
+        }
+
+        # Section heading: ### Added
         if ($trimmed -match '^###\s+(.+)$') {
             if ($output.Count -gt 0 -and $output[$output.Count - 1] -ne '') {
                 $output.Add('')
@@ -69,6 +97,7 @@ function Convert-ChangelogToInstallerText {
             continue
         }
 
+        # Bullet point
         if ($trimmed -match '^-\s+(.+)$') {
             $output.Add('- ' + $Matches[1].Trim())
             continue
@@ -102,10 +131,12 @@ if ([string]::IsNullOrWhiteSpace($version)) {
     exit 1
 }
 
-$changelogSection = Get-ChangelogSection -Version $version -ChangelogPath ".\CHANGELOG.md"
-$installerNotes = Convert-ChangelogToInstallerText -Version $version -SectionMarkdown $changelogSection
+$fullChangelog = Get-FullChangelog -ChangelogPath ".\CHANGELOG.md"
+$installerNotes = Convert-ChangelogToInstallerText -Version $version -SectionMarkdown $fullChangelog
+
 $changelogOutputPath = ".\scripts\installer-changelog.txt"
 Set-Content -Path $changelogOutputPath -Value $installerNotes -Encoding utf8
+
 Write-Host "Installer changelog prepared at $changelogOutputPath" -ForegroundColor Green
 
 & $ISCC .\scripts\FastDataSetup.iss
