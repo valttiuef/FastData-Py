@@ -893,7 +893,13 @@ class RegressionSidebar(SidebarWidget):
     def _payload_label(self, payload: dict) -> str:
         if not isinstance(payload, dict):
             return tr("Feature")
-        return display_name(payload)
+
+        # For combo summaries, we should not include feature notes (they belong in the
+        # dedicated feature list column / preview panel). Drop notes so they don't appear
+        # in the generated display name.
+        payload_copy = dict(payload)
+        payload_copy.pop("notes", None)
+        return display_name(payload_copy)
 
     # ------------------------------------------------------------------
     def payload_label(self, payload: dict) -> str:
