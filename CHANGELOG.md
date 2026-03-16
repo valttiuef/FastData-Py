@@ -4,6 +4,9 @@ All notable end-user changes are documented in this file.
 
 The format is based on Keep a Changelog, with entries grouped by release.
 
+## [0.2.1] - 2026-03-16
+- Fix issues with icons + small styling changes
+
 ## [0.2.0] - 2026-03-13
 
 ### Added

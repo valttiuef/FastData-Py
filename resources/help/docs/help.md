@@ -2,7 +2,7 @@
 
 Context-sensitive help entries for FastData application
 
-Updated: 2026-03-13
+Updated: 2026-03-16
 
 Version: 2
 
