@@ -1,5 +1,6 @@
 from __future__ import annotations
 import logging
+import time
 
 logger = logging.getLogger(__name__)
 # frontend/data_tab/monthly_chart.py
@@ -97,6 +98,11 @@ class MonthlyBarChart(GroupBarChart):
         self._multi_categories: list[str] = []
         self._multi_category_bounds: dict[str, tuple[pd.Timestamp, pd.Timestamp]] = {}
         self._multi_current_agg: pd.DataFrame | None = None
+        self._multi_pressed_bucket_index: int | None = None
+        self._multi_base_colors: list[QColor] = []
+        self._multi_hover_index: int | None = None
+        self._multi_last_emit_index: int | None = None
+        self._multi_last_emit_at: float = 0.0
 
         # Visual overlays
         self._hover_item = QGraphicsRectItem(self.chart)
@@ -121,7 +127,11 @@ class MonthlyBarChart(GroupBarChart):
         self._single_click_timer.setSingleShot(True)
         self._single_click_timer.timeout.connect(self._commit_pending_single_click)
         self._connect_hover_signals()
+        self._native_mouse_move_event = self.view.mouseMoveEvent
+        self._native_mouse_release_event = self.view.mouseReleaseEvent
         self.view.mousePressEvent = self._mouse_press_wrapper(self._native_mouse_press_event)
+        self.view.mouseMoveEvent = self._mouse_move_wrapper(self._native_mouse_move_event)
+        self.view.mouseReleaseEvent = self._mouse_release_wrapper(self._native_mouse_release_event)
         self.view.mouseDoubleClickEvent = self._mouse_double_click_wrapper(self._native_mouse_double_click_event)
         self._reset_button = QToolButton(self)
         self._reset_button.setObjectName("chartResetButton")
@@ -292,6 +302,11 @@ class MonthlyBarChart(GroupBarChart):
         self._multi_categories = []
         self._multi_category_bounds = {}
         self._multi_current_agg = None
+        self._multi_pressed_bucket_index = None
+        self._multi_base_colors = []
+        self._multi_hover_index = None
+        self._multi_last_emit_index = None
+        self._multi_last_emit_at = 0.0
         self._set_chart_cursor(Qt.CursorShape.ArrowCursor)
         try:
             QToolTip.hideText()
@@ -541,16 +556,6 @@ class MonthlyBarChart(GroupBarChart):
         if agg is None or agg.empty:
             self.clear()
             return
-
-        bounds = (
-            agg.groupby("label")[["start_ts", "end_ts"]]
-            .agg({"start_ts": "min", "end_ts": "max"})
-        )
-        self._multi_category_bounds = {
-            label: (pd.Timestamp(row["start_ts"]), pd.Timestamp(row["end_ts"]))
-            for label, row in bounds.iterrows()
-        }
-
         self._render_multi_bars(agg)
 
     def _aggregate_multi(self, df: pd.DataFrame, level_code: str) -> pd.DataFrame:
@@ -583,6 +588,14 @@ class MonthlyBarChart(GroupBarChart):
             categories_df = agg[["label", "start_ts"]].drop_duplicates().sort_values("start_ts")
             categories = categories_df["label"].tolist()
             self._multi_categories = categories
+            bounds = (
+                agg.groupby("label")[["start_ts", "end_ts"]]
+                .agg({"start_ts": "min", "end_ts": "max"})
+            )
+            self._multi_category_bounds = {
+                label: (pd.Timestamp(row["start_ts"]), pd.Timestamp(row["end_ts"]))
+                for label, row in bounds.iterrows()
+            }
 
             pivot = (
                 agg.pivot(index="label", columns="feature", values="value")
@@ -595,15 +608,16 @@ class MonthlyBarChart(GroupBarChart):
 
             features = list(pivot.columns)
             colors = self._multi_bar_colors(len(features))
+            self._multi_base_colors = [QColor(c) for c in colors]
             self.chart.legend().setVisible(True)
 
-            for idx, (feature, color) in enumerate(zip(features, colors)):
+            for feature, color in zip(features, colors):
                 bar_set = QBarSet(_short_label(str(feature)))
                 values = pivot[feature].tolist()
                 bar_set.append(values)
                 bar_set.setBrush(QBrush(color))
                 bar_set.setPen(QPen(QColor(color).darker(110)))
-                # New QBarSet instances are fresh; directly connect the click handler.
+                # Keep native bar click routing as an additional fallback path.
                 bar_set.clicked.connect(self._on_multi_bar_clicked_factory(feature))
                 bar_set.hovered.connect(self._on_multi_bar_hovered_factory(feature, values))
                 self.series.append(bar_set)
@@ -625,6 +639,7 @@ class MonthlyBarChart(GroupBarChart):
             # disable hover overlay in multi-mode
             self._series_hover_supported = False
             self._hover_item.setVisible(False)
+            self._multi_hover_index = None
         finally:
             self.view.setUpdatesEnabled(updates_enabled)
             self.chart.update()
@@ -633,14 +648,14 @@ class MonthlyBarChart(GroupBarChart):
     def _on_multi_bar_hovered_factory(self, feature: str, values: list[float]):
         def handler(status: bool, index: int):
             if not status:
-                self._set_chart_cursor(Qt.CursorShape.ArrowCursor)
-                QToolTip.hideText()
+                if self._multi_hover_index == index:
+                    self._set_multi_hover_index(None)
                 return
             if index < 0 or index >= len(self._multi_categories):
                 return
             category = self._multi_categories[index]
             value = values[index] if index < len(values) else 0.0
-            self._set_chart_cursor(Qt.CursorShape.PointingHandCursor)
+            self._set_multi_hover_index(index)
             try:
                 QToolTip.showText(
                     QCursor.pos(),
@@ -652,21 +667,174 @@ class MonthlyBarChart(GroupBarChart):
 
         return handler
 
+    def _set_multi_hover_index(self, idx: int | None) -> None:
+        if idx == self._multi_hover_index:
+            return
+        self._multi_hover_index = idx
+        self._set_chart_cursor(Qt.CursorShape.PointingHandCursor if idx is not None else Qt.CursorShape.ArrowCursor)
+        self._apply_multi_hover_selection(idx)
+        # Multi-mode hover uses native selected-color styling instead of overlay rect.
+        self._hover_item.setVisible(False)
+        if idx is None:
+            QToolTip.hideText()
+
+    def _apply_multi_hover_selection(self, idx: int | None) -> None:
+        bar_sets = list(self.series.barSets())
+        for i, bar_set in enumerate(bar_sets):
+            base = self._multi_base_colors[i] if i < len(self._multi_base_colors) else bar_set.brush().color()
+            if not base.isValid():
+                base = QColor(100, 100, 100)
+            hover = QColor(base).lighter(118 if not self._dark_theme else 128)
+            try:
+                bar_set.setSelectedColor(hover)
+            except Exception:
+                pass
+            try:
+                bar_set.deselectAllBars()
+            except Exception:
+                continue
+            if idx is not None:
+                try:
+                    bar_set.selectBar(int(idx))
+                except Exception:
+                    continue
+
     def _on_multi_bar_clicked_factory(self, feature: str):
         def handler(index: int):
-            if index < 0 or index >= len(self._multi_categories):
-                return
-            label = self._multi_categories[index]
-            bounds = self._multi_category_bounds.get(label)
-            if not bounds:
-                return
-            start_ts, end_ts = bounds
-            try:
-                level = self._current_level or self._multi_base_level or "M"
-                self.bucket_selected.emit(start_ts, end_ts, level)
-            except Exception:
-                logger.warning("Failed to emit bucket-selected signal for multi-bar click.", exc_info=True)
+            self._emit_multi_bucket_selected(index)
         return handler
+
+    # @ai(gpt-5, codex-cli, fix, 2026-03-19)
+    def _emit_multi_bucket_selected(self, index: int) -> None:
+        if index < 0 or index >= len(self._multi_categories):
+            return
+        now = time.monotonic()
+        if self._multi_last_emit_index == int(index) and (now - self._multi_last_emit_at) < 0.25:
+            return
+        label = self._multi_categories[index]
+        bounds = self._multi_category_bounds.get(label)
+        if not bounds:
+            return
+        start_ts, end_ts = bounds
+        try:
+            level = self._current_level or self._multi_base_level or "M"
+            self.bucket_selected.emit(start_ts, end_ts, level)
+            self._multi_last_emit_index = int(index)
+            self._multi_last_emit_at = now
+        except Exception:
+            logger.warning("Failed to emit bucket-selected signal for multi-bar click.", exc_info=True)
+
+    def _multi_bucket_index_from_mouse_event(self, ev) -> int | None:
+        if not self._multi_categories:
+            return None
+        try:
+            pos = ev.position()
+            x = float(pos.x())
+            y = float(pos.y())
+        except Exception:
+            try:
+                pos = ev.pos()
+                x = float(pos.x())
+                y = float(pos.y())
+            except Exception:
+                return None
+
+        plot = self.chart.plotArea()
+        if (not plot.isValid()) or plot.width() <= 0:
+            return None
+        if x < plot.left() or x > plot.right() or y < plot.top() or y > plot.bottom():
+            return None
+
+        count = len(self._multi_categories)
+        try:
+            value_point = self.chart.mapToValue(QPointF(x, y), self.series)
+            idx = int(float(value_point.x()))
+        except Exception:
+            idx = int(((x - plot.left()) / plot.width()) * count)
+        if idx >= count:
+            idx = count - 1
+        if idx < 0:
+            return None
+        # Require pointer to be inside the visual grouped-bar cluster for this bucket.
+        n = max(1, len(self._multi_categories))
+        cell_w_px = float(plot.width()) / float(n)
+        cluster_w_px = float(self.series.barWidth() or 0.6) * cell_w_px
+        left_x = float(plot.left()) + idx * cell_w_px + (cell_w_px - cluster_w_px) / 2.0
+        right_x = left_x + cluster_w_px
+        if x < left_x or x > right_x:
+            return None
+
+        baseline_y = float(self.chart.mapToPosition(QPointF(idx + 0.5, 0.0), self.series).y())
+        top_y = baseline_y
+        bottom_y = baseline_y
+        has_value = False
+        for bar_set in self.series.barSets():
+            try:
+                value = float(bar_set.at(idx))
+            except Exception:
+                continue
+            mapped_y = float(self.chart.mapToPosition(QPointF(idx + 0.5, value), self.series).y())
+            top_y = min(top_y, mapped_y)
+            bottom_y = max(bottom_y, mapped_y)
+            has_value = True
+
+        if not has_value:
+            return None
+
+        pad = 2.0
+        if y < (top_y - pad) or y > (bottom_y + pad):
+            return None
+        return idx
+
+    def _update_multi_hover_visuals(self, idx: int | None) -> None:
+        self._multi_hover_index = idx
+        if idx is None:
+            self._hover_item.setVisible(False)
+            QToolTip.hideText()
+            return
+        if idx < 0 or idx >= len(self._multi_categories):
+            self._hover_item.setVisible(False)
+            return
+
+        plot = self.chart.plotArea()
+        if not plot.isValid() or plot.width() <= 0:
+            self._hover_item.setVisible(False)
+            return
+        n = max(1, len(self._multi_categories))
+        cell_w_px = float(plot.width()) / float(n)
+        cluster_w_px = float(self.series.barWidth() or 0.6) * cell_w_px
+        left_x = float(plot.left()) + idx * cell_w_px + (cell_w_px - cluster_w_px) / 2.0
+        right_x = left_x + cluster_w_px
+
+        baseline_y = float(self.chart.mapToPosition(QPointF(idx + 0.5, 0.0), self.series).y())
+        top_y = baseline_y
+        bottom_y = baseline_y
+        for bar_set in self.series.barSets():
+            try:
+                value = float(bar_set.at(idx))
+            except Exception:
+                continue
+            mapped_y = float(self.chart.mapToPosition(QPointF(idx + 0.5, value), self.series).y())
+            top_y = min(top_y, mapped_y)
+            bottom_y = max(bottom_y, mapped_y)
+        if bottom_y - top_y < 1.0:
+            top_y -= 1.0
+            bottom_y += 1.0
+
+        base_color = self._multi_base_colors[0] if self._multi_base_colors else QColor(120, 120, 120)
+        hover_fill = QColor(base_color).lighter(130)
+        hover_fill.setAlpha(95)
+        hover_border = QColor(base_color).darker(110)
+        self._hover_item.setBrush(QBrush(hover_fill))
+        self._hover_item.setPen(QPen(hover_border, 1.0))
+        self._hover_item.setRect(QRectF(left_x, top_y, right_x - left_x, bottom_y - top_y))
+        self._hover_item.setVisible(True)
+
+        try:
+            label = self._multi_categories[idx]
+            QToolTip.showText(QCursor.pos(), str(label), self)
+        except Exception:
+            logger.warning("Failed to update multi-bar tooltip while hovering monthly chart.", exc_info=True)
 
     def _format_period_label(self, level_code: str, period: pd.Period) -> str:
         try:
@@ -734,9 +902,18 @@ class MonthlyBarChart(GroupBarChart):
         except Exception:
             logger.warning("Failed to show hover tooltip for monthly chart bar.", exc_info=True)
 
+    # @ai(gpt-5, codex-cli, fix, 2026-03-19)
     def _mouse_press_wrapper(self, base_handler):
         def handler(ev):
             if self._multi_mode:
+                if ev.button() == Qt.MouseButton.LeftButton:
+                    try:
+                        if self._multi_hover_index is not None:
+                            self._multi_pressed_bucket_index = int(self._multi_hover_index)
+                        else:
+                            self._multi_pressed_bucket_index = self._multi_bucket_index_from_mouse_event(ev)
+                    except Exception:
+                        logger.warning("Failed while handling multi-bar monthly chart left-click interaction.", exc_info=True)
                 return base_handler(ev)
             # Right click steps back a single drill level
             if ev.button() == Qt.MouseButton.RightButton:
@@ -761,6 +938,35 @@ class MonthlyBarChart(GroupBarChart):
                         self._single_click_timer.start(delay_ms)
                 except Exception:
                     logger.warning("Failed while handling monthly chart left-click interaction.", exc_info=True)
+            return base_handler(ev)
+        return handler
+
+    # @ai(gpt-5, codex-cli, fix, 2026-03-19)
+    def _mouse_move_wrapper(self, base_handler):
+        def handler(ev):
+            # Multi-mode hover/cursor is driven by native QBarSet hovered signals.
+            return base_handler(ev)
+        return handler
+
+    # @ai(gpt-5, codex-cli, fix, 2026-03-19)
+    def _mouse_release_wrapper(self, base_handler):
+        def handler(ev):
+            if self._multi_mode and ev.button() == Qt.MouseButton.LeftButton:
+                try:
+                    released_idx = self._multi_hover_index
+                    if released_idx is None:
+                        released_idx = self._multi_bucket_index_from_mouse_event(ev)
+                    # Prefer release target; fallback to press target so minor pointer drift
+                    # does not silently cancel clicks on narrow grouped bars.
+                    target_idx = released_idx
+                    if target_idx is None:
+                        target_idx = self._multi_pressed_bucket_index
+                    if target_idx is not None:
+                        self._emit_multi_bucket_selected(int(target_idx))
+                except Exception:
+                    logger.warning("Failed while handling multi-bar monthly chart mouse-release interaction.", exc_info=True)
+                finally:
+                    self._multi_pressed_bucket_index = None
             return base_handler(ev)
         return handler
 
