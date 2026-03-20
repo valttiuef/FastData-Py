@@ -95,6 +95,7 @@ class MonthlyBarChart(GroupBarChart):
         self._multi_mode: bool = False
         self._raw_multi_df: pd.DataFrame | None = None
         self._multi_base_level: str | None = None
+        self._multi_feature_order: list[str] = []
         self._multi_categories: list[str] = []
         self._multi_category_bounds: dict[str, tuple[pd.Timestamp, pd.Timestamp]] = {}
         self._multi_current_agg: pd.DataFrame | None = None
@@ -303,6 +304,7 @@ class MonthlyBarChart(GroupBarChart):
         if self._zero_line_item is not None:
             self._zero_line_item.setVisible(False)
         self._multi_categories = []
+        self._multi_feature_order = []
         self._multi_category_bounds = {}
         self._multi_current_agg = None
         self._multi_pressed_bucket_index = None
@@ -390,6 +392,7 @@ class MonthlyBarChart(GroupBarChart):
         if not feature_cols:
             self.clear()
             return
+        self._multi_feature_order = list(feature_cols)
         self._raw_multi_df = df[["t"] + feature_cols]
         self._multi_base_level = self._determine_base_level(df["t"])
         self._multi_categories = []
@@ -615,9 +618,12 @@ class MonthlyBarChart(GroupBarChart):
             return
         self._render_multi_bars(agg)
 
+    # @ai(gpt-5, codex, fix, 2026-03-20)
     def _aggregate_multi(self, df: pd.DataFrame, level_code: str) -> pd.DataFrame:
         freq_map = {"A": "A", "M": "M", "W": "W", "D": "D", "h": "h"}
         freq = freq_map.get(level_code, "M")
+        feature_order = [str(col) for col in df.columns if str(col) != "t"]
+        feature_rank = {name: idx for idx, name in enumerate(feature_order)}
         long_df = df.melt(id_vars="t", var_name="feature", value_name="value")
         long_df["value"] = pd.to_numeric(long_df["value"], errors="coerce")
         long_df = long_df.dropna(subset=["value"])
@@ -625,11 +631,14 @@ class MonthlyBarChart(GroupBarChart):
             return pd.DataFrame(columns=["feature", "label", "value", "start_ts", "end_ts"])
 
         long_df["period"] = long_df["t"].dt.to_period(freq)
-        grouped = long_df.groupby(["period", "feature"], as_index=False)["value"].mean()
+        grouped = long_df.groupby(["period", "feature"], as_index=False, sort=False)["value"].mean()
         grouped["start_ts"] = grouped["period"].dt.start_time
         grouped["end_ts"] = (grouped["period"] + 1).dt.start_time
         grouped["label"] = grouped["period"].apply(lambda per: self._format_period_label(level_code, per))
-        grouped = grouped.sort_values(["start_ts", "feature"])
+        grouped["_feature_rank"] = (
+            grouped["feature"].astype(str).map(feature_rank).fillna(len(feature_rank)).astype(int)
+        )
+        grouped = grouped.sort_values(["start_ts", "_feature_rank"]).drop(columns=["_feature_rank"])
         return grouped
 
     # @ai(gpt-5, codex, fix, 2026-03-20)
@@ -658,6 +667,11 @@ class MonthlyBarChart(GroupBarChart):
                 .reindex(categories)
                 .fillna(0.0)
             )
+            ordered_features = [
+                name for name in list(self._multi_feature_order) if name in pivot.columns
+            ]
+            trailing_features = [name for name in pivot.columns if name not in ordered_features]
+            pivot = pivot.reindex(columns=ordered_features + trailing_features, fill_value=0.0)
 
             self.axis_x.setVisible(True)
             self._set_axis_categories(categories)
