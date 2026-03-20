@@ -222,6 +222,7 @@ class HybridPandasModel(DatabaseModel):
         self._helper_filter_feature_ids: set[int] = set()
         self._lag_min_seconds: int = 0
         self._lag_max_seconds: int = 0
+        self._load_base_lock = threading.RLock()
         self._frame_token_lock = threading.RLock()
         self._frame_token_counter: int = 0
         self._frame_token_limit: int = 24
@@ -588,6 +589,12 @@ class HybridPandasModel(DatabaseModel):
         """Return a copy of the postprocessed, wide-span BASE cache."""
         return self._base_df.copy()
 
+    # @ai(gpt-5, codex, fix, 2026-03-20)
+    def load_base_threadsafe(self, flt: "DataFilters", **kwargs) -> None:
+        """Serialize BASE-cache rebuilds when multiple UI workers share this model."""
+        with self._load_base_lock:
+            self.load_base(flt, **kwargs)
+
     # @ai(gpt-5, codex, feature, 2026-03-05)
     def store_dataframe_snapshot(self, frame: Optional[pd.DataFrame]) -> str:
         """Store a dataframe snapshot and return a lightweight token handle."""
@@ -612,6 +619,8 @@ class HybridPandasModel(DatabaseModel):
                 frame = self._frame_tokens.get(str(token))
         if frame is None:
             return pd.DataFrame(columns=["t"])
+        if consume:
+            return frame
         return frame.copy()
 
     # @ai(gpt-5, codex, feature, 2026-03-04)

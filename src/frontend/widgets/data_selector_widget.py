@@ -65,7 +65,7 @@ def _build_feature_summary_text(
         params = {}
 
     try:
-        model.load_base(filters, **params)
+        model.load_base_threadsafe(filters, **params)
     except Exception:
         logger.warning("Exception in _build_feature_summary_text", exc_info=True)
 
@@ -426,8 +426,8 @@ class DataSelectorViewModel(QObject):
         )
 
         try:
-            model.load_base(filters, **params)
-            frame = model.base_dataframe().copy()
+            model.load_base_threadsafe(filters, **params)
+            frame = model.base_dataframe()
             return self._append_requested_group_columns(
                 frame,
                 group_payloads=group_payloads,
@@ -458,8 +458,8 @@ class DataSelectorViewModel(QObject):
         )
 
         def _work() -> pd.DataFrame:
-            model.load_base(filters, **params)
-            frame = model.base_dataframe().copy()
+            model.load_base_threadsafe(filters, **params)
+            frame = model.base_dataframe()
             return self._append_requested_group_columns(
                 frame,
                 group_payloads=group_payloads,
@@ -506,8 +506,8 @@ class DataSelectorViewModel(QObject):
         )
 
         def _work() -> str:
-            model.load_base(filters, **params)
-            frame = model.base_dataframe().copy()
+            model.load_base_threadsafe(filters, **params)
+            frame = model.base_dataframe()
             frame = self._append_requested_group_columns(
                 frame,
                 group_payloads=group_payloads,
@@ -586,8 +586,8 @@ class DataSelectorViewModel(QObject):
         )
 
         def _work() -> pd.DataFrame:
-            model.load_base(filters, **params)
-            frame = model.base_dataframe().copy()
+            model.load_base_threadsafe(filters, **params)
+            frame = model.base_dataframe()
             return self._append_requested_group_columns(
                 frame,
                 group_payloads=group_payloads,
@@ -665,8 +665,8 @@ class DataSelectorViewModel(QObject):
         )
 
         def _work() -> str:
-            model.load_base(filters, **params)
-            frame = model.base_dataframe().copy()
+            model.load_base_threadsafe(filters, **params)
+            frame = model.base_dataframe()
             frame = self._append_requested_group_columns(
                 frame,
                 group_payloads=group_payloads,
@@ -893,8 +893,8 @@ class DataSelectorViewModel(QObject):
         )
 
         def _work(progress_callback=None) -> dict[str, object]:
-            model.load_base(filters, **params)
-            frame = model.base_dataframe().copy()
+            model.load_base_threadsafe(filters, **params)
+            frame = model.base_dataframe()
             try:
                 entries, checked_total = self._compute_correlation_entries(
                     frame=frame,

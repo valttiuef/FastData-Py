@@ -463,7 +463,8 @@ class TimeSeriesChart(QFrame):
             times_ms_all = _to_ms_epoch_array(df["t"])
             gap_threshold_ms = self._estimate_gap_threshold_ms(times_ms_all)
 
-            all_values: list[float] = []
+            ymin: float | None = None
+            ymax: float | None = None
             new_segments: dict[str, list[QLineSeries]] = {}
             for name, color in zip(feature_cols, colors):
                 color = QColor(self._series_colors.get(name, color))
@@ -471,6 +472,16 @@ class TimeSeriesChart(QFrame):
                     values_arr = pd.to_numeric(df[name], errors="coerce").to_numpy(dtype=float)
                 except Exception:
                     values_arr = df[name].to_numpy()
+                try:
+                    finite_values = np.asarray(values_arr, dtype=float)
+                    finite_values = finite_values[np.isfinite(finite_values)]
+                except Exception:
+                    finite_values = np.array([], dtype=float)
+                if finite_values.size:
+                    local_min = float(np.nanmin(finite_values))
+                    local_max = float(np.nanmax(finite_values))
+                    ymin = local_min if ymin is None else min(ymin, local_min)
+                    ymax = local_max if ymax is None else max(ymax, local_max)
 
                 existing_segments = self._series_segments.get(name) if can_reuse_segments else None
                 segments = self._build_segments_for_feature(
@@ -485,8 +496,6 @@ class TimeSeriesChart(QFrame):
                 )
                 if segments:
                     new_segments[name] = segments
-                    for seg in segments:
-                        all_values.extend([point.y() for point in seg.points()])
 
             if can_reuse_segments:
                 for old_name, segments in list(self._series_segments.items()):
@@ -535,9 +544,7 @@ class TimeSeriesChart(QFrame):
                 logger.warning("Failed to restore numeric Y-axis tick settings for time-series data.", exc_info=True)
             self._y_axis_title_base = "Value"
             self.axis_y.setTitleText(self._y_axis_title_base)
-            if all_values:
-                ymin = float(min(all_values)); ymax = float(max(all_values))
-            else:
+            if ymin is None or ymax is None:
                 ymin, ymax = 0.0, 1.0
             if ymin == ymax:
                 ymin -= 0.5; ymax += 0.5
@@ -643,7 +650,8 @@ class TimeSeriesChart(QFrame):
             if gap_threshold_ms is None:
                 gap_threshold_ms = self._estimate_gap_threshold_ms(times_ms_all)
 
-            all_values: list[float] = []
+            ymin: float | None = None
+            ymax: float | None = None
             new_segments: dict[str, list[QLineSeries]] = {}
             for name, color in zip(feature_cols, colors):
                 segments = list(self._series_segments.get(name) or [])
@@ -655,6 +663,12 @@ class TimeSeriesChart(QFrame):
                     values_arr = pd.to_numeric(df[name], errors="coerce").to_numpy(dtype=float)
                 except Exception:
                     values_arr = np.asarray(df[name].to_numpy(), dtype=float)
+                finite_values = values_arr[np.isfinite(values_arr)]
+                if finite_values.size:
+                    local_min = float(np.nanmin(finite_values))
+                    local_max = float(np.nanmax(finite_values))
+                    ymin = local_min if ymin is None else min(ymin, local_min)
+                    ymax = local_max if ymax is None else max(ymax, local_max)
                 built_segments = self._build_segments_for_feature(
                     name,
                     times_ms_all,
@@ -669,8 +683,6 @@ class TimeSeriesChart(QFrame):
                     self.set_dataframe(frame, series_colors=series_colors, refresh_legend=True)
                     return False
                 new_segments[name] = built_segments
-                for seg in built_segments:
-                    all_values.extend([point.y() for point in seg.points()])
             self._series_segments = new_segments
 
             ms_min = int(times_ms_all.min())
@@ -704,10 +716,7 @@ class TimeSeriesChart(QFrame):
                     logger.warning("Failed to restore numeric Y-axis tick settings for windowed time-series data.", exc_info=True)
                 self._y_axis_title_base = "Value"
                 self.axis_y.setTitleText(self._y_axis_title_base)
-            if all_values:
-                ymin = float(min(all_values))
-                ymax = float(max(all_values))
-            else:
+            if ymin is None or ymax is None:
                 ymin, ymax = 0.0, 1.0
             if ymin == ymax:
                 ymin -= 0.5

@@ -53,6 +53,8 @@ class ChartsTab(TabWidget):
         self._selection_sync_pending = False
         self._card_fetch_nonce: int = 0
         self._card_fetch_tokens: dict[ChartCard, int] = {}
+        self._shared_frame_cache: dict[tuple, pd.DataFrame] = {}
+        self._inflight_frame_fetch_waiters: dict[tuple, list[tuple[object, object]]] = {}
 
         super().__init__(parent)
 
@@ -131,6 +133,7 @@ class ChartsTab(TabWidget):
         self._selection_sync_pending = False
         self._selection_sync_fallback.stop()
         self._card_render_state.clear()
+        self._invalidate_shared_frame_cache()
         for card in self._chart_cards:
             card.clear_chart(tr("Select features for the new database"))
         self._suppress_card_updates = True
@@ -144,11 +147,13 @@ class ChartsTab(TabWidget):
     def _on_selection_state_changed(self) -> None:
         self._refresh_epoch += 1
         self._selection_sync_pending = True
+        self._invalidate_shared_frame_cache()
         self._debounce.stop()
         self._selection_sync_fallback.start()
 
     def _on_selector_data_requirements_changed(self, _requirements: dict) -> None:
         requirements = _requirements if isinstance(_requirements, dict) else {}
+        previous_selector_key = self._selector_requirements_key
         preprocessing_key = self._freeze_value(requirements.get("preprocessing", {}))
         self._selector_requirements_key = self._freeze_value(
             {
@@ -156,6 +161,8 @@ class ChartsTab(TabWidget):
                 "preprocessing": requirements.get("preprocessing", {}),
             }
         )
+        if self._selector_requirements_key != previous_selector_key:
+            self._invalidate_shared_frame_cache()
         if preprocessing_key != self._last_preprocessing_key:
             self._allow_auto_timestep_toast = self._show_auto_timestep_toast
             self._last_preprocessing_key = preprocessing_key
@@ -449,6 +456,88 @@ class ChartsTab(TabWidget):
         self._card_fetch_tokens[card] = token
         return token
 
+    # @ai(gpt-5, codex, refactor, 2026-03-20)
+    def _invalidate_shared_frame_cache(self) -> None:
+        self._shared_frame_cache.clear()
+        self._inflight_frame_fetch_waiters.clear()
+
+    def _frame_fetch_key(self, features: list[FeatureSelection]) -> tuple:
+        feature_key = tuple(
+            (
+                int(sel.feature_id) if sel.feature_id is not None else None,
+                sel.base_name or None,
+                sel.source or None,
+                sel.unit or None,
+                sel.type or None,
+                int(sel.lag_seconds) if sel.lag_seconds is not None else 0,
+            )
+            for sel in features
+        )
+        return (feature_key, self._selector_requirements_key)
+
+    def _request_shared_frame_for_features(
+        self,
+        *,
+        feature_payloads: list[dict],
+        frame_key: tuple,
+        on_result,
+        on_error,
+    ) -> bool:
+        cached = self._shared_frame_cache.get(frame_key)
+        if isinstance(cached, pd.DataFrame):
+            if callable(on_result):
+                on_result(cached.copy())
+            return True
+
+        existing_waiters = self._inflight_frame_fetch_waiters.get(frame_key)
+        if existing_waiters is not None:
+            existing_waiters.append((on_result, on_error))
+            return True
+
+        self._inflight_frame_fetch_waiters[frame_key] = [(on_result, on_error)]
+
+        def _drain_waiters_with_result(frame: pd.DataFrame) -> None:
+            waiters = self._inflight_frame_fetch_waiters.pop(frame_key, [])
+            for result_cb, _error_cb in waiters:
+                if callable(result_cb):
+                    result_cb(frame.copy())
+
+        def _drain_waiters_with_error(message: str) -> None:
+            waiters = self._inflight_frame_fetch_waiters.pop(frame_key, [])
+            for _result_cb, error_cb in waiters:
+                if callable(error_cb):
+                    error_cb(message)
+
+        def _on_fetch_result(frame_token: str) -> None:
+            try:
+                frame = self.sidebar.data_selector.resolve_dataframe_token(frame_token, consume=True)
+                if not isinstance(frame, pd.DataFrame):
+                    frame = pd.DataFrame(columns=["t"])
+            except Exception as exc:
+                _drain_waiters_with_error(str(exc))
+                return
+            self._shared_frame_cache[frame_key] = frame
+            while len(self._shared_frame_cache) > 12:
+                self._shared_frame_cache.pop(next(iter(self._shared_frame_cache)))
+            _drain_waiters_with_result(frame)
+
+        def _on_fetch_error(message: str) -> None:
+            _drain_waiters_with_error(str(message))
+
+        started = self.sidebar.data_selector.fetch_base_dataframe_for_features_token_async(
+            feature_payloads,
+            on_result=_on_fetch_result,
+            on_error=_on_fetch_error,
+            owner=self,
+            key=("charts_shared_frame_fetch", frame_key),
+            cancel_previous=True,
+        )
+        if started:
+            return True
+
+        self._inflight_frame_fetch_waiters.pop(frame_key, None)
+        return False
+
     def _update_chart(self, card: ChartCard, *, force: bool = False) -> None:
         chart_type = card.chart_type()
         if chart_type == "correlation_bar":
@@ -494,12 +583,12 @@ class ChartsTab(TabWidget):
         feature_names = [f.display_name() for f in selected_features][:MAX_FEATURES_SHOWN_LEGEND]
         title = self._build_chart_title(feature_names)
         token = self._next_card_fetch_token(card)
+        frame_key = self._frame_fetch_key(selected_features)
 
-        def _on_result(frame_token: str) -> None:
+        def _on_result(frame: pd.DataFrame) -> None:
             if self._card_fetch_tokens.get(card) != token:
                 return
             try:
-                frame = self.sidebar.data_selector.resolve_dataframe_token(frame_token, consume=True)
                 if chart_type == "monthly":
                     card.set_monthly_frame(frame, title)
                 elif chart_type == "time_series":
@@ -517,13 +606,11 @@ class ChartsTab(TabWidget):
                 return
             card.show_message(tr("Failed to load chart data: {error}").format(error=str(message)))
 
-        started = self.sidebar.data_selector.fetch_base_dataframe_for_features_token_async(
-            feature_payloads,
+        started = self._request_shared_frame_for_features(
+            feature_payloads=feature_payloads,
+            frame_key=frame_key,
             on_result=_on_result,
             on_error=_on_error,
-            owner=self,
-            key=("charts_card_data_fetch", id(card)),
-            cancel_previous=True,
         )
         if not started:
             card.show_message(tr("Failed to load chart data."))
@@ -578,11 +665,11 @@ class ChartsTab(TabWidget):
             return
         token = self._next_card_fetch_token(card)
         feature_payloads = [self._feature_payload(feature) for feature in unique]
+        frame_key = self._frame_fetch_key(unique)
 
-        def _on_result(frame_token: str) -> None:
+        def _on_result(frame: pd.DataFrame) -> None:
             if self._card_fetch_tokens.get(card) != token:
                 return
-            frame = self.sidebar.data_selector.resolve_dataframe_token(frame_token, consume=True)
             payload = self._build_correlation_payload_from_frame(
                 target=target,
                 candidates=unique,
@@ -602,13 +689,11 @@ class ChartsTab(TabWidget):
             card.show_message(tr("Unable to calculate correlations for this selection"))
             self._record_card_state(card, None)
 
-        started = self.sidebar.data_selector.fetch_base_dataframe_for_features_token_async(
-            feature_payloads,
+        started = self._request_shared_frame_for_features(
+            feature_payloads=feature_payloads,
+            frame_key=frame_key,
             on_result=_on_result,
             on_error=_on_error,
-            owner=self,
-            key=("charts_card_correlation_fetch", id(card)),
-            cancel_previous=True,
         )
         if not started:
             card.show_message(tr("Unable to calculate correlations for this selection"))
