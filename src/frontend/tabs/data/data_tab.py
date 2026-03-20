@@ -553,7 +553,11 @@ class DataTab(TabWidget):
 
         self._view_model.set_view_window(start_ts, end_ts)
         series_df = self._view_model.series_for_chart()
-        self.timeseries_chart.update_window_dataframe(series_df)
+        self.timeseries_chart.update_window_dataframe(
+            series_df,
+            preserve_x_range=True,
+            preserve_y_range=True,
+        )
         try:
             # Keep the dragged viewport stable. set_dataframe() derives X-range
             # from data bounds, which can slightly snap on first drag event.

@@ -146,6 +146,8 @@ class TimeSeriesChart(QFrame):
         self.chart.setTitle(title)
 
         self._series_segments: dict[str, list[QLineSeries]] = {}
+        self._legend_series: dict[str, QLineSeries] = {}
+        self._legend_order: list[str] = []
         self._series_colors: dict[str, QColor] = {}
         self._explicit_series_colors: dict[str, QColor] = {}
         self._feature_order: list[str] = []
@@ -405,14 +407,7 @@ class TimeSeriesChart(QFrame):
                 return
 
             df = frame.copy()
-            if df.empty or "t" not in df.columns:
-                self.clear(reset_axes=False, request_repaint=False, refresh_legend=False)
-                return
-
-            # Keep whatever dtype/timezone `t` already has; just parse if needed.
-            df["t"] = pd.to_datetime(df["t"], errors="coerce")
-            df = df.dropna(subset=["t"]).sort_values("t")
-            if df.empty:
+            if "t" not in df.columns:
                 self.clear(reset_axes=False, request_repaint=False, refresh_legend=False)
                 return
 
@@ -420,6 +415,21 @@ class TimeSeriesChart(QFrame):
             if not feature_cols:
                 self.clear(reset_axes=False, request_repaint=False, refresh_legend=False)
                 return
+
+            # Keep whatever dtype/timezone `t` already has; just parse if needed.
+            if df.empty:
+                # Preserve selected-feature legend rows even when the current
+                # pan/zoom window has no data rows.
+                df = pd.DataFrame(columns=["t"] + feature_cols)
+            else:
+                df["t"] = pd.to_datetime(df["t"], errors="coerce")
+                df = df.dropna(subset=["t"]).sort_values("t")
+            if df.empty:
+                # If all timestamps were invalid/filtered out, keep stable
+                # feature legend markers using empty per-feature series.
+                df = pd.DataFrame(columns=["t"] + feature_cols)
+            else:
+                df = df[["t"] + feature_cols]
 
             can_reuse_segments = (
                 bool(self._series_segments)
@@ -447,9 +457,11 @@ class TimeSeriesChart(QFrame):
                 for name, color in zip(feature_cols, colors)
             }
             self._preserve_series_colors = bool(self._explicit_series_colors)
+            self._rebuild_feature_legend_series(feature_cols)
 
             # raw times
             times_ms_all = _to_ms_epoch_array(df["t"])
+            gap_threshold_ms = self._estimate_gap_threshold_ms(times_ms_all)
 
             all_values: list[float] = []
             new_segments: dict[str, list[QLineSeries]] = {}
@@ -467,6 +479,9 @@ class TimeSeriesChart(QFrame):
                     values_arr,
                     color,
                     existing_segments=existing_segments,
+                    gap_threshold_ms=gap_threshold_ms,
+                    touch_markers=False,
+                    show_name_on_primary=False,
                 )
                 if segments:
                     new_segments[name] = segments
@@ -550,6 +565,8 @@ class TimeSeriesChart(QFrame):
         frame: pd.DataFrame | None,
         *,
         series_colors: dict[str, QColor] | None = None,
+        preserve_x_range: bool = False,
+        preserve_y_range: bool = False,
     ) -> bool:
         """Update only time-windowed series data while keeping legend structure intact."""
         if frame is None:
@@ -614,11 +631,17 @@ class TimeSeriesChart(QFrame):
                 for name, color in zip(feature_cols, colors)
             }
             self._preserve_series_colors = bool(self._explicit_series_colors)
+            self._rebuild_feature_legend_series(feature_cols)
 
             times_ms_all = _to_ms_epoch_array(df["t"])
             if times_ms_all.size == 0:
                 self.set_dataframe(frame, series_colors=series_colors, refresh_legend=True)
                 return False
+            # Keep a stable gap threshold while panning/zooming window slices so
+            # gap rendering does not shift near sparse edges.
+            gap_threshold_ms = self._gap_threshold_ms
+            if gap_threshold_ms is None:
+                gap_threshold_ms = self._estimate_gap_threshold_ms(times_ms_all)
 
             all_values: list[float] = []
             new_segments: dict[str, list[QLineSeries]] = {}
@@ -638,6 +661,9 @@ class TimeSeriesChart(QFrame):
                     values_arr,
                     color,
                     existing_segments=segments,
+                    gap_threshold_ms=gap_threshold_ms,
+                    touch_markers=False,
+                    show_name_on_primary=False,
                 )
                 if not built_segments:
                     self.set_dataframe(frame, series_colors=series_colors, refresh_legend=True)
@@ -653,29 +679,31 @@ class TimeSeriesChart(QFrame):
                 ms_max += 1
             qmin = QDateTime.fromMSecsSinceEpoch(ms_min)
             qmax = QDateTime.fromMSecsSinceEpoch(ms_max)
-            self.axis_x.setRange(qmin, qmax)
             self._data_x_range = (QDateTime(qmin), QDateTime(qmax))
-            try:
-                self.axis_x.setLabelsVisible(True)
-            except Exception:
-                logger.warning("Failed to show X-axis labels after windowed time-series data update.", exc_info=True)
-            try:
-                self._set_x_axis_format_for_span_ms(ms_max - ms_min)
-            except Exception:
-                logger.warning("Failed to format X-axis labels for windowed time-series span.", exc_info=True)
+            if not preserve_x_range:
+                self.axis_x.setRange(qmin, qmax)
+                try:
+                    self.axis_x.setLabelsVisible(True)
+                except Exception:
+                    logger.warning("Failed to show X-axis labels after windowed time-series data update.", exc_info=True)
+                try:
+                    self._set_x_axis_format_for_span_ms(ms_max - ms_min)
+                except Exception:
+                    logger.warning("Failed to format X-axis labels for windowed time-series span.", exc_info=True)
 
-            try:
-                self.axis_y.setLabelsVisible(True)
-            except Exception:
-                logger.warning("Failed to show Y-axis labels after windowed time-series data update.", exc_info=True)
-            try:
-                self.axis_y.setTickType(QValueAxis.TickType.TicksFixed)
-                self.axis_y.setTickCount(6)
-                self.axis_y.setLabelFormat("%.3f")
-            except Exception:
-                logger.warning("Failed to restore numeric Y-axis tick settings for windowed time-series data.", exc_info=True)
-            self._y_axis_title_base = "Value"
-            self.axis_y.setTitleText(self._y_axis_title_base)
+            if not preserve_y_range:
+                try:
+                    self.axis_y.setLabelsVisible(True)
+                except Exception:
+                    logger.warning("Failed to show Y-axis labels after windowed time-series data update.", exc_info=True)
+                try:
+                    self.axis_y.setTickType(QValueAxis.TickType.TicksFixed)
+                    self.axis_y.setTickCount(6)
+                    self.axis_y.setLabelFormat("%.3f")
+                except Exception:
+                    logger.warning("Failed to restore numeric Y-axis tick settings for windowed time-series data.", exc_info=True)
+                self._y_axis_title_base = "Value"
+                self.axis_y.setTitleText(self._y_axis_title_base)
             if all_values:
                 ymin = float(min(all_values))
                 ymax = float(max(all_values))
@@ -684,8 +712,10 @@ class TimeSeriesChart(QFrame):
             if ymin == ymax:
                 ymin -= 0.5
                 ymax += 0.5
-            self.axis_y.setRange(ymin, ymax)
             self._data_y_range = (float(ymin), float(ymax))
+            if not preserve_y_range:
+                self.axis_y.setRange(ymin, ymax)
+            self._refresh_legend_markers()
             self._request_deferred_refresh()
         finally:
             self.view.setUpdatesEnabled(updates_enabled)
@@ -1081,8 +1111,45 @@ class TimeSeriesChart(QFrame):
                     self.chart.removeSeries(series)
                 except Exception:
                     logger.warning("Failed to remove a line-series segment while clearing time-series data.", exc_info=True)
+        for series in self._legend_series.values():
+            try:
+                self.chart.removeSeries(series)
+            except Exception:
+                logger.warning("Failed to remove a legend anchor series while clearing time-series data.", exc_info=True)
         self._series_segments.clear()
+        self._legend_series.clear()
+        self._legend_order = []
         self._series_colors.clear()
+
+    def _rebuild_feature_legend_series(self, feature_names: list[str]) -> None:
+        desired = [str(name) for name in (feature_names or [])]
+        if desired == self._legend_order and all(name in self._legend_series for name in desired):
+            for name in desired:
+                series = self._legend_series.get(name)
+                if series is None:
+                    continue
+                self._set_series_pen(series, self._series_colors.get(name, QColor(120, 120, 120)))
+            return
+
+        for series in self._legend_series.values():
+            try:
+                self.chart.removeSeries(series)
+            except Exception:
+                logger.warning("Failed to remove stale time-series legend anchor series.", exc_info=True)
+        self._legend_series = {}
+        self._legend_order = []
+
+        for name in desired:
+            series = QLineSeries()
+            series.setUseOpenGL(False)
+            series.setName(name)
+            series.replace([])
+            self.chart.addSeries(series)
+            series.attachAxis(self.axis_x)
+            series.attachAxis(self.axis_y)
+            self._set_series_pen(series, self._series_colors.get(name, QColor(120, 120, 120)))
+            self._legend_series[name] = series
+            self._legend_order.append(name)
 
     # @ai(gpt-5, codex, fix, 2026-03-03)
     def _build_segments_for_feature(
@@ -1093,6 +1160,9 @@ class TimeSeriesChart(QFrame):
         color: QColor,
         *,
         existing_segments: list[QLineSeries] | None = None,
+        gap_threshold_ms: int | None = None,
+        touch_markers: bool = True,
+        show_name_on_primary: bool = True,
     ) -> list[QLineSeries]:
         """
         Build QLineSeries segments for runs of finite values. `times_ms` and
@@ -1114,9 +1184,15 @@ class TimeSeriesChart(QFrame):
                     self.chart.addSeries(series)
                     series.attachAxis(self.axis_x)
                     series.attachAxis(self.axis_y)
-                series.setName(name if seg_idx == 0 else "")
+                series.setName(name if (show_name_on_primary and seg_idx == 0) else "")
                 series.replace([])
                 self._set_series_pen(series, color)
+                if touch_markers:
+                    self._set_series_marker_visibility(
+                        series,
+                        visible=(seg_idx == 0),
+                        label=_short_label(name),
+                    )
                 segments.append(series)
             for series in existing[target_count:]:
                 try:
@@ -1142,9 +1218,15 @@ class TimeSeriesChart(QFrame):
                     self.chart.addSeries(series)
                     series.attachAxis(self.axis_x)
                     series.attachAxis(self.axis_y)
-                series.setName(name if seg_idx == 0 else "")
+                series.setName(name if (show_name_on_primary and seg_idx == 0) else "")
                 series.replace([])
                 self._set_series_pen(series, color)
+                if touch_markers:
+                    self._set_series_marker_visibility(
+                        series,
+                        visible=(seg_idx == 0),
+                        label=_short_label(name),
+                    )
                 segments.append(series)
             for series in existing[target_count:]:
                 try:
@@ -1155,11 +1237,15 @@ class TimeSeriesChart(QFrame):
 
         # Keep NaN/inf gaps as hard breaks. Also detect large timestamp jumps
         # and split lines there to make missing periods visually explicit.
-        gap_threshold_ms = self._estimate_gap_threshold_ms(times_ms)
+        resolved_gap_threshold_ms = (
+            int(gap_threshold_ms)
+            if gap_threshold_ms is not None
+            else self._estimate_gap_threshold_ms(times_ms)
+        )
         time_gap_breaks = np.zeros(max(0, len(times_ms) - 1), dtype=bool)
-        if TIMESERIES_GAP_DETECTION_ENABLED and gap_threshold_ms is not None and len(times_ms) > 1:
+        if TIMESERIES_GAP_DETECTION_ENABLED and resolved_gap_threshold_ms is not None and len(times_ms) > 1:
             deltas = np.diff(np.asarray(times_ms, dtype=np.int64))
-            time_gap_breaks = deltas > int(gap_threshold_ms)
+            time_gap_breaks = deltas > int(resolved_gap_threshold_ms)
         runs: list[tuple[int, int]] = []
         start_idx: int | None = None
         last_idx = len(vals) - 1
@@ -1189,7 +1275,7 @@ class TimeSeriesChart(QFrame):
                 self.chart.addSeries(series)
                 series.attachAxis(self.axis_x)
                 series.attachAxis(self.axis_y)
-            series.setName(name if seg_idx == 0 else "")
+            series.setName(name if (show_name_on_primary and seg_idx == 0) else "")
             if seg_idx < len(runs):
                 start_idx, end_idx = runs[seg_idx]
                 pts = [QPointF(float(times_ms[i]), float(vals[i])) for i in range(start_idx, end_idx)]
@@ -1197,6 +1283,12 @@ class TimeSeriesChart(QFrame):
                 pts = []
             series.replace(pts)
             self._set_series_pen(series, color)
+            if touch_markers:
+                self._set_series_marker_visibility(
+                    series,
+                    visible=(seg_idx == 0),
+                    label=_short_label(name),
+                )
             segments.append(series)
 
         for series in existing[target_count:]:
@@ -1212,6 +1304,36 @@ class TimeSeriesChart(QFrame):
         pen.setWidthF(2.0)
         pen.setCosmetic(True)
         series.setPen(pen)
+
+    def _set_series_marker_visibility(
+        self,
+        series: QLineSeries,
+        *,
+        visible: bool,
+        label: str | None = None,
+    ) -> None:
+        legend = self.chart.legend()
+        try:
+            markers = list(legend.markers(series))
+        except Exception:
+            markers = []
+        for marker in markers:
+            if visible and label is not None:
+                try:
+                    if marker.label() != label:
+                        marker.setLabel(label)
+                except Exception:
+                    logger.warning("Failed to set time-series legend marker label.", exc_info=True)
+            try:
+                current = bool(marker.isVisible())
+            except Exception:
+                current = (not visible)
+            if current == bool(visible):
+                continue
+            try:
+                marker.setVisible(bool(visible))
+            except Exception:
+                logger.warning("Failed to set time-series legend marker visibility.", exc_info=True)
 
     def _generate_colors(self, count: int) -> list[QColor]:
         return group_color_cycle(count, dark_theme=self._dark_theme)
@@ -1423,13 +1545,15 @@ class TimeSeriesChart(QFrame):
                 for name, color in zip(self._feature_order, regenerated)
             }
 
-        if not self._series_segments:
+        if not self._series_segments and not self._legend_series:
             return
 
         for name, segments in self._series_segments.items():
             color = self._series_colors.get(name, colors.line_primary)
             for series in segments:
                 self._set_series_pen(series, color)
+        for name, series in self._legend_series.items():
+            self._set_series_pen(series, self._series_colors.get(name, colors.line_primary))
 
         self._refresh_legend_markers()
 
@@ -1447,6 +1571,28 @@ class TimeSeriesChart(QFrame):
             markers = list(legend.markers())
         except Exception:
             markers = []
+
+        if self._legend_series:
+            allowed_series_ids = {
+                id(series)
+                for name, series in self._legend_series.items()
+                if name in self._legend_order
+            }
+            for marker in markers:
+                series = marker.series()
+                if series is None or id(series) not in allowed_series_ids:
+                    marker.setVisible(False)
+                    continue
+                name = series.name() or ""
+                if not name:
+                    marker.setVisible(False)
+                    continue
+                marker.setLabel(_short_label(name))
+                marker.setVisible(True)
+            if self._chart_colors is not None:
+                style_legend(legend, self._chart_colors)
+            self._refresh_group_timeline_overlays()
+            return
 
         seen: set[str] = set()
         for marker in markers:
