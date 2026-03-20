@@ -169,6 +169,7 @@ class TimeSeriesChart(QFrame):
         self._deferred_refresh_pending: bool = False
         self._axis_x_locked: bool = False
         self._axis_y_locked: bool = False
+        self._delegate_x_reset_to_controller: bool = False
         self.view.set_hover_tooltip_callback(self._group_timeline_hover_tooltip)
 
         try:
@@ -784,8 +785,11 @@ class TimeSeriesChart(QFrame):
         self._refresh_group_timeline_overlays()
         self._request_deferred_refresh()
 
+    # @ai(gpt-5, codex, fix, 2026-03-20)
     def _bubble_reset(self, reset_x: bool = True, reset_y: bool = True):
-        self._reset_to_data_bounds(reset_x=reset_x, reset_y=reset_y)
+        delegate_to_controller = bool(reset_x and self._delegate_x_reset_to_controller)
+        if not delegate_to_controller:
+            self._reset_to_data_bounds(reset_x=reset_x, reset_y=reset_y)
         # Only emit when X was reset because connected tabs use this signal to
         # recompute date-range filters and reload data windows.
         if reset_x:
@@ -793,6 +797,11 @@ class TimeSeriesChart(QFrame):
                 self.reset_requested.emit()
             except Exception:
                 logger.warning("Failed to emit reset request from time-series chart reset action.", exc_info=True)
+
+    # @ai(gpt-5, codex, fix, 2026-03-20)
+    def set_delegate_x_reset_to_controller(self, enabled: bool) -> None:
+        """Let parent controller handle X-axis reset/reload without local pre-reset."""
+        self._delegate_x_reset_to_controller = bool(enabled)
 
     # @ai(gpt-5, codex, fix, 2026-02-27)
     def _on_user_range_selected(self, qmin: QDateTime, qmax: QDateTime):

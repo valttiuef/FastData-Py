@@ -236,6 +236,7 @@ class DataTab(TabWidget):
             logger.warning("Exception in _create_content_widget", exc_info=True)
 
         self.timeseries_chart = TimeSeriesChart(title="")
+        self.timeseries_chart.set_delegate_x_reset_to_controller(True)
         self.timeseries_chart.range_changed.connect(self._on_chart_range_changed)
         self.timeseries_chart.reset_requested.connect(self._on_chart_reset_requested)
         
