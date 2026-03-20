@@ -103,6 +103,8 @@ class MonthlyBarChart(GroupBarChart):
         self._multi_hover_index: int | None = None
         self._multi_last_emit_index: int | None = None
         self._multi_last_emit_at: float = 0.0
+        self._multi_clicked_handlers: dict[QBarSet, object] = {}
+        self._multi_hover_handlers: dict[QBarSet, object] = {}
 
         # Visual overlays
         self._hover_item = QGraphicsRectItem(self.chart)
@@ -266,6 +268,7 @@ class MonthlyBarChart(GroupBarChart):
         request_repaint: bool = True,
     ):
         for s in list(self.series.barSets()):
+            self._disconnect_multi_barset_handlers(s)
             try:
                 if s in self._connected_barsets:
                     s.hovered.disconnect(self._on_set_hovered)
@@ -307,6 +310,8 @@ class MonthlyBarChart(GroupBarChart):
         self._multi_hover_index = None
         self._multi_last_emit_index = None
         self._multi_last_emit_at = 0.0
+        self._multi_clicked_handlers.clear()
+        self._multi_hover_handlers.clear()
         self._set_chart_cursor(Qt.CursorShape.ArrowCursor)
         try:
             QToolTip.hideText()
@@ -693,17 +698,7 @@ class MonthlyBarChart(GroupBarChart):
 
                 bar_set.setBrush(QBrush(color))
                 bar_set.setPen(QPen(QColor(color).darker(110)))
-                try:
-                    bar_set.clicked.disconnect()
-                except Exception:
-                    pass
-                try:
-                    bar_set.hovered.disconnect()
-                except Exception:
-                    pass
-                # Keep native bar click routing as an additional fallback path.
-                bar_set.clicked.connect(self._on_multi_bar_clicked_factory(feature))
-                bar_set.hovered.connect(self._on_multi_bar_hovered_factory(feature, values))
+                self._bind_multi_barset_handlers(bar_set, feature, values)
 
             if self._chart_colors is not None:
                 style_legend(legend, self._chart_colors)
@@ -727,6 +722,30 @@ class MonthlyBarChart(GroupBarChart):
             self.view.setUpdatesEnabled(updates_enabled)
             self.chart.update()
             self.view.viewport().update()
+
+    def _disconnect_multi_barset_handlers(self, bar_set: QBarSet) -> None:
+        click_handler = self._multi_clicked_handlers.pop(bar_set, None)
+        if click_handler is not None:
+            try:
+                bar_set.clicked.disconnect(click_handler)
+            except Exception:
+                logger.warning("Failed to disconnect multi-bar clicked handler.", exc_info=True)
+        hover_handler = self._multi_hover_handlers.pop(bar_set, None)
+        if hover_handler is not None:
+            try:
+                bar_set.hovered.disconnect(hover_handler)
+            except Exception:
+                logger.warning("Failed to disconnect multi-bar hovered handler.", exc_info=True)
+
+    def _bind_multi_barset_handlers(self, bar_set: QBarSet, feature: str, values: list[float]) -> None:
+        self._disconnect_multi_barset_handlers(bar_set)
+        clicked_handler = self._on_multi_bar_clicked_factory(feature)
+        hovered_handler = self._on_multi_bar_hovered_factory(feature, values)
+        # Keep native bar click routing as an additional fallback path.
+        bar_set.clicked.connect(clicked_handler)
+        bar_set.hovered.connect(hovered_handler)
+        self._multi_clicked_handlers[bar_set] = clicked_handler
+        self._multi_hover_handlers[bar_set] = hovered_handler
 
     def _on_multi_bar_hovered_factory(self, feature: str, values: list[float]):
         def handler(status: bool, index: int):
