@@ -621,6 +621,7 @@ class TimeSeriesChart(QFrame):
                 return False
 
             all_values: list[float] = []
+            new_segments: dict[str, list[QLineSeries]] = {}
             for name, color in zip(feature_cols, colors):
                 segments = list(self._series_segments.get(name) or [])
                 if not segments:
@@ -631,27 +632,20 @@ class TimeSeriesChart(QFrame):
                     values_arr = pd.to_numeric(df[name], errors="coerce").to_numpy(dtype=float)
                 except Exception:
                     values_arr = np.asarray(df[name].to_numpy(), dtype=float)
-                count = min(len(times_ms_all), len(values_arr))
-                if count <= 0:
-                    first_pts: list[QPointF] = []
-                else:
-                    vals = np.asarray(values_arr[:count], dtype=float)
-                    finite = np.isfinite(vals)
-                    first_pts = [
-                        QPointF(float(times_ms_all[i]), float(vals[i]))
-                        for i in range(count)
-                        if bool(finite[i])
-                    ]
-                first = segments[0]
-                first.setName(name)
-                first.replace(first_pts)
-                self._set_series_pen(first, color)
-                if first_pts:
-                    all_values.extend([point.y() for point in first_pts])
-                for extra in segments[1:]:
-                    extra.setName("")
-                    extra.replace([])
-                    self._set_series_pen(extra, color)
+                built_segments = self._build_segments_for_feature(
+                    name,
+                    times_ms_all,
+                    values_arr,
+                    color,
+                    existing_segments=segments,
+                )
+                if not built_segments:
+                    self.set_dataframe(frame, series_colors=series_colors, refresh_legend=True)
+                    return False
+                new_segments[name] = built_segments
+                for seg in built_segments:
+                    all_values.extend([point.y() for point in seg.points()])
+            self._series_segments = new_segments
 
             ms_min = int(times_ms_all.min())
             ms_max = int(times_ms_all.max())
