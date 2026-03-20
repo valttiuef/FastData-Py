@@ -322,12 +322,30 @@ class MonthlyBarChart(GroupBarChart):
             except Exception:
                 logger.warning("Failed to refresh chart viewport after clearing monthly chart.", exc_info=True)
 
-    def set_data(self, t_like: Iterable, v_like: Iterable, series_name: str = "Value"):
+    # @ai(gpt-5, codex, fix, 2026-03-20)
+    def set_data(
+        self,
+        t_like: Iterable,
+        v_like: Iterable,
+        series_name: str = "Value",
+        *,
+        show_legend: bool | None = None,
+    ):
         """Load raw (already postprocessed) data and choose a sensible base level."""
         self._multi_mode = False
         self._raw_multi_df = None
         self._single_series_name = _short_label(str(series_name or "Value"))
-        self.chart.legend().hide()
+        if show_legend is not None:
+            legend = self.chart.legend()
+            desired = bool(show_legend)
+            try:
+                current = bool(legend.isVisible())
+            except Exception:
+                current = not desired
+            if current != desired:
+                legend.setVisible(desired)
+            if desired and self._chart_colors is not None:
+                style_legend(legend, self._chart_colors)
         t = pd.Series(pd.to_datetime(list(t_like), errors="coerce").astype("datetime64[ns]"))
         v = pd.Series(pd.to_numeric(list(v_like), errors="coerce"))
         self._raw_t = t
@@ -479,7 +497,25 @@ class MonthlyBarChart(GroupBarChart):
             t = t.replace(hour=0, minute=0, second=0, microsecond=0)
         return t
 
-    # @ai(gpt-5, codex, refactor, 2026-02-27)
+    # @ai(gpt-5, codex, fix, 2026-03-20)
+    def _replace_barset_values(self, bar_set: QBarSet, values: list[float]) -> None:
+        try:
+            count = int(bar_set.count())
+        except Exception:
+            count = 0
+        if count > 0:
+            try:
+                bar_set.remove(0, count)
+            except Exception:
+                for idx in range(count - 1, -1, -1):
+                    try:
+                        bar_set.remove(idx)
+                    except Exception:
+                        break
+        if values:
+            bar_set.append([float(v) for v in values])
+
+    # @ai(gpt-5, codex, fix, 2026-03-20)
     def _render_level(self, t: pd.Series, v: pd.Series, level_code: str):
         # Aggregate
         cats, vals, periods = self._aggregate(level_code, t, v)
@@ -491,7 +527,14 @@ class MonthlyBarChart(GroupBarChart):
         try:
             # Keep current axis state while rebuilding bars to avoid a visible
             # intermediate 0..1 axis jump during normal data refreshes.
-            self.clear(reset_navigation=False, reset_axes=False, request_repaint=False)
+            existing_sets = list(self.series.barSets())
+            can_reuse_single = (
+                len(existing_sets) == 1
+                and str(existing_sets[0].label() or "") == str(self._single_series_name)
+                and not self._multi_mode
+            )
+            if not can_reuse_single:
+                self.clear(reset_navigation=False, reset_axes=False, request_repaint=False)
             self._cats = cats
             self._vals = vals
             # raw vals keep None for missing
@@ -509,14 +552,23 @@ class MonthlyBarChart(GroupBarChart):
             except Exception:
                 self.chart.setTitle(self._base_title)
 
-            # Build bar set
-            bar = QBarSet(self._single_series_name)
-            bar.append(self._vals)
             primary = group_color_cycle(1, dark_theme=self._dark_theme)[0]
-            bar.setBrush(QBrush(primary))
-            bar.setPen(QPen(QColor(primary).darker(110 if not self._dark_theme else 140)))
-            self.series.append(bar)
-            bar.hovered.connect(self._on_set_hovered)
+            if can_reuse_single:
+                bar = existing_sets[0]
+                self._replace_barset_values(bar, self._vals)
+                bar.setBrush(QBrush(primary))
+                bar.setPen(QPen(QColor(primary).darker(110 if not self._dark_theme else 140)))
+            else:
+                # Build bar set
+                bar = QBarSet(self._single_series_name)
+                bar.append(self._vals)
+                bar.setBrush(QBrush(primary))
+                bar.setPen(QPen(QColor(primary).darker(110 if not self._dark_theme else 140)))
+                self.series.append(bar)
+                try:
+                    bar.hovered.connect(self._on_set_hovered)
+                except Exception:
+                    logger.warning("Failed to connect single-series hover handler while rendering monthly bars.", exc_info=True)
 
             self.axis_x.setVisible(True)
             self._set_axis_categories(self._cats)
@@ -575,24 +627,23 @@ class MonthlyBarChart(GroupBarChart):
         grouped = grouped.sort_values(["start_ts", "feature"])
         return grouped
 
-    # @ai(gpt-5, codex, refactor, 2026-02-27)
+    # @ai(gpt-5, codex, fix, 2026-03-20)
     def _render_multi_bars(self, agg: pd.DataFrame):
         updates_enabled = self.view.updatesEnabled()
         self.view.setUpdatesEnabled(False)
         try:
-            self.clear(reset_navigation=False, reset_axes=False, request_repaint=False)
             if agg is None or agg.empty:
+                self.clear(reset_navigation=False, reset_axes=False, request_repaint=False)
                 self._multi_categories = []
                 return
 
             categories_df = agg[["label", "start_ts"]].drop_duplicates().sort_values("start_ts")
             categories = categories_df["label"].tolist()
-            self._multi_categories = categories
             bounds = (
                 agg.groupby("label")[["start_ts", "end_ts"]]
                 .agg({"start_ts": "min", "end_ts": "max"})
             )
-            self._multi_category_bounds = {
+            category_bounds = {
                 label: (pd.Timestamp(row["start_ts"]), pd.Timestamp(row["end_ts"]))
                 for label, row in bounds.iterrows()
             }
@@ -607,23 +658,55 @@ class MonthlyBarChart(GroupBarChart):
             self._set_axis_categories(categories)
 
             features = list(pivot.columns)
+            target_labels = [_short_label(str(feature)) for feature in features]
+            existing_sets = list(self.series.barSets())
+            existing_labels = [str(bar_set.label() or "") for bar_set in existing_sets]
+            can_reuse_multi = (
+                len(existing_sets) == len(target_labels)
+                and existing_labels == target_labels
+            )
+            if not can_reuse_multi:
+                self.clear(reset_navigation=False, reset_axes=False, request_repaint=False)
+                self.axis_x.setVisible(True)
+                self._set_axis_categories(categories)
+            self._multi_categories = categories
+            self._multi_category_bounds = category_bounds
+
             colors = self._multi_bar_colors(len(features))
             self._multi_base_colors = [QColor(c) for c in colors]
-            self.chart.legend().setVisible(True)
+            legend = self.chart.legend()
+            try:
+                if not legend.isVisible():
+                    legend.setVisible(True)
+            except Exception:
+                legend.setVisible(True)
 
-            for feature, color in zip(features, colors):
-                bar_set = QBarSet(_short_label(str(feature)))
+            for idx, (feature, color) in enumerate(zip(features, colors)):
                 values = pivot[feature].tolist()
-                bar_set.append(values)
+                if can_reuse_multi:
+                    bar_set = existing_sets[idx]
+                    self._replace_barset_values(bar_set, values)
+                else:
+                    bar_set = QBarSet(target_labels[idx])
+                    bar_set.append(values)
+                    self.series.append(bar_set)
+
                 bar_set.setBrush(QBrush(color))
                 bar_set.setPen(QPen(QColor(color).darker(110)))
+                try:
+                    bar_set.clicked.disconnect()
+                except Exception:
+                    pass
+                try:
+                    bar_set.hovered.disconnect()
+                except Exception:
+                    pass
                 # Keep native bar click routing as an additional fallback path.
                 bar_set.clicked.connect(self._on_multi_bar_clicked_factory(feature))
                 bar_set.hovered.connect(self._on_multi_bar_hovered_factory(feature, values))
-                self.series.append(bar_set)
 
             if self._chart_colors is not None:
-                style_legend(self.chart.legend(), self._chart_colors)
+                style_legend(legend, self._chart_colors)
 
             # Update Y-axis range
             if not pivot.empty:

@@ -235,6 +235,7 @@ class TimeSeriesChart(QFrame):
         *,
         reset_axes: bool = True,
         request_repaint: bool = True,
+        refresh_legend: bool = True,
     ):
         self._clear_group_timeline_overlays()
         self._clear_axis_lock_hint_overlay()
@@ -267,7 +268,8 @@ class TimeSeriesChart(QFrame):
                 self.axis_y.setLabelFormat("%.3f")
             except Exception:
                 logger.warning("Failed to reset Y-axis tick settings while clearing time-series chart.", exc_info=True)
-        self._refresh_legend_markers()
+        if refresh_legend:
+            self._refresh_legend_markers()
         if request_repaint:
             try:
                 self.chart.update()
@@ -380,112 +382,330 @@ class TimeSeriesChart(QFrame):
             value = MAX_FEATURES_SHOWN_LEGEND
         self._max_series = max(1, value)
 
-    def set_dataframe(self, frame: pd.DataFrame | None, *, series_colors: dict[str, QColor] | None = None):
-        # Keep current axis state during regular data refreshes to avoid
-        # intermediate 0..1 axis flicker before new ranges are applied.
-        self.clear(reset_axes=False, request_repaint=False)
-        self._preserve_series_colors = False
-        self._group_hover_specs = []
-        self._explicit_series_colors = {
-            str(name): QColor(color)
-            for name, color in (series_colors or {}).items()
-            if color is not None
-        }
-        if frame is None:
-            return
+    # @ai(gpt-5, codex, fix, 2026-03-20)
+    def set_dataframe(
+        self,
+        frame: pd.DataFrame | None,
+        *,
+        series_colors: dict[str, QColor] | None = None,
+        refresh_legend: bool = True,
+    ):
+        updates_enabled = self.view.updatesEnabled()
+        self.view.setUpdatesEnabled(False)
+        try:
+            self._preserve_series_colors = False
+            self._group_hover_specs = []
+            self._explicit_series_colors = {
+                str(name): QColor(color)
+                for name, color in (series_colors or {}).items()
+                if color is not None
+            }
+            if frame is None:
+                self.clear(reset_axes=False, request_repaint=False, refresh_legend=False)
+                return
 
-        df = frame.copy()
-        if df.empty or "t" not in df.columns:
-            return
+            df = frame.copy()
+            if df.empty or "t" not in df.columns:
+                self.clear(reset_axes=False, request_repaint=False, refresh_legend=False)
+                return
 
-        # Keep whatever dtype/timezone `t` already has; just parse if needed.
-        df["t"] = pd.to_datetime(df["t"], errors="coerce")
-        df = df.dropna(subset=["t"]).sort_values("t")
-        if df.empty:
-            return
+            # Keep whatever dtype/timezone `t` already has; just parse if needed.
+            df["t"] = pd.to_datetime(df["t"], errors="coerce")
+            df = df.dropna(subset=["t"]).sort_values("t")
+            if df.empty:
+                self.clear(reset_axes=False, request_repaint=False, refresh_legend=False)
+                return
 
-        feature_cols = [c for c in df.columns if c != "t"][: self._max_series]
-        if not feature_cols:
-            return
+            feature_cols = [c for c in df.columns if c != "t"][: self._max_series]
+            if not feature_cols:
+                self.clear(reset_axes=False, request_repaint=False, refresh_legend=False)
+                return
 
-        self._current_frame = df
-        self._feature_order = feature_cols
+            can_reuse_segments = (
+                bool(self._series_segments)
+                and not self._group_box_specs
+                and list(self._feature_order) == list(feature_cols)
+            )
+            if not can_reuse_segments:
+                # Keep current axis state during regular data refreshes to avoid
+                # intermediate 0..1 axis flicker before new ranges are applied.
+                self.clear(reset_axes=False, request_repaint=False, refresh_legend=False)
+            else:
+                self._clear_group_timeline_overlays()
+                self._clear_axis_lock_hint_overlay()
+                self._group_box_specs = []
+                self._group_hover_specs = []
+                self._hover_group_points = []
+                self._hover_group_ms = []
 
-        colors = self._generate_colors(len(feature_cols))
-        self._series_segments = {}
-        self._series_colors = {
-            name: QColor(self._explicit_series_colors.get(name, color))
-            for name, color in zip(feature_cols, colors)
-        }
-        self._preserve_series_colors = bool(self._explicit_series_colors)
+            self._current_frame = df
+            self._feature_order = feature_cols
 
-        # raw times
-        times_ms_all = _to_ms_epoch_array(df["t"])
+            colors = self._generate_colors(len(feature_cols))
+            self._series_colors = {
+                name: QColor(self._explicit_series_colors.get(name, color))
+                for name, color in zip(feature_cols, colors)
+            }
+            self._preserve_series_colors = bool(self._explicit_series_colors)
 
-        all_values: list[float] = []
-        for name, color in zip(feature_cols, colors):
-            color = QColor(self._series_colors.get(name, color))
+            # raw times
+            times_ms_all = _to_ms_epoch_array(df["t"])
+
+            all_values: list[float] = []
+            new_segments: dict[str, list[QLineSeries]] = {}
+            for name, color in zip(feature_cols, colors):
+                color = QColor(self._series_colors.get(name, color))
+                try:
+                    values_arr = pd.to_numeric(df[name], errors="coerce").to_numpy(dtype=float)
+                except Exception:
+                    values_arr = df[name].to_numpy()
+
+                existing_segments = self._series_segments.get(name) if can_reuse_segments else None
+                segments = self._build_segments_for_feature(
+                    name,
+                    times_ms_all,
+                    values_arr,
+                    color,
+                    existing_segments=existing_segments,
+                )
+                if segments:
+                    new_segments[name] = segments
+                    for seg in segments:
+                        all_values.extend([point.y() for point in seg.points()])
+
+            if can_reuse_segments:
+                for old_name, segments in list(self._series_segments.items()):
+                    if old_name in new_segments:
+                        continue
+                    for series in segments:
+                        try:
+                            self.chart.removeSeries(series)
+                        except Exception:
+                            logger.warning("Failed to remove a stale time-series segment during in-place update.", exc_info=True)
+            self._series_segments = new_segments
+
+            # Use the SAME ms numbers to set the axis range (no tz logic here).
+            if times_ms_all.size:
+                ms_min = int(times_ms_all.min())
+                ms_max = int(times_ms_all.max())
+                if ms_min == ms_max:
+                    ms_max += 1  # avoid zero-span
+
+                # If you want local-looking labels, just use default LocalTime here.
+                qmin = QDateTime.fromMSecsSinceEpoch(ms_min)       # LocalTime by default
+                qmax = QDateTime.fromMSecsSinceEpoch(ms_max)
+                self.axis_x.setRange(qmin, qmax)
+                self._data_x_range = (QDateTime(qmin), QDateTime(qmax))
+                try:
+                    self.axis_x.setLabelsVisible(True)
+                except Exception:
+                    logger.warning("Failed to show X-axis labels after setting time-series data.", exc_info=True)
+
+                try:
+                    self._set_x_axis_format_for_span_ms(ms_max - ms_min)
+                except Exception:
+                    logger.warning("Failed to format X-axis labels for time-series span.", exc_info=True)
+
+            # Y-range as before
             try:
-                values_arr = pd.to_numeric(df[name], errors="coerce").to_numpy(dtype=float)
+                self.axis_y.setLabelsVisible(True)
             except Exception:
-                values_arr = df[name].to_numpy()
+                logger.warning("Failed to show Y-axis labels after setting time-series data.", exc_info=True)
+            try:
+                # Reset any categorical tick setup left by group timelines.
+                self.axis_y.setTickType(QValueAxis.TickType.TicksFixed)
+                self.axis_y.setTickCount(6)
+                self.axis_y.setLabelFormat("%.3f")
+            except Exception:
+                logger.warning("Failed to restore numeric Y-axis tick settings for time-series data.", exc_info=True)
+            self._y_axis_title_base = "Value"
+            self.axis_y.setTitleText(self._y_axis_title_base)
+            if all_values:
+                ymin = float(min(all_values)); ymax = float(max(all_values))
+            else:
+                ymin, ymax = 0.0, 1.0
+            if ymin == ymax:
+                ymin -= 0.5; ymax += 0.5
+            self.axis_y.setRange(ymin, ymax)
+            self._data_y_range = (float(ymin), float(ymax))
 
-            segments = self._build_segments_for_feature(name, times_ms_all, values_arr, color)
-            if segments:
-                self._series_segments[name] = segments
-                for seg in segments:
-                    all_values.extend([point.y() for point in seg.points()])
+            # Refresh legend markers once after all series are built.
+            if refresh_legend:
+                self._refresh_legend_markers()
+            self._request_deferred_refresh()
+        finally:
+            self.view.setUpdatesEnabled(updates_enabled)
+            try:
+                self.chart.update()
+            except Exception:
+                logger.warning("Failed to refresh chart scene after time-series dataframe update.", exc_info=True)
+            try:
+                self.view.viewport().update()
+            except Exception:
+                logger.warning("Failed to refresh chart viewport after time-series dataframe update.", exc_info=True)
 
-        # Use the SAME ms numbers to set the axis range (no tz logic here).
-        if times_ms_all.size:
+    # @ai(gpt-5, codex, fix, 2026-03-20)
+    def update_window_dataframe(
+        self,
+        frame: pd.DataFrame | None,
+        *,
+        series_colors: dict[str, QColor] | None = None,
+    ) -> bool:
+        """Update only time-windowed series data while keeping legend structure intact."""
+        if frame is None:
+            self.set_dataframe(frame, series_colors=series_colors, refresh_legend=True)
+            return False
+        try:
+            probe = frame
+            if "t" not in probe.columns:
+                self.set_dataframe(frame, series_colors=series_colors, refresh_legend=True)
+                return False
+            incoming = [c for c in probe.columns if c != "t"][: self._max_series]
+            current = list(self._feature_order)
+        except Exception:
+            self.set_dataframe(frame, series_colors=series_colors, refresh_legend=True)
+            return False
+        if not incoming or not current:
+            self.set_dataframe(frame, series_colors=series_colors, refresh_legend=True)
+            return False
+        if set(incoming) != set(current):
+            self.set_dataframe(frame, series_colors=series_colors, refresh_legend=True)
+            return False
+        if not self._series_segments:
+            self.set_dataframe(frame, series_colors=series_colors, refresh_legend=True)
+            return False
+        try:
+            df = frame.copy()
+            df["t"] = pd.to_datetime(df["t"], errors="coerce")
+            df = df.dropna(subset=["t"]).sort_values("t")
+        except Exception:
+            self.set_dataframe(frame, series_colors=series_colors, refresh_legend=True)
+            return False
+        if df.empty:
+            self.set_dataframe(frame, series_colors=series_colors, refresh_legend=True)
+            return False
+
+        feature_cols = [name for name in current if name in df.columns]
+        if len(feature_cols) != len(current):
+            self.set_dataframe(frame, series_colors=series_colors, refresh_legend=True)
+            return False
+        df = df[["t"] + feature_cols]
+
+        updates_enabled = self.view.updatesEnabled()
+        self.view.setUpdatesEnabled(False)
+        try:
+            self._preserve_series_colors = False
+            self._group_hover_specs = []
+            self._clear_group_timeline_overlays()
+            self._clear_axis_lock_hint_overlay()
+            self._group_box_specs = []
+            self._hover_group_points = []
+            self._hover_group_ms = []
+            self._explicit_series_colors = {
+                str(name): QColor(color)
+                for name, color in (series_colors or {}).items()
+                if color is not None
+            }
+
+            self._current_frame = df
+            colors = self._generate_colors(len(feature_cols))
+            self._series_colors = {
+                name: QColor(self._explicit_series_colors.get(name, color))
+                for name, color in zip(feature_cols, colors)
+            }
+            self._preserve_series_colors = bool(self._explicit_series_colors)
+
+            times_ms_all = _to_ms_epoch_array(df["t"])
+            if times_ms_all.size == 0:
+                self.set_dataframe(frame, series_colors=series_colors, refresh_legend=True)
+                return False
+
+            all_values: list[float] = []
+            for name, color in zip(feature_cols, colors):
+                segments = list(self._series_segments.get(name) or [])
+                if not segments:
+                    self.set_dataframe(frame, series_colors=series_colors, refresh_legend=True)
+                    return False
+                color = QColor(self._series_colors.get(name, color))
+                try:
+                    values_arr = pd.to_numeric(df[name], errors="coerce").to_numpy(dtype=float)
+                except Exception:
+                    values_arr = np.asarray(df[name].to_numpy(), dtype=float)
+                count = min(len(times_ms_all), len(values_arr))
+                if count <= 0:
+                    first_pts: list[QPointF] = []
+                else:
+                    vals = np.asarray(values_arr[:count], dtype=float)
+                    finite = np.isfinite(vals)
+                    first_pts = [
+                        QPointF(float(times_ms_all[i]), float(vals[i]))
+                        for i in range(count)
+                        if bool(finite[i])
+                    ]
+                first = segments[0]
+                first.setName(name)
+                first.replace(first_pts)
+                self._set_series_pen(first, color)
+                if first_pts:
+                    all_values.extend([point.y() for point in first_pts])
+                for extra in segments[1:]:
+                    extra.setName("")
+                    extra.replace([])
+                    self._set_series_pen(extra, color)
+
             ms_min = int(times_ms_all.min())
             ms_max = int(times_ms_all.max())
             if ms_min == ms_max:
-                ms_max += 1  # avoid zero-span
-
-            # If you want local-looking labels, just use default LocalTime here.
-            qmin = QDateTime.fromMSecsSinceEpoch(ms_min)       # LocalTime by default
+                ms_max += 1
+            qmin = QDateTime.fromMSecsSinceEpoch(ms_min)
             qmax = QDateTime.fromMSecsSinceEpoch(ms_max)
             self.axis_x.setRange(qmin, qmax)
             self._data_x_range = (QDateTime(qmin), QDateTime(qmax))
             try:
                 self.axis_x.setLabelsVisible(True)
             except Exception:
-                logger.warning("Failed to show X-axis labels after setting time-series data.", exc_info=True)
-
+                logger.warning("Failed to show X-axis labels after windowed time-series data update.", exc_info=True)
             try:
                 self._set_x_axis_format_for_span_ms(ms_max - ms_min)
             except Exception:
-                logger.warning("Failed to format X-axis labels for time-series span.", exc_info=True)
+                logger.warning("Failed to format X-axis labels for windowed time-series span.", exc_info=True)
 
-        # Y-range as before
-        try:
-            self.axis_y.setLabelsVisible(True)
-        except Exception:
-            logger.warning("Failed to show Y-axis labels after setting time-series data.", exc_info=True)
-        try:
-            # Reset any categorical tick setup left by group timelines.
-            self.axis_y.setTickType(QValueAxis.TickType.TicksFixed)
-            self.axis_y.setTickCount(6)
-            self.axis_y.setLabelFormat("%.3f")
-        except Exception:
-            logger.warning("Failed to restore numeric Y-axis tick settings for time-series data.", exc_info=True)
-        self._y_axis_title_base = "Value"
-        self.axis_y.setTitleText(self._y_axis_title_base)
-        if all_values:
-            ymin = float(min(all_values)); ymax = float(max(all_values))
-        else:
-            ymin, ymax = 0.0, 1.0
-        if ymin == ymax:
-            ymin -= 0.5; ymax += 0.5
-        self.axis_y.setRange(ymin, ymax)
-        self._data_y_range = (float(ymin), float(ymax))
+            try:
+                self.axis_y.setLabelsVisible(True)
+            except Exception:
+                logger.warning("Failed to show Y-axis labels after windowed time-series data update.", exc_info=True)
+            try:
+                self.axis_y.setTickType(QValueAxis.TickType.TicksFixed)
+                self.axis_y.setTickCount(6)
+                self.axis_y.setLabelFormat("%.3f")
+            except Exception:
+                logger.warning("Failed to restore numeric Y-axis tick settings for windowed time-series data.", exc_info=True)
+            self._y_axis_title_base = "Value"
+            self.axis_y.setTitleText(self._y_axis_title_base)
+            if all_values:
+                ymin = float(min(all_values))
+                ymax = float(max(all_values))
+            else:
+                ymin, ymax = 0.0, 1.0
+            if ymin == ymax:
+                ymin -= 0.5
+                ymax += 0.5
+            self.axis_y.setRange(ymin, ymax)
+            self._data_y_range = (float(ymin), float(ymax))
+            self._request_deferred_refresh()
+        finally:
+            self.view.setUpdatesEnabled(updates_enabled)
+            try:
+                self.chart.update()
+            except Exception:
+                logger.warning("Failed to refresh chart scene after windowed time-series update.", exc_info=True)
+            try:
+                self.view.viewport().update()
+            except Exception:
+                logger.warning("Failed to refresh chart viewport after windowed time-series update.", exc_info=True)
+        return True
 
-        # Refresh legend markers once after all series are built
-        self._refresh_legend_markers()
-        self._apply_theme(self._current_theme)
-        self._request_deferred_refresh()
-
+    # @ai(gpt-5, codex, fix, 2026-03-20)
     def set_group_timeline(
         self,
         frame: pd.DataFrame | None,
@@ -498,207 +718,224 @@ class TimeSeriesChart(QFrame):
         max_rows: int = 120_000,
     ) -> None:
         """Render categorical timeline as colored horizontal group lanes."""
-        self.clear(reset_axes=False, request_repaint=False)
-        self._preserve_series_colors = True
-        if frame is None:
-            return
+        updates_enabled = self.view.updatesEnabled()
+        self.view.setUpdatesEnabled(False)
+        try:
+            self.clear(reset_axes=False, request_repaint=False, refresh_legend=False)
+            self._preserve_series_colors = True
+            if frame is None:
+                return
 
-        df = frame.copy()
-        if df.empty or time_col not in df.columns or group_col not in df.columns:
-            return
+            df = frame.copy()
+            if df.empty or time_col not in df.columns or group_col not in df.columns:
+                return
 
-        df[time_col] = pd.to_datetime(df[time_col], errors="coerce")
-        df[group_col] = pd.to_numeric(df[group_col], errors="coerce")
-        df = df.dropna(subset=[time_col, group_col]).sort_values(time_col).reset_index(drop=True)
-        if df.empty:
-            return
-
-        if len(df) > max_rows:
-            stride = int(np.ceil(len(df) / max(1, int(max_rows))))
-            sampled = df.iloc[::max(1, stride)].copy()
-            if sampled.index[-1] != df.index[-1]:
-                sampled = pd.concat([sampled, df.iloc[[-1]]], ignore_index=True)
-            df = sampled.reset_index(drop=True)
-
-        group_counts = df[group_col].value_counts(dropna=True)
-        if max_groups > 0 and len(group_counts) > max_groups:
-            keep_groups = set(group_counts.nlargest(max_groups).index.tolist())
-            df = df[df[group_col].isin(keep_groups)].copy()
+            df[time_col] = pd.to_datetime(df[time_col], errors="coerce")
+            df[group_col] = pd.to_numeric(df[group_col], errors="coerce")
+            df = df.dropna(subset=[time_col, group_col]).sort_values(time_col).reset_index(drop=True)
             if df.empty:
                 return
+
+            if len(df) > max_rows:
+                stride = int(np.ceil(len(df) / max(1, int(max_rows))))
+                sampled = df.iloc[::max(1, stride)].copy()
+                if sampled.index[-1] != df.index[-1]:
+                    sampled = pd.concat([sampled, df.iloc[[-1]]], ignore_index=True)
+                df = sampled.reset_index(drop=True)
+
             group_counts = df[group_col].value_counts(dropna=True)
+            if max_groups > 0 and len(group_counts) > max_groups:
+                keep_groups = set(group_counts.nlargest(max_groups).index.tolist())
+                df = df[df[group_col].isin(keep_groups)].copy()
+                if df.empty:
+                    return
+                group_counts = df[group_col].value_counts(dropna=True)
 
-        ordered_groups = [float(g) for g in sorted(group_counts.index.tolist())]
-        if not ordered_groups:
-            return
+            ordered_groups = [float(g) for g in sorted(group_counts.index.tolist())]
+            if not ordered_groups:
+                return
 
-        times_ms = _to_ms_epoch_array(df[time_col])
-        if times_ms.size == 0:
-            return
+            times_ms = _to_ms_epoch_array(df[time_col])
+            if times_ms.size == 0:
+                return
 
-        class _Run:
-            __slots__ = ("group", "start_ms", "end_ms")
+            class _Run:
+                __slots__ = ("group", "start_ms", "end_ms")
 
-            def __init__(self, group: float, start_ms: int, end_ms: int) -> None:
-                self.group = group
-                self.start_ms = int(start_ms)
-                self.end_ms = int(end_ms)
+                def __init__(self, group: float, start_ms: int, end_ms: int) -> None:
+                    self.group = group
+                    self.start_ms = int(start_ms)
+                    self.end_ms = int(end_ms)
 
-        runs: list[_Run] = []
-        # Build per-row intervals from each timestamp to the next timestamp so
-        # timeline ranges align with saved group timeframes.
-        row_starts: list[int] = [0] * len(times_ms)
-        row_ends: list[int] = [0] * len(times_ms)
-        if len(times_ms) == 1:
-            start = int(times_ms[0])
-            row_starts[0] = start
-            row_ends[0] = start + 1000
-        else:
-            positive_steps: list[int] = []
-            for idx in range(len(times_ms) - 1):
-                left = int(times_ms[idx])
-                right = int(times_ms[idx + 1])
-                step = right - left
-                if step > 0:
-                    positive_steps.append(step)
-            inferred_step = min(positive_steps) if positive_steps else 1000
-            for idx in range(len(times_ms) - 1):
-                start = int(times_ms[idx])
-                next_start = int(times_ms[idx + 1])
-                row_starts[idx] = start
-                row_ends[idx] = next_start if next_start > start else start + 1
-            last_start = int(times_ms[-1])
-            row_starts[-1] = last_start
-            row_ends[-1] = last_start + max(1, int(inferred_step))
+            runs: list[_Run] = []
+            # Build per-row intervals from each timestamp to the next timestamp so
+            # timeline ranges align with saved group timeframes.
+            row_starts: list[int] = [0] * len(times_ms)
+            row_ends: list[int] = [0] * len(times_ms)
+            if len(times_ms) == 1:
+                start = int(times_ms[0])
+                row_starts[0] = start
+                row_ends[0] = start + 1000
+            else:
+                positive_steps: list[int] = []
+                for idx in range(len(times_ms) - 1):
+                    left = int(times_ms[idx])
+                    right = int(times_ms[idx + 1])
+                    step = right - left
+                    if step > 0:
+                        positive_steps.append(step)
+                inferred_step = min(positive_steps) if positive_steps else 1000
+                for idx in range(len(times_ms) - 1):
+                    start = int(times_ms[idx])
+                    next_start = int(times_ms[idx + 1])
+                    row_starts[idx] = start
+                    row_ends[idx] = next_start if next_start > start else start + 1
+                last_start = int(times_ms[-1])
+                row_starts[-1] = last_start
+                row_ends[-1] = last_start + max(1, int(inferred_step))
 
-        current_group = float(df[group_col].iat[0])
-        run_start_ms = int(row_starts[0])
-        run_end_ms = int(row_ends[0])
-        for idx in range(1, len(df)):
-            group_value = float(df[group_col].iat[idx])
-            start_ms = int(row_starts[idx])
-            end_ms = int(row_ends[idx])
-            if group_value == current_group:
-                run_end_ms = max(run_end_ms, end_ms)
-                continue
+            current_group = float(df[group_col].iat[0])
+            run_start_ms = int(row_starts[0])
+            run_end_ms = int(row_ends[0])
+            for idx in range(1, len(df)):
+                group_value = float(df[group_col].iat[idx])
+                start_ms = int(row_starts[idx])
+                end_ms = int(row_ends[idx])
+                if group_value == current_group:
+                    run_end_ms = max(run_end_ms, end_ms)
+                    continue
+                runs.append(_Run(current_group, run_start_ms, run_end_ms))
+                current_group = group_value
+                run_start_ms = start_ms
+                run_end_ms = end_ms
             runs.append(_Run(current_group, run_start_ms, run_end_ms))
-            current_group = group_value
-            run_start_ms = start_ms
-            run_end_ms = end_ms
-        runs.append(_Run(current_group, run_start_ms, run_end_ms))
 
-        max_runs = 30_000
-        if len(runs) > max_runs:
-            stride = int(np.ceil(len(runs) / max_runs))
-            runs = runs[::max(1, stride)]
+            max_runs = 30_000
+            if len(runs) > max_runs:
+                stride = int(np.ceil(len(runs) / max_runs))
+                runs = runs[::max(1, stride)]
 
-        self._series_segments = {}
-        self._series_colors = {}
-        self._feature_order = []
-        self._current_frame = df[[time_col, group_col]].copy()
+            self._series_segments = {}
+            self._series_colors = {}
+            self._feature_order = []
+            self._current_frame = df[[time_col, group_col]].copy()
 
-        overlay_columns = [
-            col for col in (overlay_cols or []) if col in frame.columns and col not in {time_col, group_col}
-        ]
+            overlay_columns = [
+                col for col in (overlay_cols or []) if col in frame.columns and col not in {time_col, group_col}
+            ]
 
-        # Create one minimal series per group to preserve legend entries/colors.
-        legend_limit = 24
-        group_meta: dict[float, tuple[str, str, QColor]] = {}
-        ms_min = int(min(row_starts)) if row_starts else int(times_ms.min())
-        ms_max = int(max(row_ends)) if row_ends else int(times_ms.max())
-        if ms_min == ms_max:
-            ms_max += 1
-        for idx, group in enumerate(ordered_groups):
-            series = QLineSeries()
-            series.setUseOpenGL(False)
-            label = (
-                (group_names or {}).get(group)
-                or (group_names or {}).get(int(group))
-                or f"Cluster {int(group)}"
-            )
-            series.setName(str(label) if idx < legend_limit else "")
-            # One off-range point keeps legend marker, but renders nothing in plot area.
-            series.append(float(ms_min), -10_000.0)
-            self.chart.addSeries(series)
-            series.attachAxis(self.axis_x)
-            series.attachAxis(self.axis_y)
-            color = group_color_for_label(group, dark_theme=self._dark_theme)
-            pen = QPen(color)
-            pen.setWidthF(2.0)
-            pen.setCosmetic(True)
-            series.setPen(pen)
-            key = f"group:{int(group)}:{label}"
-            self._series_segments[key] = [series]
-            self._series_colors[key] = QColor(color)
-            self._feature_order.append(key)
-            group_meta[group] = (str(label), key, QColor(color))
-
-        # Optional numeric overlays: draw as thin traces on the chart's current
-        # Y-scale. Callers can pre-scale values (for example to cluster bounds).
-        if overlay_columns:
-            overlay_frame = df[[time_col, *overlay_columns]].copy()
-            overlay_times_ms = _to_ms_epoch_array(overlay_frame[time_col])
-            for col in overlay_columns:
-                vals = pd.to_numeric(overlay_frame[col], errors="coerce")
-                segments = self._build_segments_for_feature(
-                    str(col),
-                    overlay_times_ms,
-                    vals.to_numpy(dtype=float),
-                    QColor(140, 140, 140),
+            # Create one minimal series per group to preserve legend entries/colors.
+            legend_limit = 24
+            group_meta: dict[float, tuple[str, str, QColor]] = {}
+            ms_min = int(min(row_starts)) if row_starts else int(times_ms.min())
+            ms_max = int(max(row_ends)) if row_ends else int(times_ms.max())
+            if ms_min == ms_max:
+                ms_max += 1
+            for idx, group in enumerate(ordered_groups):
+                series = QLineSeries()
+                series.setUseOpenGL(False)
+                label = (
+                    (group_names or {}).get(group)
+                    or (group_names or {}).get(int(group))
+                    or f"Cluster {int(group)}"
                 )
-                if segments:
-                    self._series_segments[str(col)] = segments
-                    self._series_colors[str(col)] = QColor(140, 140, 140)
-                    self._feature_order.append(str(col))
+                series.setName(str(label) if idx < legend_limit else "")
+                # One off-range point keeps legend marker, but renders nothing in plot area.
+                series.append(float(ms_min), -10_000.0)
+                self.chart.addSeries(series)
+                series.attachAxis(self.axis_x)
+                series.attachAxis(self.axis_y)
+                color = group_color_for_label(group, dark_theme=self._dark_theme)
+                pen = QPen(color)
+                pen.setWidthF(2.0)
+                pen.setCosmetic(True)
+                series.setPen(pen)
+                key = f"group:{int(group)}:{label}"
+                self._series_segments[key] = [series]
+                self._series_colors[key] = QColor(color)
+                self._feature_order.append(key)
+                group_meta[group] = (str(label), key, QColor(color))
 
-        qmin = QDateTime.fromMSecsSinceEpoch(ms_min)
-        qmax = QDateTime.fromMSecsSinceEpoch(ms_max)
-        self.axis_x.setRange(qmin, qmax)
-        self._data_x_range = (QDateTime(qmin), QDateTime(qmax))
-        self.axis_x.setLabelsVisible(True)
-        self._set_x_axis_format_for_span_ms(ms_max - ms_min)
+            # Optional numeric overlays: draw as thin traces on the chart's current
+            # Y-scale. Callers can pre-scale values (for example to cluster bounds).
+            if overlay_columns:
+                overlay_frame = df[[time_col, *overlay_columns]].copy()
+                overlay_times_ms = _to_ms_epoch_array(overlay_frame[time_col])
+                for col in overlay_columns:
+                    vals = pd.to_numeric(overlay_frame[col], errors="coerce")
+                    segments = self._build_segments_for_feature(
+                        str(col),
+                        overlay_times_ms,
+                        vals.to_numpy(dtype=float),
+                        QColor(140, 140, 140),
+                    )
+                    if segments:
+                        self._series_segments[str(col)] = segments
+                        self._series_colors[str(col)] = QColor(140, 140, 140)
+                        self._feature_order.append(str(col))
 
-        y_min = float(min(ordered_groups) - 0.5)
-        y_max = float(max(ordered_groups) + 0.5)
-        if y_min == y_max:
-            y_min -= 0.5
-            y_max += 0.5
-        self.axis_y.setRange(y_min, y_max)
-        try:
-            # Use integer cluster-id ticks (0, 1, 2, ...) instead of rounded half-step ticks.
-            self.axis_y.setTickType(QValueAxis.TickType.TicksDynamic)
-            self.axis_y.setTickAnchor(float(min(ordered_groups)))
-            self.axis_y.setTickInterval(1.0)
-        except Exception:
-            logger.warning("Failed to configure dynamic Y-axis ticks for group timeline rendering.", exc_info=True)
-        self.axis_y.setLabelFormat("%.0f")
-        try:
-            self.axis_y.setLabelsVisible(True)
-        except Exception:
-            logger.warning("Failed to show Y-axis labels for group timeline rendering.", exc_info=True)
-        self._y_axis_title_base = "Cluster"
-        self.axis_y.setTitleText(self._y_axis_title_base)
-        self._data_y_range = (float(y_min), float(y_max))
+            qmin = QDateTime.fromMSecsSinceEpoch(ms_min)
+            qmax = QDateTime.fromMSecsSinceEpoch(ms_max)
+            self.axis_x.setRange(qmin, qmax)
+            self._data_x_range = (QDateTime(qmin), QDateTime(qmax))
+            self.axis_x.setLabelsVisible(True)
+            self._set_x_axis_format_for_span_ms(ms_max - ms_min)
 
-        self._group_box_specs = []
-        self._group_hover_specs = []
-        for run in runs:
-            label, key, _color = group_meta.get(
-                float(run.group),
-                (f"Cluster {int(run.group)}", f"group:{int(run.group)}", group_color_for_label(run.group, dark_theme=self._dark_theme)),
-            )
-            start = float(run.start_ms)
-            end = float(run.end_ms if run.end_ms > run.start_ms else run.start_ms + 1)
-            center = float(run.group)
-            self._group_box_specs.append((start, end, center - 0.45, center + 0.45, label, key))
-            self._group_hover_specs.append((start, end, center, label))
+            y_min = float(min(ordered_groups) - 0.5)
+            y_max = float(max(ordered_groups) + 0.5)
+            if y_min == y_max:
+                y_min -= 0.5
+                y_max += 0.5
+            self.axis_y.setRange(y_min, y_max)
+            try:
+                # Use integer cluster-id ticks (0, 1, 2, ...) instead of rounded half-step ticks.
+                self.axis_y.setTickType(QValueAxis.TickType.TicksDynamic)
+                self.axis_y.setTickAnchor(float(min(ordered_groups)))
+                self.axis_y.setTickInterval(1.0)
+            except Exception:
+                logger.warning("Failed to configure dynamic Y-axis ticks for group timeline rendering.", exc_info=True)
+            self.axis_y.setLabelFormat("%.0f")
+            try:
+                self.axis_y.setLabelsVisible(True)
+            except Exception:
+                logger.warning("Failed to show Y-axis labels for group timeline rendering.", exc_info=True)
+            self._y_axis_title_base = "Cluster"
+            self.axis_y.setTitleText(self._y_axis_title_base)
+            self._data_y_range = (float(y_min), float(y_max))
 
-        legend_visible = len(ordered_groups) <= legend_limit
-        self.chart.legend().setVisible(legend_visible)
-        self._refresh_legend_markers()
-        self._apply_theme(self._current_theme)
-        self._refresh_group_timeline_overlays()
-        self._request_deferred_refresh()
+            self._group_box_specs = []
+            self._group_hover_specs = []
+            for run in runs:
+                label, key, _color = group_meta.get(
+                    float(run.group),
+                    (
+                        f"Cluster {int(run.group)}",
+                        f"group:{int(run.group)}",
+                        group_color_for_label(run.group, dark_theme=self._dark_theme),
+                    ),
+                )
+                start = float(run.start_ms)
+                end = float(run.end_ms if run.end_ms > run.start_ms else run.start_ms + 1)
+                center = float(run.group)
+                self._group_box_specs.append((start, end, center - 0.45, center + 0.45, label, key))
+                self._group_hover_specs.append((start, end, center, label))
+
+            legend_visible = len(ordered_groups) <= legend_limit
+            self.chart.legend().setVisible(legend_visible)
+            self._refresh_legend_markers()
+            self._apply_theme(self._current_theme)
+            self._refresh_group_timeline_overlays()
+            self._request_deferred_refresh()
+        finally:
+            self.view.setUpdatesEnabled(updates_enabled)
+            try:
+                self.chart.update()
+            except Exception:
+                logger.warning("Failed to refresh chart scene after group timeline update.", exc_info=True)
+            try:
+                self.view.viewport().update()
+            except Exception:
+                logger.warning("Failed to refresh chart viewport after group timeline update.", exc_info=True)
 
     def _group_timeline_hover_tooltip(self, pos: QPointF) -> str:
         chart_series = self.chart.series()
@@ -803,6 +1040,11 @@ class TimeSeriesChart(QFrame):
         """Let parent controller handle X-axis reset/reload without local pre-reset."""
         self._delegate_x_reset_to_controller = bool(enabled)
 
+    # @ai(gpt-5, codex, fix, 2026-03-20)
+    def set_live_pan_emit_enabled(self, enabled: bool) -> None:
+        """Control whether drag-pan emits range updates continuously or on release only."""
+        self.view.set_live_pan_emit_enabled(enabled)
+
     # @ai(gpt-5, codex, fix, 2026-02-27)
     def _on_user_range_selected(self, qmin: QDateTime, qmax: QDateTime):
         # Update axis label format based on selected span
@@ -855,6 +1097,8 @@ class TimeSeriesChart(QFrame):
         times_ms: np.ndarray,
         values: np.ndarray,
         color: QColor,
+        *,
+        existing_segments: list[QLineSeries] | None = None,
     ) -> list[QLineSeries]:
         """
         Build QLineSeries segments for runs of finite values. `times_ms` and
@@ -862,17 +1106,30 @@ class TimeSeriesChart(QFrame):
         timestamps should have been removed already; this function assumes
         times_ms contains valid int64 ms values.
         """
+        existing = list(existing_segments or [])
         segments: list[QLineSeries] = []
 
         if times_ms is None or len(times_ms) == 0:
-            # nothing to plot
-            series = QLineSeries()
-            series.setName(name)
-            self.chart.addSeries(series)
-            series.attachAxis(self.axis_x)
-            series.attachAxis(self.axis_y)
-            self._set_series_pen(series, color)
-            return [series]
+            target_count = 1
+            for seg_idx in range(target_count):
+                if seg_idx < len(existing):
+                    series = existing[seg_idx]
+                else:
+                    series = QLineSeries()
+                    series.setUseOpenGL(False)
+                    self.chart.addSeries(series)
+                    series.attachAxis(self.axis_x)
+                    series.attachAxis(self.axis_y)
+                series.setName(name if seg_idx == 0 else "")
+                series.replace([])
+                self._set_series_pen(series, color)
+                segments.append(series)
+            for series in existing[target_count:]:
+                try:
+                    self.chart.removeSeries(series)
+                except Exception:
+                    logger.warning("Failed to remove excess empty line-series segment during in-place update.", exc_info=True)
+            return segments
 
         # Ensure values is a mutable float numpy array; some upstream arrays
         # can be read-only views (e.g., from pandas), which breaks gap fill.
@@ -881,13 +1138,26 @@ class TimeSeriesChart(QFrame):
 
         # If there are no finite values, return an empty series (legend preserved)
         if not finite.any():
-            series = QLineSeries()
-            series.setName(name)
-            self.chart.addSeries(series)
-            series.attachAxis(self.axis_x)
-            series.attachAxis(self.axis_y)
-            self._set_series_pen(series, color)
-            return [series]
+            target_count = 1
+            for seg_idx in range(target_count):
+                if seg_idx < len(existing):
+                    series = existing[seg_idx]
+                else:
+                    series = QLineSeries()
+                    series.setUseOpenGL(False)
+                    self.chart.addSeries(series)
+                    series.attachAxis(self.axis_x)
+                    series.attachAxis(self.axis_y)
+                series.setName(name if seg_idx == 0 else "")
+                series.replace([])
+                self._set_series_pen(series, color)
+                segments.append(series)
+            for series in existing[target_count:]:
+                try:
+                    self.chart.removeSeries(series)
+                except Exception:
+                    logger.warning("Failed to remove excess NaN-only line-series segment during in-place update.", exc_info=True)
+            return segments
 
         # Keep NaN/inf gaps as hard breaks. Also detect large timestamp jumps
         # and split lines there to make missing periods visually explicit.
@@ -914,19 +1184,32 @@ class TimeSeriesChart(QFrame):
                 runs.append((start_idx, idx + 1))
                 start_idx = None
 
-        # Create QLineSeries for each run
-        for seg_idx, (start_idx, end_idx) in enumerate(runs):
-            series = QLineSeries()
-            series.setUseOpenGL(False)
+        # Create/update QLineSeries for each run
+        target_count = max(1, len(runs))
+        for seg_idx in range(target_count):
+            if seg_idx < len(existing):
+                series = existing[seg_idx]
+            else:
+                series = QLineSeries()
+                series.setUseOpenGL(False)
+                self.chart.addSeries(series)
+                series.attachAxis(self.axis_x)
+                series.attachAxis(self.axis_y)
             series.setName(name if seg_idx == 0 else "")
-            # Build QPointF list for the segment
-            pts = [QPointF(float(times_ms[i]), float(vals[i])) for i in range(start_idx, end_idx)]
+            if seg_idx < len(runs):
+                start_idx, end_idx = runs[seg_idx]
+                pts = [QPointF(float(times_ms[i]), float(vals[i])) for i in range(start_idx, end_idx)]
+            else:
+                pts = []
             series.replace(pts)
-            self.chart.addSeries(series)
-            series.attachAxis(self.axis_x)
-            series.attachAxis(self.axis_y)
             self._set_series_pen(series, color)
             segments.append(series)
+
+        for series in existing[target_count:]:
+            try:
+                self.chart.removeSeries(series)
+            except Exception:
+                logger.warning("Failed to remove excess line-series segment during in-place update.", exc_info=True)
 
         return segments
 
@@ -1185,7 +1468,8 @@ class TimeSeriesChart(QFrame):
                 marker.setVisible(False)
                 continue
             seen.add(name)
-            marker.setLabel(_short_label(name))
+            short = _short_label(name)
+            marker.setLabel(short)
             marker.setVisible(True)
 
         if self._chart_colors is not None:

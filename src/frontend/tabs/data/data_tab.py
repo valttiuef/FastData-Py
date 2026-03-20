@@ -237,6 +237,8 @@ class DataTab(TabWidget):
 
         self.timeseries_chart = TimeSeriesChart(title="")
         self.timeseries_chart.set_delegate_x_reset_to_controller(True)
+        # Keep live pan updates enabled so viewport changes can fetch/window data continuously.
+        self.timeseries_chart.set_live_pan_emit_enabled(True)
         self.timeseries_chart.range_changed.connect(self._on_chart_range_changed)
         self.timeseries_chart.reset_requested.connect(self._on_chart_reset_requested)
         
@@ -551,7 +553,7 @@ class DataTab(TabWidget):
 
         self._view_model.set_view_window(start_ts, end_ts)
         series_df = self._view_model.series_for_chart()
-        self.timeseries_chart.set_dataframe(series_df)
+        self.timeseries_chart.update_window_dataframe(series_df)
         try:
             # Keep the dragged viewport stable. set_dataframe() derives X-range
             # from data bounds, which can slightly snap on first drag event.
@@ -586,7 +588,13 @@ class DataTab(TabWidget):
         b0, b1 = self._view_model.time_bounds(flt_for_bounds)
         if b0 is None or b1 is None:
             return
+        already_at_bounds = (
+            self._timestamps_match(flt.start, b0)
+            and self._timestamps_match(flt.end, b1)
+        )
         self._set_dt_controls_from_range(b0, b1)
+        if already_at_bounds:
+            return
         # Full reload with these new dt edits
         self._reload_now(force=True)
 
@@ -913,10 +921,14 @@ class DataTab(TabWidget):
                 if len(display_cols) == 1:
                     col = display_cols[0]
                     values = pd.to_numeric(working_df[col], errors="coerce")
-                    self.monthly_chart.set_data(working_df["t"], values, series_name=col)
+                    self.monthly_chart.set_data(
+                        working_df["t"],
+                        values,
+                        series_name=col,
+                        show_legend=True,
+                    )
                 else:
                     self.monthly_chart.set_frame(working_df[["t"] + display_cols])
-                self.monthly_chart.chart.legend().setVisible(True)
             else:
                 self.monthly_chart.clear()
         except Exception:
