@@ -621,12 +621,12 @@ class DataTab(TabWidget):
         series_df = self._view_model.series_for_chart()
         _perf("series_for_chart", t_series, rows=len(series_df))
         t_update_window = time.perf_counter()
-        self.timeseries_chart.update_window_dataframe(
+        update_ok = self.timeseries_chart.update_window_dataframe(
             series_df,
             preserve_x_range=True,
             preserve_y_range=True,
         )
-        _perf("timeseries_update_window_dataframe", t_update_window, rows=len(series_df))
+        _perf("timeseries_update_window_dataframe", t_update_window, rows=len(series_df), update_ok=bool(update_ok))
         try:
             # Keep the dragged viewport stable. set_dataframe() derives X-range
             # from data bounds, which can slightly snap on first drag event.

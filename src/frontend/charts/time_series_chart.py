@@ -153,6 +153,10 @@ class TimeSeriesChart(QFrame):
         self._feature_order: list[str] = []
         self._max_series: int = MAX_FEATURES_SHOWN_LEGEND
         self._gap_threshold_ms: int | None = None
+        self._render_points_per_pixel: float = 1.0
+        self._render_points_min: int = 350
+        self._ms_epoch_cache: dict[int, int] = {}
+        self._ms_epoch_cache_limit: int = 200_000
         self._current_frame: pd.DataFrame = pd.DataFrame()
         self._current_theme: str | None = None
         self._dark_theme: bool = False
@@ -384,6 +388,66 @@ class TimeSeriesChart(QFrame):
             value = MAX_FEATURES_SHOWN_LEGEND
         self._max_series = max(1, value)
 
+    def _target_render_points_per_series(self) -> int:
+        width_px = 0
+        try:
+            width_px = int(self.chart.plotArea().width())
+        except Exception:
+            width_px = 0
+        if width_px <= 0:
+            try:
+                width_px = int(self.view.viewport().width())
+            except Exception:
+                width_px = 0
+        if width_px <= 0:
+            width_px = 1200
+        target = int(max(int(self._render_points_min), width_px * float(self._render_points_per_pixel)))
+        return max(200, target)
+
+    def _to_ms_epoch_array_cached(self, t_arr) -> np.ndarray:
+        ts = pd.to_datetime(list(t_arr), errors="coerce")
+        out: list[int] = []
+        cache = self._ms_epoch_cache
+        cache_limit = int(max(10_000, self._ms_epoch_cache_limit))
+        for t in ts:
+            if pd.isna(t):
+                continue
+            tt = pd.Timestamp(t)
+            key = int(tt.value)
+            ms = cache.get(key)
+            if ms is None:
+                qdt = QDateTime(
+                    QDate(tt.year, tt.month, tt.day),
+                    QTime(tt.hour, tt.minute, tt.second, int(tt.microsecond / 1000)),
+                )
+                ms = int(qdt.toMSecsSinceEpoch())
+                if len(cache) >= cache_limit:
+                    cache.clear()
+                cache[key] = ms
+            out.append(ms)
+        return np.asarray(out, dtype=np.int64)
+
+    @staticmethod
+    def _sample_run_indices(start_idx: int, end_idx: int, target_points: int) -> np.ndarray:
+        run_len = max(0, int(end_idx) - int(start_idx))
+        if run_len <= 0:
+            return np.array([], dtype=np.int64)
+        if run_len <= max(2, int(target_points)):
+            return np.arange(int(start_idx), int(end_idx), dtype=np.int64)
+        sampled = np.linspace(
+            int(start_idx),
+            int(end_idx) - 1,
+            num=max(2, int(target_points)),
+            dtype=np.int64,
+        )
+        sampled = np.unique(sampled)
+        if sampled[0] != int(start_idx):
+            sampled = np.insert(sampled, 0, int(start_idx))
+        last_idx = int(end_idx) - 1
+        if sampled[-1] != last_idx:
+            sampled = np.append(sampled, last_idx)
+        return sampled
+
     # @ai(gpt-5, codex, fix, 2026-03-20)
     def set_dataframe(
         self,
@@ -422,8 +486,13 @@ class TimeSeriesChart(QFrame):
                 # pan/zoom window has no data rows.
                 df = pd.DataFrame(columns=["t"] + feature_cols)
             else:
-                df["t"] = pd.to_datetime(df["t"], errors="coerce")
-                df = df.dropna(subset=["t"]).sort_values("t")
+                t_series = df["t"]
+                if not pd.api.types.is_datetime64_any_dtype(t_series):
+                    df["t"] = pd.to_datetime(t_series, errors="coerce")
+                if bool(df["t"].isna().any()):
+                    df = df.dropna(subset=["t"])
+                if not df.empty and not bool(df["t"].is_monotonic_increasing):
+                    df = df.sort_values("t")
             if df.empty:
                 # If all timestamps were invalid/filtered out, keep stable
                 # feature legend markers using empty per-feature series.
@@ -460,7 +529,7 @@ class TimeSeriesChart(QFrame):
             self._rebuild_feature_legend_series(feature_cols)
 
             # raw times
-            times_ms_all = _to_ms_epoch_array(df["t"])
+            times_ms_all = self._to_ms_epoch_array_cached(df["t"])
             gap_threshold_ms = self._estimate_gap_threshold_ms(times_ms_all)
 
             ymin: float | None = None
@@ -600,8 +669,13 @@ class TimeSeriesChart(QFrame):
             return False
         try:
             df = frame.copy()
-            df["t"] = pd.to_datetime(df["t"], errors="coerce")
-            df = df.dropna(subset=["t"]).sort_values("t")
+            t_series = df["t"]
+            if not pd.api.types.is_datetime64_any_dtype(t_series):
+                df["t"] = pd.to_datetime(t_series, errors="coerce")
+            if bool(df["t"].isna().any()):
+                df = df.dropna(subset=["t"])
+            if not df.empty and not bool(df["t"].is_monotonic_increasing):
+                df = df.sort_values("t")
         except Exception:
             self.set_dataframe(frame, series_colors=series_colors, refresh_legend=True)
             return False
@@ -640,7 +714,7 @@ class TimeSeriesChart(QFrame):
             self._preserve_series_colors = bool(self._explicit_series_colors)
             self._rebuild_feature_legend_series(feature_cols)
 
-            times_ms_all = _to_ms_epoch_array(df["t"])
+            times_ms_all = self._to_ms_epoch_array_cached(df["t"])
             if times_ms_all.size == 0:
                 self.set_dataframe(frame, series_colors=series_colors, refresh_legend=True)
                 return False
@@ -788,7 +862,7 @@ class TimeSeriesChart(QFrame):
             if not ordered_groups:
                 return
 
-            times_ms = _to_ms_epoch_array(df[time_col])
+            times_ms = self._to_ms_epoch_array_cached(df[time_col])
             if times_ms.size == 0:
                 return
 
@@ -893,7 +967,7 @@ class TimeSeriesChart(QFrame):
             # Y-scale. Callers can pre-scale values (for example to cluster bounds).
             if overlay_columns:
                 overlay_frame = df[[time_col, *overlay_columns]].copy()
-                overlay_times_ms = _to_ms_epoch_array(overlay_frame[time_col])
+                overlay_times_ms = self._to_ms_epoch_array_cached(overlay_frame[time_col])
                 for col in overlay_columns:
                     vals = pd.to_numeric(overlay_frame[col], errors="coerce")
                     segments = self._build_segments_for_feature(
@@ -1275,6 +1349,8 @@ class TimeSeriesChart(QFrame):
 
         # Create/update QLineSeries for each run
         target_count = max(1, len(runs))
+        total_run_points = int(sum(max(0, end - start) for start, end in runs))
+        target_points_per_series = self._target_render_points_per_series()
         for seg_idx in range(target_count):
             if seg_idx < len(existing):
                 series = existing[seg_idx]
@@ -1287,7 +1363,16 @@ class TimeSeriesChart(QFrame):
             series.setName(name if (show_name_on_primary and seg_idx == 0) else "")
             if seg_idx < len(runs):
                 start_idx, end_idx = runs[seg_idx]
-                pts = [QPointF(float(times_ms[i]), float(vals[i])) for i in range(start_idx, end_idx)]
+                run_len = max(0, int(end_idx) - int(start_idx))
+                if total_run_points > target_points_per_series and run_len > 2:
+                    run_target = int(np.ceil((run_len / max(1, total_run_points)) * target_points_per_series))
+                    run_target = max(2, min(run_len, run_target))
+                    run_indices = self._sample_run_indices(start_idx, end_idx, run_target)
+                else:
+                    run_indices = np.arange(int(start_idx), int(end_idx), dtype=np.int64)
+                x_vals = times_ms[run_indices]
+                y_vals = vals[run_indices]
+                pts = [QPointF(float(x), float(y)) for x, y in zip(x_vals, y_vals)]
             else:
                 pts = []
             series.replace(pts)
