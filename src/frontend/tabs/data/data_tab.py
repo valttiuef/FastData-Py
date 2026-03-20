@@ -153,6 +153,7 @@ class DataTab(TabWidget):
         self._last_progress_phase: Optional[str] = None
         self._last_import_warning_message: Optional[str] = None
         self._show_auto_timestep_status: bool = False
+        self._last_debug_perf_message: Optional[str] = None
         self._initial_filter_timeframe_applied: bool = False
         self._pending_post_import_filter_state: dict | None = None
 
@@ -328,6 +329,11 @@ class DataTab(TabWidget):
             return
         phase_text = str(phase or "").strip()
         message = str(msg or "").strip()
+        if phase_text == "debug_perf":
+            if message and message != self._last_debug_perf_message:
+                self._last_debug_perf_message = message
+                futils.set_status_text(message)
+            return
         if str(phase) == "file" and message.startswith("Importing "):
             if message != self._last_import_progress_message:
                 self._last_import_progress_message = message

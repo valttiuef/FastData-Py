@@ -1,7 +1,10 @@
 
 from __future__ import annotations
+import os
+import time
 from dataclasses import dataclass, field
 from collections import OrderedDict
+from datetime import datetime
 from typing import Optional, Tuple, List, Sequence, Dict, Any, Mapping
 import threading
 
@@ -22,6 +25,7 @@ from .selection_settings import (
     FeatureValueFilter,
     normalize_filter_scope,
 )
+from backend.services.logging.storage import append_text_log, performance_debug_log_path
 
 from core.datetime_utils import ensure_series_naive, drop_timezone_preserving_wall
 from ..utils.time_steps import TIMESTEP_SECONDS
@@ -203,6 +207,9 @@ class HybridPandasModel(DatabaseModel):
     SOFT_POINT_CAP = 10_000
     HARD_POINT_CAP = 100_000
     AUTO_TIMESTEP_MAX_RAW_GROWTH = 2.0
+    PERF_DEBUG_ENV = "FASTDATA_PERF_DEBUG"
+    PERF_DEBUG_GUI_ENV = "FASTDATA_PERF_DEBUG_GUI"
+    PERF_DEBUG_GUI_MIN_MS_ENV = "FASTDATA_PERF_DEBUG_GUI_MIN_MS"
     progress = Signal(str, int, int, str)
 
     def __init__(self, settings_model: SettingsModel, parent: Optional["QObject"] = None):
@@ -227,6 +234,12 @@ class HybridPandasModel(DatabaseModel):
         self._frame_token_counter: int = 0
         self._frame_token_limit: int = 24
         self._frame_tokens: "OrderedDict[str, pd.DataFrame]" = OrderedDict()
+        self._perf_debug_lock = threading.RLock()
+        self._perf_debug_event_counter: int = 0
+        self._perf_debug_enabled: bool = False
+        self._perf_debug_gui_enabled: bool = False
+        self._perf_debug_gui_min_ms: int = 250
+        self._refresh_perf_debug_config()
 
         # heuristics
         self._small_threshold: int = 10000
@@ -247,6 +260,81 @@ class HybridPandasModel(DatabaseModel):
         # When features are changed (added/updated/deleted), invalidate feature cache
         # so that lag changes and other feature updates are applied
         self.features_list_changed.connect(self._on_features_list_changed)
+
+    @staticmethod
+    def _parse_debug_env_bool(raw: object, default: bool = False) -> bool:
+        text = str(raw or "").strip().lower()
+        if text == "":
+            return bool(default)
+        return text in {"1", "true", "yes", "on", "y"}
+
+    @staticmethod
+    def _parse_debug_env_int(raw: object, default: int) -> int:
+        try:
+            value = int(str(raw).strip())
+        except Exception:
+            return int(default)
+        return value if value >= 0 else int(default)
+
+    def _refresh_perf_debug_config(self) -> None:
+        enabled = self._parse_debug_env_bool(os.getenv(self.PERF_DEBUG_ENV), default=False)
+        gui_raw = os.getenv(self.PERF_DEBUG_GUI_ENV)
+        gui_enabled = enabled if str(gui_raw or "").strip() == "" else self._parse_debug_env_bool(gui_raw, default=False)
+        gui_min_ms = self._parse_debug_env_int(os.getenv(self.PERF_DEBUG_GUI_MIN_MS_ENV), default=250)
+        self._perf_debug_enabled = bool(enabled)
+        self._perf_debug_gui_enabled = bool(gui_enabled and enabled)
+        self._perf_debug_gui_min_ms = int(gui_min_ms)
+
+    def _next_perf_debug_event_id(self) -> int:
+        with self._perf_debug_lock:
+            self._perf_debug_event_counter += 1
+            return int(self._perf_debug_event_counter)
+
+    def _perf_debug_emit(
+        self,
+        *,
+        scope: str,
+        step: str,
+        elapsed_ms: Optional[float] = None,
+        gui_message: Optional[str] = None,
+        gui_threshold_ms: Optional[float] = None,
+        **fields: object,
+    ) -> None:
+        if not self._perf_debug_enabled:
+            return
+        event_id = self._next_perf_debug_event_id()
+        parts: list[str] = [
+            f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}",
+            f"id={event_id}",
+            f"scope={scope}",
+            f"step={step}",
+        ]
+        if elapsed_ms is not None:
+            parts.append(f"ms={float(elapsed_ms):.2f}")
+        for key, value in fields.items():
+            if value is None:
+                continue
+            text = str(value).replace("\n", " ").strip()
+            if not text:
+                continue
+            if len(text) > 220:
+                text = f"{text[:217]}..."
+            parts.append(f"{key}={text}")
+        try:
+            append_text_log(performance_debug_log_path(), " | ".join(parts))
+        except Exception:
+            logger.warning("Failed to write performance debug line.", exc_info=True)
+        if not self._perf_debug_gui_enabled:
+            return
+        threshold = float(self._perf_debug_gui_min_ms if gui_threshold_ms is None else gui_threshold_ms)
+        if elapsed_ms is not None and float(elapsed_ms) < threshold:
+            return
+        if not gui_message:
+            return
+        try:
+            self.progress.emit("debug_perf", 0, 0, str(gui_message))
+        except Exception:
+            logger.warning("Failed to emit performance debug progress.", exc_info=True)
 
     def _on_selection_state_changed(self) -> None:
         """Handle selection state changes by invalidating feature cache."""
@@ -941,6 +1029,9 @@ class HybridPandasModel(DatabaseModel):
         """
         Run the appropriate query (raw/zoom) and normalize.
         """
+        self._refresh_perf_debug_config()
+        scope = "fetch_window"
+        t_total = time.perf_counter()
         feature_list = filters.features if filters.features else ([filters.primary_feature] if filters.primary_feature else [])
         feature_ids = [int(f.feature_id) for f in feature_list if f and f.feature_id is not None]
 
@@ -965,7 +1056,16 @@ class HybridPandasModel(DatabaseModel):
                 )
 
         if use_raw:
+            t_query = time.perf_counter()
             df = self.db.query_raw(**common_kwargs)
+            if self._perf_debug_enabled:
+                self._perf_debug_emit(
+                    scope=scope,
+                    step="query_raw",
+                    elapsed_ms=(time.perf_counter() - t_query) * 1000.0,
+                    rows=(0 if df is None else len(df)),
+                    features=len(feature_ids),
+                )
         else:
             # Pass precomputed step_seconds to DB so it can bin directly at that cadence.
             zoom_kwargs = dict(common_kwargs)
@@ -975,11 +1075,54 @@ class HybridPandasModel(DatabaseModel):
                 zoom_kwargs["step_seconds"] = int(step_seconds)
             if self._value_filters:
                 zoom_kwargs["value_filters"] = [dict(flt.to_dict()) for flt in self._value_filters]
+            t_query = time.perf_counter()
             df = self.db.query_zoom(**zoom_kwargs)
+            if self._perf_debug_enabled:
+                self._perf_debug_emit(
+                    scope=scope,
+                    step="query_zoom",
+                    elapsed_ms=(time.perf_counter() - t_query) * 1000.0,
+                    rows=(0 if df is None else len(df)),
+                    features=len(feature_ids),
+                    step_seconds=(int(step_seconds) if step_seconds else None),
+                )
 
+        t_long = time.perf_counter()
         filtered_df = self._apply_value_filters_to_long(df)
+        if self._perf_debug_enabled:
+            self._perf_debug_emit(
+                scope=scope,
+                step="apply_value_filters_to_long",
+                elapsed_ms=(time.perf_counter() - t_long) * 1000.0,
+                rows=(0 if filtered_df is None else len(filtered_df)),
+            )
+        t_wide = time.perf_counter()
         wide_df, col_map = self._normalize_to_wide(filtered_df, feature_list)
-        return self._apply_value_filters(wide_df, col_map)
+        if self._perf_debug_enabled:
+            self._perf_debug_emit(
+                scope=scope,
+                step="normalize_to_wide",
+                elapsed_ms=(time.perf_counter() - t_wide) * 1000.0,
+                rows=(0 if wide_df is None else len(wide_df)),
+                columns=(0 if wide_df is None else len(wide_df.columns)),
+            )
+        t_post_filters = time.perf_counter()
+        out = self._apply_value_filters(wide_df, col_map)
+        if self._perf_debug_enabled:
+            self._perf_debug_emit(
+                scope=scope,
+                step="apply_value_filters",
+                elapsed_ms=(time.perf_counter() - t_post_filters) * 1000.0,
+                rows=(0 if out is None else len(out)),
+            )
+            self._perf_debug_emit(
+                scope=scope,
+                step="total",
+                elapsed_ms=(time.perf_counter() - t_total) * 1000.0,
+                rows=(0 if out is None else len(out)),
+                use_raw=bool(use_raw),
+            )
+        return out
 
     def _postprocess_window(
         self,
@@ -1155,7 +1298,7 @@ class HybridPandasModel(DatabaseModel):
 
 
     # --------- Updated loading strategy (BASE) ------------------------------------
-    # @ai(gpt-5, codex, fix, 2026-03-10)
+    # @ai(gpt-5, codex, perf-debug, 2026-03-20)
     def load_base(
         self,
         flt: "DataFilters",
@@ -1171,227 +1314,307 @@ class HybridPandasModel(DatabaseModel):
         Build/refresh the BASE CACHE for the given filters (sidebar).
         This can be raw (if small) or a budget-aware aggregation across the whole filtered span.
         """
-        merged_filters = self._merge_with_selection_filters(flt)
-        base_params = dict(
-            timestep=timestep,
-            fill=fill,
-            moving_average=moving_average,
-            ignore_target_points=ignore_target_points,
-            agg=agg,
-        )
-        params = self._apply_selection_preprocessing(base_params)
-        params.pop("target_points", None)
-        if not merged_filters.features:
+        self._refresh_perf_debug_config()
+        load_started = time.perf_counter()
+        timing_steps: list[tuple[str, float]] = []
+
+        def _record(step: str, step_started: float, **fields: object) -> float:
+            elapsed = (time.perf_counter() - step_started) * 1000.0
+            timing_steps.append((step, elapsed))
+            if self._perf_debug_enabled:
+                self._perf_debug_emit(scope="load_base", step=step, elapsed_ms=elapsed, **fields)
+            return elapsed
+
+        try:
+            t_prepare = time.perf_counter()
+            merged_filters = self._merge_with_selection_filters(flt)
+            base_params = dict(
+                timestep=timestep,
+                fill=fill,
+                moving_average=moving_average,
+                ignore_target_points=ignore_target_points,
+                agg=agg,
+            )
+            params = self._apply_selection_preprocessing(base_params)
+            params.pop("target_points", None)
+            _record("prepare_filters", t_prepare, features=len(getattr(merged_filters, "features", []) or []))
+            if not merged_filters.features:
+                t_empty = time.perf_counter()
+                self._filters = merged_filters
+                self._params = params
+                self._lag_min_seconds, self._lag_max_seconds = (0, 0)
+                self._visible_feature_ids = set()
+                self._helper_filter_feature_ids = set()
+                self._base_df = pd.DataFrame(columns=["t"])
+                self._base_span = (None, None)
+                self._base_cadence_secs = None
+                self._base_timestep = None
+                self._hires_df = pd.DataFrame(columns=["t"])
+                self._hires_span = (None, None)
+                self._hires_cadence_secs = None
+                self._current_df = pd.DataFrame(columns=["t"])
+                self._view_start = self._ts_to_naive_utc(merged_filters.start)
+                self._view_end = self._ts_to_naive_utc(merged_filters.end)
+                self._base_cache_key = self._base_cache_key_for(merged_filters, params)
+                _record("early_return_no_features", t_empty)
+                return
+
+            t_scope = time.perf_counter()
+            visible_ids = {int(f.feature_id) for f in merged_filters.features if f.feature_id is not None}
+            helper_filter_ids = {
+                int(flt.feature_id)
+                for flt in (self._value_filters or [])
+                if normalize_filter_scope(getattr(flt, "scope", None)) != FILTER_SCOPE_LOCAL
+                and flt.feature_id is not None
+            }
+            self._lag_min_seconds, self._lag_max_seconds = self._lag_bounds_seconds(merged_filters.features)
+            self._visible_feature_ids = visible_ids
+            self._helper_filter_feature_ids = helper_filter_ids
+            if helper_filter_ids:
+                extra_ids = [fid for fid in helper_filter_ids if fid not in visible_ids]
+                if extra_ids:
+                    merged_filters.features.extend(self._feature_objects_for_ids(extra_ids))
             self._filters = merged_filters
             self._params = params
-            self._lag_min_seconds, self._lag_max_seconds = (0, 0)
-            self._visible_feature_ids = set()
-            self._helper_filter_feature_ids = set()
-            self._base_df = pd.DataFrame(columns=["t"])
-            self._base_span = (None, None)
-            self._base_cadence_secs = None
-            self._base_timestep = None
-            self._hires_df = pd.DataFrame(columns=["t"])
-            self._hires_span = (None, None)
-            self._hires_cadence_secs = None
-            self._current_df = pd.DataFrame(columns=["t"])
-            self._view_start = self._ts_to_naive_utc(merged_filters.start)
-            self._view_end = self._ts_to_naive_utc(merged_filters.end)
-            self._base_cache_key = self._base_cache_key_for(merged_filters, params)
-            return
-        visible_ids = {int(f.feature_id) for f in merged_filters.features if f.feature_id is not None}
-        helper_filter_ids = {
-            int(flt.feature_id)
-            for flt in (self._value_filters or [])
-            if normalize_filter_scope(getattr(flt, "scope", None)) != FILTER_SCOPE_LOCAL
-            and flt.feature_id is not None
-        }
-        self._lag_min_seconds, self._lag_max_seconds = self._lag_bounds_seconds(merged_filters.features)
-        self._visible_feature_ids = visible_ids
-        self._helper_filter_feature_ids = helper_filter_ids
-        if helper_filter_ids:
-            extra_ids = [fid for fid in helper_filter_ids if fid not in visible_ids]
-            if extra_ids:
-                merged_filters.features.extend(self._feature_objects_for_ids(extra_ids))
-        self._filters = merged_filters
-        self._params = params
-        cache_key = self._base_cache_key_for(merged_filters, params)
-        if self._base_cache_key == cache_key:
-            return
-
-        # Decide RAW vs aggregated for base (fetch strategy only)
-        base_start, base_end = self._expand_range_for_lag(merged_filters.start, merged_filters.end)
-        expanded_filters = merged_filters.clone_with_range(base_start, base_end)
-        raw_count = self._count_rows(expanded_filters)
-        if raw_count <= 0:
-            # No rows match current filters; clear caches and stop early.
-            self._base_df = pd.DataFrame(columns=["t"])
-            self._base_span = (None, None)
-            self._base_cadence_secs = None
-            self._base_timestep = None
-            self._hires_df = pd.DataFrame(columns=["t"])
-            self._hires_span = (None, None)
-            self._hires_cadence_secs = None
-            self._current_df = pd.DataFrame(columns=["t"])
-            self._view_start = self._ts_to_naive_utc(merged_filters.start)
-            self._view_end = self._ts_to_naive_utc(merged_filters.end)
-            self._base_cache_key = cache_key
-            return
-        # When timestep is "none" and multiple features are selected, raw row counts can
-        # be inflated by feature cardinality. Use distinct timestamps only for cadence-cap
-        # decisions so we don't prematurely aggregate. Keep raw_count for fetch strategy.
-        cap_count = raw_count
-        if self._normalize_timestep_mode(params.get("timestep", timestep)) == "none":
-            feature_count = len(getattr(expanded_filters, "features", []) or [])
-            if feature_count > 1:
-                ts_count = self._count_unique_timestamps(expanded_filters)
-                if ts_count > 0:
-                    cap_count = ts_count
-
-        user_timestep = params.get("timestep", timestep)
-        timestep_mode = self._normalize_timestep_mode(user_timestep)
-        use_raw = bool(params.get("ignore_target_points", ignore_target_points))
-        if not use_raw:
-            if timestep_mode == "none":
-                # In raw mode, feature cardinality can multiply row count; cap on timestamp rows.
-                use_raw = cap_count <= self._hard_cap
-            else:
-                use_raw = raw_count <= self._small_threshold
-
-        tmin, tmax = self._span_of(merged_filters)
-        duration_s = max(1, int((tmax - tmin).total_seconds())) if (tmin and tmax and tmax > tmin) else 1
-
-        cadence = None  # None=raw
-
-        # Resolve cadence using mode semantics:
-        # - auto: always resolve a timestep
-        # - none: keep raw unless hard cap is exceeded
-        # - explicit: use user timestep exactly
-        self._current_cap = self._hard_cap if timestep_mode in ("none", "explicit") else self._soft_cap
-
-        should_resolve = False
-        if timestep_mode == "auto":
-            should_resolve = True
-        elif timestep_mode == "explicit":
-            should_resolve = True
-        else:  # none
-            should_resolve = cap_count > self._hard_cap
-
-        if should_resolve:
-            effective_user_timestep = None if timestep_mode == "none" else user_timestep
-            cadence, _capped, _user_secs = self._resolve_effective_seconds(
-                duration_s,
-                effective_user_timestep,
-                self._hard_cap if timestep_mode == "none" else self._current_cap,
-                mode=timestep_mode,
+            cache_key = self._base_cache_key_for(merged_filters, params)
+            _record(
+                "prepare_feature_scope",
+                t_scope,
+                visible_features=len(visible_ids),
+                helper_features=len(helper_filter_ids),
             )
-            should_emit_cap_message = timestep_mode == "none"
-            if should_emit_cap_message:
+            if self._base_cache_key == cache_key:
+                if self._perf_debug_enabled:
+                    self._perf_debug_emit(scope="load_base", step="cache_hit", elapsed_ms=0.0)
+                return
+
+            # Decide RAW vs aggregated for base (fetch strategy only)
+            t_counts = time.perf_counter()
+            base_start, base_end = self._expand_range_for_lag(merged_filters.start, merged_filters.end)
+            expanded_filters = merged_filters.clone_with_range(base_start, base_end)
+            raw_count = self._count_rows(expanded_filters)
+            _record("count_rows", t_counts, raw_count=raw_count)
+            if raw_count <= 0:
+                t_empty_rows = time.perf_counter()
+                # No rows match current filters; clear caches and stop early.
+                self._base_df = pd.DataFrame(columns=["t"])
+                self._base_span = (None, None)
+                self._base_cadence_secs = None
+                self._base_timestep = None
+                self._hires_df = pd.DataFrame(columns=["t"])
+                self._hires_span = (None, None)
+                self._hires_cadence_secs = None
+                self._current_df = pd.DataFrame(columns=["t"])
+                self._view_start = self._ts_to_naive_utc(merged_filters.start)
+                self._view_end = self._ts_to_naive_utc(merged_filters.end)
+                self._base_cache_key = cache_key
+                _record("early_return_no_rows", t_empty_rows)
+                return
+
+            # When timestep is "none" and multiple features are selected, raw row counts can
+            # be inflated by feature cardinality. Use distinct timestamps only for cadence-cap
+            # decisions so we don't prematurely aggregate. Keep raw_count for fetch strategy.
+            cap_count = raw_count
+            if self._normalize_timestep_mode(params.get("timestep", timestep)) == "none":
+                feature_count = len(getattr(expanded_filters, "features", []) or [])
+                if feature_count > 1:
+                    t_unique_ts = time.perf_counter()
+                    ts_count = self._count_unique_timestamps(expanded_filters)
+                    _record("count_unique_timestamps", t_unique_ts, ts_count=ts_count)
+                    if ts_count > 0:
+                        cap_count = ts_count
+
+            user_timestep = params.get("timestep", timestep)
+            timestep_mode = self._normalize_timestep_mode(user_timestep)
+            use_raw = bool(params.get("ignore_target_points", ignore_target_points))
+            if not use_raw:
+                if timestep_mode == "none":
+                    # In raw mode, feature cardinality can multiply row count; cap on timestamp rows.
+                    use_raw = cap_count <= self._hard_cap
+                else:
+                    use_raw = raw_count <= self._small_threshold
+
+            t_span = time.perf_counter()
+            tmin, tmax = self._span_of(merged_filters)
+            duration_s = max(1, int((tmax - tmin).total_seconds())) if (tmin and tmax and tmax > tmin) else 1
+            _record("resolve_span", t_span, duration_s=duration_s)
+
+            cadence = None  # None=raw
+
+            # Resolve cadence using mode semantics:
+            # - auto: always resolve a timestep
+            # - none: keep raw unless hard cap is exceeded
+            # - explicit: use user timestep exactly
+            self._current_cap = self._hard_cap if timestep_mode in ("none", "explicit") else self._soft_cap
+
+            should_resolve = False
+            if timestep_mode == "auto":
+                should_resolve = True
+            elif timestep_mode == "explicit":
+                should_resolve = True
+            else:  # none
+                should_resolve = cap_count > self._hard_cap
+
+            if should_resolve:
+                t_cadence = time.perf_counter()
+                effective_user_timestep = None if timestep_mode == "none" else user_timestep
+                cadence, _capped, _user_secs = self._resolve_effective_seconds(
+                    duration_s,
+                    effective_user_timestep,
+                    self._hard_cap if timestep_mode == "none" else self._current_cap,
+                    mode=timestep_mode,
+                )
+                _record("resolve_effective_seconds", t_cadence, cadence=cadence, mode=timestep_mode)
+                should_emit_cap_message = timestep_mode == "none"
+                if should_emit_cap_message:
+                    try:
+                        self.progress.emit(
+                            "preprocess",
+                            0,
+                            0,
+                            f"Timestep capped to {cadence}s to stay under {self._hard_cap} rows.",
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Failed to emit capped-timestep preprocess status (cadence=%s, hard_cap=%s).",
+                            cadence,
+                            self._hard_cap,
+                            exc_info=True,
+                        )
+
+            # Auto cadence can upsample sparse data into many synthetic bins.
+            # If estimated preprocessed rows would exceed 2x raw timestamp rows,
+            # keep raw cadence instead.
+            if timestep_mode == "auto" and cadence is not None and cadence > 0:
+                t_fallback = time.perf_counter()
+                fallback_to_raw = self._should_fallback_to_raw_for_auto(
+                    filters=expanded_filters,
+                    start=tmin,
+                    end=tmax,
+                    cadence_seconds=cadence,
+                )
+                _record("auto_fallback_check", t_fallback, cadence=cadence, fallback=bool(fallback_to_raw))
+                if fallback_to_raw:
+                    cadence = None
+                    # Keep raw fetch when feasible so this behaves as true "keep raw values".
+                    if raw_count <= self._hard_cap:
+                        use_raw = True
+
+            # Store the resolved timestep for display purposes
+            if timestep_mode == "auto" and cadence is not None and cadence > 0:
                 try:
+                    resolved = self._format_seconds_as_interval(int(cadence))
                     self.progress.emit(
-                        "preprocess",
+                        "preprocess_auto_timestep",
                         0,
                         0,
-                        f"Timestep capped to {cadence}s to stay under {self._hard_cap} rows.",
+                        f"Auto timestep resolved to {resolved} ({int(cadence)}s).",
                     )
                 except Exception:
                     logger.warning(
-                        "Failed to emit capped-timestep preprocess status (cadence=%s, hard_cap=%s).",
+                        "Failed to emit auto-timestep resolution status (cadence=%s).",
                         cadence,
-                        self._hard_cap,
                         exc_info=True,
                     )
 
-        # Auto cadence can upsample sparse data into many synthetic bins.
-        # If estimated preprocessed rows would exceed 2x raw timestamp rows,
-        # keep raw cadence instead.
-        if timestep_mode == "auto" and cadence is not None and cadence > 0:
-            if self._should_fallback_to_raw_for_auto(
-                filters=expanded_filters,
-                start=tmin,
-                end=tmax,
-                cadence_seconds=cadence,
-            ):
-                cadence = None
-                # Keep raw fetch when feasible so this behaves as true "keep raw values".
-                if raw_count <= self._hard_cap:
-                    use_raw = True
-        
-        # Store the resolved timestep for display purposes
-        if timestep_mode == "auto" and cadence is not None and cadence > 0:
-            try:
-                resolved = self._format_seconds_as_interval(int(cadence))
-                self.progress.emit(
-                    "preprocess_auto_timestep",
-                    0,
-                    0,
-                    f"Auto timestep resolved to {resolved} ({int(cadence)}s).",
+            if cadence is not None:
+                self._base_timestep = f"{cadence}s"  # e.g., "60s" for 60 seconds
+            else:
+                self._base_timestep = None  # raw data, no aggregation
+
+            # Fetch + normalize (raw or zoom depending on size/ignore flag)
+            t_fetch = time.perf_counter()
+            df = self._fetch_window(
+                start=base_start,
+                end=base_end,
+                use_raw=use_raw,
+                agg=params.get("agg", agg),
+                filters=merged_filters,
+                step_seconds=cadence,
+            )
+            _record("fetch_window", t_fetch, rows=(0 if df is None else len(df)), use_raw=bool(use_raw), cadence=cadence)
+
+            # Post-process at the resolved cadence; force seconds to guarantee bucketization/fill consistency
+            t_post = time.perf_counter()
+            base_df = self._postprocess_window(
+                df,
+                timestep_seconds=cadence,
+                params=self._params,
+                force=True,  # guarantee bucketization/fill consistency
+                agg=params.get("agg", agg),
+            )
+            _record("postprocess_window", t_post, rows=(0 if base_df is None else len(base_df)))
+
+            t_trim = time.perf_counter()
+            # Trim to requested window (zoom queries can include extra edges)
+            if base_df is not None and len(base_df):
+                if merged_filters.start is not None:
+                    base_df = base_df[base_df["t"] >= pd.Timestamp(merged_filters.start)]
+                if merged_filters.end is not None:
+                    base_df = base_df[base_df["t"] < pd.Timestamp(merged_filters.end)]
+            base_df = self._filter_frame_by_months(base_df, merged_filters.months)
+            _record("trim_and_month_filter", t_trim, rows=(0 if base_df is None else len(base_df)))
+
+            # --- GROUP POST-FILTER (postprocessed) ---
+            # Keep post-filtering for explicit positive group selections to prevent
+            # postprocess fill from leaking values outside selected ranges.
+            # When "No group" (<=0) is selected, skip this range-only post-filter so
+            # ungrouped rows returned by SQL-level filtering are preserved.
+            t_group_filter = time.perf_counter()
+            selected_group_ids = [int(gid) for gid in (getattr(merged_filters, "group_ids", None) or [])]
+            include_ungrouped = any(gid <= 0 for gid in selected_group_ids)
+            positive_group_ids = [gid for gid in selected_group_ids if gid > 0]
+            if positive_group_ids and not include_ungrouped:
+                gp = self.db.group_points(positive_group_ids, start=merged_filters.start, end=merged_filters.end)
+                if gp is not None and not gp.empty:
+                    base_df = self._filter_frame_by_group_ranges(base_df, gp, cadence)
+            _record("group_post_filter", t_group_filter, rows=(0 if base_df is None else len(base_df)), groups=len(positive_group_ids))
+
+            t_finalize = time.perf_counter()
+            self._base_df = base_df.sort_values("t")
+            self._base_span = self._data_span(self._base_df)
+            self._base_cadence_secs = cadence
+
+            # reset hires cache
+            self._hires_df = pd.DataFrame(columns=["t"])
+            self._hires_span = (None, None)
+            self._hires_cadence_secs = None
+
+            # default view = sidebar edits if set, else base span
+            self._view_start = self._ts_to_naive_utc(merged_filters.start or self._base_span[0])
+            self._view_end = self._ts_to_naive_utc(merged_filters.end or self._base_span[1])
+            self._base_cache_key = cache_key
+            _record("finalize_cache", t_finalize, rows=len(self._base_df), cadence=cadence)
+        except Exception as exc:
+            if self._perf_debug_enabled:
+                self._perf_debug_emit(
+                    scope="load_base",
+                    step="error",
+                    elapsed_ms=(time.perf_counter() - load_started) * 1000.0,
+                    gui_message=f"Data load failed: {type(exc).__name__}: {exc}",
+                    gui_threshold_ms=0.0,
                 )
-            except Exception:
-                logger.warning(
-                    "Failed to emit auto-timestep resolution status (cadence=%s).",
-                    cadence,
-                    exc_info=True,
+            raise
+        finally:
+            if self._perf_debug_enabled:
+                total_ms = (time.perf_counter() - load_started) * 1000.0
+                top_steps = sorted(timing_steps, key=lambda item: item[1], reverse=True)[:3]
+                top_summary = ", ".join(f"{name}={ms:.0f}ms" for name, ms in top_steps)
+                top_summary = top_summary or "no timed steps"
+                base_rows = 0
+                try:
+                    base_rows = len(self._base_df)
+                except Exception:
+                    base_rows = 0
+                self._perf_debug_emit(
+                    scope="load_base",
+                    step="total",
+                    elapsed_ms=total_ms,
+                    gui_message=f"Data load {total_ms:.0f} ms ({top_summary})",
+                    gui_threshold_ms=float(self._perf_debug_gui_min_ms),
+                    rows=base_rows,
+                    steps=len(timing_steps),
                 )
-
-        if cadence is not None:
-            self._base_timestep = f"{cadence}s"  # e.g., "60s" for 60 seconds
-        else:
-            self._base_timestep = None  # raw data, no aggregation
-
-        # Fetch + normalize (raw or zoom depending on size/ignore flag)
-        df = self._fetch_window(
-            start=base_start,
-            end=base_end,
-            use_raw=use_raw,
-            agg=params.get("agg", agg),
-            filters=merged_filters,
-            step_seconds=cadence,
-        )
-
-        # Post-process at the resolved cadence; force seconds to guarantee bucketization/fill consistency
-        base_df = self._postprocess_window(
-            df,
-            timestep_seconds=cadence,
-            params=self._params,
-            force=True,  # guarantee bucketization/fill consistency
-            agg=params.get("agg", agg),
-        )
-
-        # Trim to requested window (zoom queries can include extra edges)
-        if base_df is not None and len(base_df):
-            if merged_filters.start is not None:
-                base_df = base_df[base_df["t"] >= pd.Timestamp(merged_filters.start)]
-            if merged_filters.end is not None:
-                base_df = base_df[base_df["t"] < pd.Timestamp(merged_filters.end)]
-        base_df = self._filter_frame_by_months(base_df, merged_filters.months)
-
-        # --- GROUP POST-FILTER (postprocessed) ---
-        # Keep post-filtering for explicit positive group selections to prevent
-        # postprocess fill from leaking values outside selected ranges.
-        # When "No group" (<=0) is selected, skip this range-only post-filter so
-        # ungrouped rows returned by SQL-level filtering are preserved.
-        selected_group_ids = [int(gid) for gid in (getattr(merged_filters, "group_ids", None) or [])]
-        include_ungrouped = any(gid <= 0 for gid in selected_group_ids)
-        positive_group_ids = [gid for gid in selected_group_ids if gid > 0]
-        if positive_group_ids and not include_ungrouped:
-            gp = self.db.group_points(positive_group_ids, start=merged_filters.start, end=merged_filters.end)
-            if gp is not None and not gp.empty:
-                base_df = self._filter_frame_by_group_ranges(base_df, gp, cadence)
-
-        self._base_df = base_df.sort_values("t")
-        self._base_span = self._data_span(self._base_df)
-        self._base_cadence_secs = cadence
-
-        # reset hires cache
-        self._hires_df = pd.DataFrame(columns=["t"])
-        self._hires_span = (None, None)
-        self._hires_cadence_secs = None
-
-        # default view = sidebar edits if set, else base span
-        self._view_start = self._ts_to_naive_utc(merged_filters.start or self._base_span[0])
-        self._view_end = self._ts_to_naive_utc(merged_filters.end or self._base_span[1])
-        self._base_cache_key = cache_key
 
     def _base_cache_key_for(self, flt: DataFilters, params: dict) -> tuple:
         return (
@@ -1548,6 +1771,8 @@ class HybridPandasModel(DatabaseModel):
 
     # --------- SQL helpers ---------
     def _count_rows(self, flt: DataFilters) -> int:
+        self._refresh_perf_debug_config()
+        t_total = time.perf_counter()
         feature_ids = flt.feature_ids or None
         base_kwargs = dict(
             system=None,
@@ -1579,20 +1804,47 @@ class HybridPandasModel(DatabaseModel):
             with self.db.connection() as con:
                 sql_from, params = self.db._filters_sql_and_params(**base_kwargs)
                 try:
+                    t_sql = time.perf_counter()
                     count = int(con.execute(f"SELECT COUNT(*) {sql_from};", params).fetchone()[0])
+                    if self._perf_debug_enabled:
+                        self._perf_debug_emit(
+                            scope="count_rows",
+                            step="sql_count",
+                            elapsed_ms=(time.perf_counter() - t_sql) * 1000.0,
+                            rows=count,
+                        )
                 except Exception:
                     count = 0
                 try:
+                    t_csv = time.perf_counter()
                     csv_count = int(self.db._csv_count_rows(con=con, **base_kwargs))
+                    if self._perf_debug_enabled:
+                        self._perf_debug_emit(
+                            scope="count_rows",
+                            step="csv_count",
+                            elapsed_ms=(time.perf_counter() - t_csv) * 1000.0,
+                            rows=csv_count,
+                        )
                 except Exception:
                     csv_count = 0
         except Exception:
             count = 0
             csv_count = 0
 
-        return int(count + csv_count)
+        total = int(count + csv_count)
+        if self._perf_debug_enabled:
+            self._perf_debug_emit(
+                scope="count_rows",
+                step="total",
+                elapsed_ms=(time.perf_counter() - t_total) * 1000.0,
+                rows=total,
+                feature_ids=len(feature_ids or []),
+            )
+        return total
 
     def _count_unique_timestamps(self, flt: DataFilters) -> int:
+        self._refresh_perf_debug_config()
+        t_total = time.perf_counter()
         feature_ids = flt.feature_ids or None
         base_kwargs = dict(
             system=None,
@@ -1622,21 +1874,69 @@ class HybridPandasModel(DatabaseModel):
             with self.db.connection() as con:
                 sql_from, params = self.db._filters_sql_and_params(**base_kwargs)
                 try:
+                    t_sql = time.perf_counter()
                     count = int(
                         con.execute(f"SELECT COUNT(DISTINCT ts) {sql_from};", params).fetchone()[0]
                     )
+                    if self._perf_debug_enabled:
+                        self._perf_debug_emit(
+                            scope="count_unique_timestamps",
+                            step="sql_distinct",
+                            elapsed_ms=(time.perf_counter() - t_sql) * 1000.0,
+                            rows=count,
+                        )
                 except Exception:
                     count = 0
                 if count:
+                    if self._perf_debug_enabled:
+                        self._perf_debug_emit(
+                            scope="count_unique_timestamps",
+                            step="total",
+                            elapsed_ms=(time.perf_counter() - t_total) * 1000.0,
+                            rows=count,
+                            feature_ids=len(feature_ids or []),
+                        )
                     return count
                 try:
-                    return int(self.db._csv_count_rows(con=con, **base_kwargs))
+                    t_csv = time.perf_counter()
+                    csv_count = int(self.db._csv_count_rows(con=con, **base_kwargs))
+                    if self._perf_debug_enabled:
+                        self._perf_debug_emit(
+                            scope="count_unique_timestamps",
+                            step="csv_fallback",
+                            elapsed_ms=(time.perf_counter() - t_csv) * 1000.0,
+                            rows=csv_count,
+                        )
+                        self._perf_debug_emit(
+                            scope="count_unique_timestamps",
+                            step="total",
+                            elapsed_ms=(time.perf_counter() - t_total) * 1000.0,
+                            rows=csv_count,
+                            feature_ids=len(feature_ids or []),
+                        )
+                    return csv_count
                 except Exception:
                     return 0
         except Exception:
             count = 0
         if count:
+            if self._perf_debug_enabled:
+                self._perf_debug_emit(
+                    scope="count_unique_timestamps",
+                    step="total",
+                    elapsed_ms=(time.perf_counter() - t_total) * 1000.0,
+                    rows=count,
+                    feature_ids=len(feature_ids or []),
+                )
             return count
+        if self._perf_debug_enabled:
+            self._perf_debug_emit(
+                scope="count_unique_timestamps",
+                step="total",
+                elapsed_ms=(time.perf_counter() - t_total) * 1000.0,
+                rows=0,
+                feature_ids=len(feature_ids or []),
+            )
         return 0
 
     def _estimate_resampled_row_count(

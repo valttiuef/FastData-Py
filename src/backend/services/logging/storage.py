@@ -36,6 +36,10 @@ def crash_log_path() -> Path:
     return default_log_directory() / "crash.log"
 
 
+def performance_debug_log_path() -> Path:
+    return default_log_directory() / "performance_debug.log"
+
+
 def append_text_log(path: Path, line: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with _text_log_lock:
@@ -232,6 +236,7 @@ __all__ = [
     "get_log_database",
     "list_chat_sessions",
     "load_log_database",
+    "performance_debug_log_path",
     "rename_chat_session",
     "save_log_record",
     "set_chat_session_summary",

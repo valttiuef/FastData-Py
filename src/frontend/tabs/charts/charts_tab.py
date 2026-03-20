@@ -46,6 +46,7 @@ class ChartsTab(TabWidget):
         self._correlation_bar_payload: dict[str, object] | None = None
         self._last_progress_toast: Optional[str] = None
         self._last_progress_toast_at: float = 0.0
+        self._last_perf_status: Optional[str] = None
         self._show_auto_timestep_toast: bool = False
         self._allow_auto_timestep_toast: bool = False
         self._last_preprocessing_key: tuple | None = None
@@ -180,12 +181,18 @@ class ChartsTab(TabWidget):
         self._debounce.start()
 
     def _on_model_progress(self, phase: str, _cur: int, _tot: int, msg: str) -> None:
-        if str(phase) != "preprocess_auto_timestep":
+        phase_text = str(phase or "").strip()
+        message = str(msg or "").strip()
+        if phase_text == "debug_perf":
+            if message and message != self._last_perf_status:
+                self._last_perf_status = message
+                set_status_text(message)
+            return
+        if phase_text != "preprocess_auto_timestep":
             return
         if not self._show_auto_timestep_toast:
             self._allow_auto_timestep_toast = False
             return
-        message = str(msg or "").strip()
         if not self._allow_auto_timestep_toast or not message:
             self._allow_auto_timestep_toast = False
             return
