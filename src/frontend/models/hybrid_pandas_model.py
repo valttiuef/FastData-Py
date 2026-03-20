@@ -1159,9 +1159,12 @@ class HybridPandasModel(DatabaseModel):
         If current cache is too coarse for the view (<< point cap or visually chunky),
         or the view falls outside cache span, fetch a hi-res window around the view.
         """
-        # If base covers and cadence is None (raw), we’re good.
-        if self._covers(self._base_span, self._view_start, self._view_end) and self._base_cadence_secs is None:
-            return
+        # In raw mode, overlap is enough. Filter end is exclusive, so full-cover checks
+        # can trigger redundant refetches when the current view ends just after the last
+        # available timestamp.
+        if self._base_cadence_secs is None:
+            if self._overlaps(self._base_span, self._view_start, self._view_end):
+                return
 
         need_fetch = False
 
@@ -1415,7 +1418,10 @@ class HybridPandasModel(DatabaseModel):
             # be inflated by feature cardinality. Use distinct timestamps only for cadence-cap
             # decisions so we don't prematurely aggregate. Keep raw_count for fetch strategy.
             cap_count = raw_count
-            if self._normalize_timestep_mode(params.get("timestep", timestep)) == "none":
+            if (
+                self._normalize_timestep_mode(params.get("timestep", timestep)) == "none"
+                and raw_count > self._hard_cap
+            ):
                 feature_count = len(getattr(expanded_filters, "features", []) or [])
                 if feature_count > 1:
                     t_unique_ts = time.perf_counter()
@@ -1435,7 +1441,12 @@ class HybridPandasModel(DatabaseModel):
                     use_raw = raw_count <= self._small_threshold
 
             t_span = time.perf_counter()
-            tmin, tmax = self._span_of(merged_filters)
+            explicit_start = self._ts_to_naive_utc(merged_filters.start) if merged_filters.start is not None else None
+            explicit_end = self._ts_to_naive_utc(merged_filters.end) if merged_filters.end is not None else None
+            if explicit_start is not None and explicit_end is not None and explicit_end > explicit_start:
+                tmin, tmax = explicit_start, explicit_end
+            else:
+                tmin, tmax = self._span_of(merged_filters)
             duration_s = max(1, int((tmax - tmin).total_seconds())) if (tmin and tmax and tmax > tmin) else 1
             _record("resolve_span", t_span, duration_s=duration_s)
 
@@ -2119,44 +2130,67 @@ class HybridPandasModel(DatabaseModel):
         # Apply lag if we have feature_id column and any lags defined
         if lag_map and "feature_id" in data.columns:
             data["feature_id"] = pd.to_numeric(data["feature_id"], errors="coerce")
-            # Create a series of lag values mapped to each row's feature_id
-            # Using vectorized map for better performance on large datasets
-            lag_series = data["feature_id"].map(lambda fid: lag_map.get(int(fid), 0) if pd.notna(fid) else 0)
+            lag_series = (
+                data["feature_id"]
+                .astype("Int64")
+                .map(lag_map)
+                .fillna(0)
+                .astype("int64")
+            )
             # Apply lag by shifting timestamps (positive lag = look forward in time, negative lag = look back)
             # A positive lag means the feature's effect is delayed, so we shift the timestamp forward
             # A negative lag means the feature's effect leads, so we shift the timestamp backward
             non_zero_mask = lag_series != 0
             if non_zero_mask.any():
-                data.loc[non_zero_mask, "t"] = data.loc[non_zero_mask, "t"] + pd.to_timedelta(lag_series[non_zero_mask], unit='s')
+                data.loc[non_zero_mask, "t"] = data.loc[non_zero_mask, "t"] + pd.to_timedelta(
+                    lag_series[non_zero_mask],
+                    unit="s",
+                )
 
         # Preserve ALL timestamps present in the input (after t conversion and lag)
-        all_times = (
-            pd.Series(pd.unique(data["t"]))
-            .sort_values(kind="stable")
-            .to_list()
-        )
+        all_times = pd.DatetimeIndex(pd.unique(data["t"])).sort_values()
 
-        keys = self._extract_feature_keys(data)
-        data["__feature_key__"] = keys
+        feature_col = "__feature_key__"
+        fast_path_used = False
+        if "feature_id" in data.columns:
+            fid_to_name: dict[int, str] = {}
+            fid_map_valid = True
+            for key, name in col_map.items():
+                fid = key[0]
+                if fid is None:
+                    fid_map_valid = False
+                    break
+                fid_int = int(fid)
+                existing = fid_to_name.get(fid_int)
+                if existing is not None and existing != name:
+                    fid_map_valid = False
+                    break
+                fid_to_name[fid_int] = name
+            if fid_map_valid and fid_to_name:
+                mapped_names = data["feature_id"].astype("Int64").map(fid_to_name)
+                if mapped_names.notna().any():
+                    feature_col = "__feature_col__"
+                    data[feature_col] = mapped_names.astype("string")
+                    fast_path_used = True
+        if not fast_path_used:
+            data[feature_col] = self._extract_feature_keys(data)
 
-        # Build the pivot. dropna=False avoids dropping all-NaN columns.
+        # Build the pivot. GroupBy+unstack avoids some pivot-table overhead on
+        # medium-sized raw frames while preserving mean aggregation semantics.
         pivot = (
-            data.pivot_table(
-                index="t",
-                columns="__feature_key__",
-                values="value",
-                aggfunc="mean",
-                dropna=False,
-            )
+            data.groupby(["t", feature_col], sort=False, observed=True)["value"]
+            .mean()
+            .unstack(feature_col)
             .sort_index()
         )
 
         # Reindex rows to include every timestamp, even if the entire row is NaN
         pivot = pivot.reindex(index=all_times)
 
-        # Rename feature columns
-        rename_map = {key: name for key, name in col_map.items()}
-        pivot = pivot.rename(columns=rename_map)
+        # Rename only when tuple-key path is used
+        if not fast_path_used:
+            rename_map = {key: name for key, name in col_map.items()}
+            pivot = pivot.rename(columns=rename_map)
 
         # Ensure all expected columns exist and are ordered in one operation.
         # Repeated per-column assignment can heavily fragment wide dataframes.
@@ -2235,7 +2269,9 @@ class HybridPandasModel(DatabaseModel):
         value_cols = [c for c in d.columns if c != "t"]
         if not value_cols:
             return d
-        d.loc[:, value_cols] = d.loc[:, value_cols].apply(pd.to_numeric, errors="coerce")
+        non_numeric_cols = [c for c in value_cols if not pd.api.types.is_numeric_dtype(d[c])]
+        if non_numeric_cols:
+            d.loc[:, non_numeric_cols] = d.loc[:, non_numeric_cols].apply(pd.to_numeric, errors="coerce")
 
         # determine cadence
         _, user_secs = self._parse_seconds_freq(timestep)
@@ -2338,14 +2374,26 @@ class HybridPandasModel(DatabaseModel):
             return result
 
         result["feature_id"] = pd.to_numeric(result["feature_id"], errors="coerce")
-        result[value_col] = pd.to_numeric(result[value_col], errors="coerce")
-        if "system" in result.columns:
+        if not pd.api.types.is_numeric_dtype(result[value_col]):
+            result[value_col] = pd.to_numeric(result[value_col], errors="coerce")
+
+        scopes = {
+            normalize_filter_scope(getattr(flt, "scope", None))
+            for flt in (self._value_filters or [])
+            if getattr(flt, "feature_id", None) is not None
+        }
+        needs_system = FILTER_SCOPE_SYSTEM in scopes or FILTER_SCOPE_DATASET in scopes
+        needs_dataset = FILTER_SCOPE_DATASET in scopes
+        needs_import = FILTER_SCOPE_IMPORT in scopes
+
+        if needs_system and "system" in result.columns:
             result["system"] = result["system"].astype("string").fillna("").str.strip()
-        if "dataset" in result.columns:
-            result["dataset"] = result["dataset"].astype("string").fillna("").str.strip()
-        if "Dataset" in result.columns and "dataset" not in result.columns:
-            result["dataset"] = result["Dataset"].astype("string").fillna("").str.strip()
-        if "import_id" in result.columns:
+        if needs_dataset:
+            if "dataset" in result.columns:
+                result["dataset"] = result["dataset"].astype("string").fillna("").str.strip()
+            elif "Dataset" in result.columns:
+                result["dataset"] = result["Dataset"].astype("string").fillna("").str.strip()
+        if needs_import and "import_id" in result.columns:
             result["import_id"] = pd.to_numeric(result["import_id"], errors="coerce")
 
         for flt in self._value_filters:
@@ -2366,61 +2414,70 @@ class HybridPandasModel(DatabaseModel):
             if failing.empty:
                 continue
             if scope == FILTER_SCOPE_GLOBAL:
-                bad_times = set(failing["t"].tolist())
-                result = result.loc[~result["t"].isin(bad_times)].reset_index(drop=True)
+                bad_times = pd.Index(failing["t"].dropna().unique())
+                if len(bad_times) > 0:
+                    result = result.loc[~result["t"].isin(bad_times)].reset_index(drop=True)
                 continue
             if scope == FILTER_SCOPE_LOCAL:
-                target_mask = source_mask & result["t"].isin(set(failing["t"].tolist()))
-                result.loc[target_mask, value_col] = np.nan
+                bad_times = pd.Index(failing["t"].dropna().unique())
+                if len(bad_times) > 0:
+                    target_mask = source_mask & result["t"].isin(bad_times)
+                    result.loc[target_mask, value_col] = np.nan
                 continue
             if scope == FILTER_SCOPE_SYSTEM:
-                if "system" not in failing.columns:
+                if "system" not in result.columns or "system" not in failing.columns:
                     continue
-                bad_keys = {(row.t, str(row.system or "").strip()) for row in failing.itertuples(index=False)}
-                if not bad_keys:
+                key_frame = failing.loc[:, ["t", "system"]].dropna(subset=["t"]).drop_duplicates()
+                if key_frame.empty:
                     continue
-                target_mask = result.apply(
-                    lambda row: (row["t"], str(row.get("system", "") or "").strip()) in bad_keys,
-                    axis=1,
+                bad_keys = pd.MultiIndex.from_frame(key_frame, names=["t", "system"])
+                target_keys = pd.MultiIndex.from_arrays(
+                    [result["t"].to_numpy(), result["system"].to_numpy()],
+                    names=["t", "system"],
                 )
+                target_mask = target_keys.isin(bad_keys)
                 result.loc[target_mask, value_col] = np.nan
                 continue
             if scope == FILTER_SCOPE_DATASET:
-                if "system" not in failing.columns or "dataset" not in failing.columns:
+                if (
+                    "system" not in result.columns
+                    or "dataset" not in result.columns
+                    or "system" not in failing.columns
+                    or "dataset" not in failing.columns
+                ):
                     continue
-                bad_keys = {
-                    (row.t, str(row.system or "").strip(), str(row.dataset or "").strip())
-                    for row in failing.itertuples(index=False)
-                }
-                if not bad_keys:
+                key_frame = failing.loc[:, ["t", "system", "dataset"]].dropna(subset=["t"]).drop_duplicates()
+                if key_frame.empty:
                     continue
-                target_mask = result.apply(
-                    lambda row: (
-                        row["t"],
-                        str(row.get("system", "") or "").strip(),
-                        str(row.get("dataset", "") or "").strip(),
-                    ) in bad_keys,
-                    axis=1,
+                bad_keys = pd.MultiIndex.from_frame(key_frame, names=["t", "system", "dataset"])
+                target_keys = pd.MultiIndex.from_arrays(
+                    [result["t"].to_numpy(), result["system"].to_numpy(), result["dataset"].to_numpy()],
+                    names=["t", "system", "dataset"],
                 )
+                target_mask = target_keys.isin(bad_keys)
                 result.loc[target_mask, value_col] = np.nan
                 continue
             if scope == FILTER_SCOPE_IMPORT:
-                if "import_id" not in failing.columns:
+                if "import_id" not in result.columns or "import_id" not in failing.columns:
                     continue
-                bad_keys = {
-                    (row.t, int(row.import_id))
-                    for row in failing.itertuples(index=False)
-                    if not pd.isna(row.import_id)
-                }
-                if not bad_keys:
+                key_frame = failing.loc[:, ["t", "import_id"]].dropna(subset=["t", "import_id"]).drop_duplicates()
+                if key_frame.empty:
                     continue
-                target_mask = result.apply(
-                    lambda row: (
-                        row["t"],
-                        int(row.get("import_id")),
-                    ) in bad_keys if not pd.isna(row.get("import_id")) else False,
-                    axis=1,
+                key_frame = key_frame.copy()
+                key_frame["import_id"] = key_frame["import_id"].astype("int64")
+                bad_keys = pd.MultiIndex.from_frame(key_frame, names=["t", "import_id"])
+                valid_import = result["import_id"].notna()
+                if not bool(valid_import.any()):
+                    continue
+                target_keys = pd.MultiIndex.from_arrays(
+                    [
+                        result.loc[valid_import, "t"].to_numpy(),
+                        result.loc[valid_import, "import_id"].astype("int64").to_numpy(),
+                    ],
+                    names=["t", "import_id"],
                 )
+                target_mask = pd.Series(False, index=result.index)
+                target_mask.loc[valid_import] = target_keys.isin(bad_keys)
                 result.loc[target_mask, value_col] = np.nan
                 continue
         return result
@@ -2832,9 +2889,16 @@ class HybridPandasModel(DatabaseModel):
                 month_set.add(month)
         if not month_set:
             return frame
+        # Selecting every month is equivalent to no filter.
+        if len(month_set) >= 12:
+            return frame
         out = frame.copy()
-        out["t"] = ensure_series_naive(pd.to_datetime(out["t"], errors="coerce"))
+        t_series = out["t"]
+        if not pd.api.types.is_datetime64_any_dtype(t_series):
+            out["t"] = ensure_series_naive(pd.to_datetime(t_series, errors="coerce"))
+        else:
+            out["t"] = ensure_series_naive(t_series)
         out = out.dropna(subset=["t"])
         if out.empty:
             return out
-        return out.loc[out["t"].dt.month.isin(month_set)].copy()
+        return out.loc[out["t"].dt.month.isin(month_set)]

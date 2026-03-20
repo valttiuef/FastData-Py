@@ -3,7 +3,10 @@ from __future__ import annotations
 from dataclasses import asdict
 from pathlib import Path
 from datetime import datetime
+import os
 import logging
+import threading
+import time
 from typing import Optional
 
 import pandas as pd
@@ -32,7 +35,50 @@ from .sidebar import Sidebar
 from .viewmodel import DataViewModel
 
 from backend.models import ImportOptions
+from backend.services.logging.storage import append_text_log, performance_debug_log_path
 from ..tab_widget import TabWidget
+
+_PERF_DEBUG_EVENT_LOCK = threading.RLock()
+_PERF_DEBUG_EVENT_COUNTER = 0
+
+
+def _perf_debug_enabled() -> bool:
+    raw = str(os.getenv("FASTDATA_PERF_DEBUG", "")).strip().lower()
+    return raw in {"1", "true", "yes", "on", "y"}
+
+
+def _next_perf_debug_event_id() -> int:
+    global _PERF_DEBUG_EVENT_COUNTER
+    with _PERF_DEBUG_EVENT_LOCK:
+        _PERF_DEBUG_EVENT_COUNTER += 1
+        return int(_PERF_DEBUG_EVENT_COUNTER)
+
+
+def _perf_debug_log(scope: str, step: str, *, elapsed_ms: float | None = None, **fields: object) -> None:
+    if not _perf_debug_enabled():
+        return
+    event_id = _next_perf_debug_event_id()
+    parts = [
+        f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}",
+        f"ui_id={event_id}",
+        f"scope={scope}",
+        f"step={step}",
+    ]
+    if elapsed_ms is not None:
+        parts.append(f"ms={float(elapsed_ms):.2f}")
+    for key, value in fields.items():
+        if value is None:
+            continue
+        text = str(value).replace("\n", " ").strip()
+        if not text:
+            continue
+        if len(text) > 200:
+            text = f"{text[:197]}..."
+        parts.append(f"{key}={text}")
+    try:
+        append_text_log(performance_debug_log_path(), " | ".join(parts))
+    except Exception:
+        logger.warning("Failed to write UI performance debug line.", exc_info=True)
 
 
 # @ai(gpt-5, codex, fix, 2026-03-10)
@@ -547,6 +593,17 @@ class DataTab(TabWidget):
         User finished a zoom or ended a pan/zoom scroll.
         Only update the model's view window; it will decide if it needs to fetch/window.
         """
+        perf_scope = "data_tab.chart_range_changed"
+        perf_total_started = time.perf_counter()
+
+        def _perf(step: str, started: float, **fields: object) -> None:
+            _perf_debug_log(
+                perf_scope,
+                step,
+                elapsed_ms=(time.perf_counter() - started) * 1000.0,
+                **fields,
+            )
+
         self._ensure_data_tab_cache_active()
         y_range = None
         try:
@@ -557,17 +614,25 @@ class DataTab(TabWidget):
         except Exception:
             logger.warning("Exception in _on_chart_range_changed", exc_info=True)
 
+        t_set_view = time.perf_counter()
         self._view_model.set_view_window(start_ts, end_ts)
+        _perf("set_view_window", t_set_view)
+        t_series = time.perf_counter()
         series_df = self._view_model.series_for_chart()
+        _perf("series_for_chart", t_series, rows=len(series_df))
+        t_update_window = time.perf_counter()
         self.timeseries_chart.update_window_dataframe(
             series_df,
             preserve_x_range=True,
             preserve_y_range=True,
         )
+        _perf("timeseries_update_window_dataframe", t_update_window, rows=len(series_df))
         try:
             # Keep the dragged viewport stable. set_dataframe() derives X-range
             # from data bounds, which can slightly snap on first drag event.
+            t_set_x = time.perf_counter()
             self.timeseries_chart.set_x_range(pd.Timestamp(start_ts), pd.Timestamp(end_ts))
+            _perf("timeseries_set_x_range", t_set_x)
         except Exception:
             logger.warning("Failed to restore dragged X-range after time-series refresh.", exc_info=True)
         if y_range is not None:
@@ -585,6 +650,7 @@ class DataTab(TabWidget):
                 self._build_data_info_text(flt, start_ts, end_ts, rows=len(series_df))
             )
         self._update_features_info_button(flt)
+        _perf("total", perf_total_started, rows=len(series_df))
 
     def _on_chart_reset_requested(self):
         """
@@ -906,6 +972,17 @@ class DataTab(TabWidget):
         requirements_key: tuple | None,
         base_df: pd.DataFrame | None,
     ) -> None:
+        perf_scope = "data_tab.apply_reload_result"
+        perf_total_started = time.perf_counter()
+
+        def _perf(step: str, started: float, **fields: object) -> None:
+            _perf_debug_log(
+                perf_scope,
+                step,
+                elapsed_ms=(time.perf_counter() - started) * 1000.0,
+                **fields,
+            )
+
         self._capture_owned_base_cache_key()
 
         flt_for_bounds = flt.clone_with_range(None, None)
@@ -917,14 +994,13 @@ class DataTab(TabWidget):
             effective_end = b1 if effective_end is None else effective_end
 
         if effective_start is not None and effective_end is not None:
+            t_set_view = time.perf_counter()
             self._view_model.set_view_window(effective_start, effective_end)
+            _perf("set_view_window", t_set_view)
 
+        working_df = pd.DataFrame(columns=["t"]) if base_df is None else base_df.copy()
+        t_monthly = time.perf_counter()
         try:
-            working_df = (
-                pd.DataFrame(columns=["t"])
-                if base_df is None
-                else base_df.copy()
-            )
             feature_cols = [c for c in working_df.columns if c != "t"]
             display_cols = feature_cols[:MAX_FEATURES_SHOWN_LEGEND]
             if display_cols:
@@ -943,17 +1019,26 @@ class DataTab(TabWidget):
                 self.monthly_chart.clear()
         except Exception:
             logger.warning("Exception in _apply_reload_result", exc_info=True)
+        _perf("monthly_chart_update", t_monthly, rows=len(working_df))
 
+        t_series = time.perf_counter()
         series_df = self._view_model.series_for_chart()
+        _perf("series_for_chart", t_series, rows=len(series_df))
+        t_timeseries_df = time.perf_counter()
         self.timeseries_chart.set_dataframe(series_df)
+        _perf("timeseries_set_dataframe", t_timeseries_df, rows=len(series_df))
         if effective_start is not None and effective_end is not None:
             try:
+                t_set_x = time.perf_counter()
                 display_end = self._chart_display_end(pd.Timestamp(effective_start), pd.Timestamp(effective_end))
                 self.timeseries_chart.set_x_range(pd.Timestamp(effective_start), display_end)
+                _perf("timeseries_set_x_range", t_set_x)
             except Exception:
                 logger.warning("Failed to restore requested X-range after reload.", exc_info=True)
+        t_title = time.perf_counter()
         title_filters = flt.clone_with_range(effective_start, effective_end)
         self._sync_monthly_chart_title(title_filters)
+        _perf("sync_monthly_title", t_title)
 
         self.data_info.setText(
             self._build_data_info_text(flt, b0, b1, rows=len(series_df))
@@ -961,6 +1046,7 @@ class DataTab(TabWidget):
         self._update_features_info_button(flt)
         self._last_requirements_key = requirements_key
         self._last_reload_epoch = self._reload_epoch
+        _perf("total", perf_total_started, rows=len(series_df))
 
     def _clear_charts(self, message: str) -> None:
         self.data_info.setText(message)
