@@ -779,22 +779,95 @@ class HybridPandasModel(DatabaseModel):
         out = g.reset_index()
         return out
 
-    def set_view_window(self, start: Optional[pd.Timestamp], end: Optional[pd.Timestamp]) -> None:
+    # @ai(gpt-5, codex, perf-refactor, 2026-03-23)
+    def set_view_window(self, start: Optional[pd.Timestamp], end: Optional[pd.Timestamp]) -> bool:
+        """Set chart view window and allow synchronous fetch when cache is insufficient."""
+        return self._set_view_window_internal(start, end, allow_fetch=True, margin_factor=None)
+
+    # @ai(gpt-5, codex, perf-refactor, 2026-03-23)
+    def set_view_window_cached(self, start: Optional[pd.Timestamp], end: Optional[pd.Timestamp]) -> bool:
+        """Set chart view window using only existing caches (no DB fetch)."""
+        return self._set_view_window_internal(start, end, allow_fetch=False, margin_factor=None)
+
+    # @ai(gpt-5, codex, perf-refactor, 2026-03-23)
+    def prefetch_view_window(
+        self,
+        start: Optional[pd.Timestamp],
+        end: Optional[pd.Timestamp],
+        *,
+        margin_factor: float | None = None,
+        expected_base_cache_key: tuple | None = None,
+        stop_event: threading.Event | None = None,
+    ) -> bool:
+        """
+        Warm a buffered hi-res cache window without changing the currently visible view.
+
+        Returns True when the requested window can be served from cache after prefetch.
+        """
+        s, e = self._normalize_view_window(start, end)
+        if s is None or e is None:
+            return False
+        if stop_event is not None and stop_event.is_set():
+            return False
+        if (
+            expected_base_cache_key is not None
+            and self._base_cache_key != expected_base_cache_key
+        ):
+            return False
+        self._ensure_best_cache_for_range(
+            s,
+            e,
+            margin_factor=margin_factor,
+            debug_scope="prefetch_view_window",
+            expected_base_cache_key=expected_base_cache_key,
+            stop_event=stop_event,
+        )
+        return self._window_fully_cached(s, e)
+
+    def _normalize_view_window(
+        self,
+        start: Optional[pd.Timestamp],
+        end: Optional[pd.Timestamp],
+    ) -> tuple[Optional[pd.Timestamp], Optional[pd.Timestamp]]:
         if start is None or end is None:
-            return
+            return None, None
         s = self._ts_to_naive_utc(start)
         e = self._ts_to_naive_utc(end)
         if s is None or e is None or s >= e:
-            return
-        # Fast path during pan/zoom in raw mode: reuse in-memory base cache slice
-        # without running hi-res coverage heuristics.
-        if self._base_cadence_secs is None and self._overlaps(self._base_span, s, e):
-            self._view_start, self._view_end = s, e
-            self._refresh_view_slice()
-            return
+            return None, None
+        return s, e
+
+    def _window_fully_cached(self, start: pd.Timestamp, end: pd.Timestamp) -> bool:
+        # Raw mode uses overlap checks because the filter end is exclusive.
+        if self._base_cadence_secs is None and self._overlaps(self._base_span, start, end):
+            return True
+        return self._covers(self._hires_span, start, end) or self._covers(self._base_span, start, end)
+
+    def _set_view_window_internal(
+        self,
+        start: Optional[pd.Timestamp],
+        end: Optional[pd.Timestamp],
+        *,
+        allow_fetch: bool,
+        margin_factor: float | None,
+    ) -> bool:
+        s, e = self._normalize_view_window(start, end)
+        if s is None or e is None:
+            return False
+
         self._view_start, self._view_end = s, e
-        self._ensure_best_cache_for_view()
+        if allow_fetch:
+            # Fast path during pan/zoom in raw mode: reuse in-memory base cache slice
+            # without running hi-res coverage heuristics.
+            if not (self._base_cadence_secs is None and self._overlaps(self._base_span, s, e)):
+                self._ensure_best_cache_for_range(
+                    s,
+                    e,
+                    margin_factor=margin_factor,
+                    debug_scope="ensure_best_cache_for_view",
+                )
         self._refresh_view_slice()
+        return self._window_fully_cached(s, e)
 
     def series_for_chart(self) -> pd.DataFrame:
         return self._current_df.copy()
@@ -1165,15 +1238,48 @@ class HybridPandasModel(DatabaseModel):
         If current cache is too coarse for the view (<< point cap or visually chunky),
         or the view falls outside cache span, fetch a hi-res window around the view.
         """
+        if self._view_start is None or self._view_end is None or self._view_start >= self._view_end:
+            return
+        self._ensure_best_cache_for_range(
+            self._view_start,
+            self._view_end,
+            margin_factor=None,
+            debug_scope="ensure_best_cache_for_view",
+        )
+
+    def _ensure_best_cache_for_range(
+        self,
+        view_start: pd.Timestamp,
+        view_end: pd.Timestamp,
+        *,
+        margin_factor: float | None = None,
+        debug_scope: str = "ensure_best_cache_for_view",
+        expected_base_cache_key: tuple | None = None,
+        stop_event: threading.Event | None = None,
+    ) -> None:
         self._refresh_perf_debug_config()
+        if stop_event is not None and stop_event.is_set():
+            return
+        if (
+            expected_base_cache_key is not None
+            and self._base_cache_key != expected_base_cache_key
+        ):
+            return
+
+        active_filters = self._filters
+        if active_filters is None:
+            return
+        active_params = dict(self._params or {})
+        timestep_mode = self._normalize_timestep_mode(active_params.get("timestep"))
+
         # In raw mode, overlap is enough. Filter end is exclusive, so full-cover checks
         # can trigger redundant refetches when the current view ends just after the last
         # available timestamp.
         if self._base_cadence_secs is None:
-            if self._overlaps(self._base_span, self._view_start, self._view_end):
+            if self._overlaps(self._base_span, view_start, view_end):
                 if self._perf_debug_enabled:
                     self._perf_debug_emit(
-                        scope="ensure_best_cache_for_view",
+                        scope=debug_scope,
                         step="skip_raw_overlap",
                         elapsed_ms=0.0,
                     )
@@ -1189,24 +1295,23 @@ class HybridPandasModel(DatabaseModel):
             if not fetch_reason:
                 fetch_reason = str(reason or "")
 
-        timestep_mode = self._normalize_timestep_mode(self._params.get("timestep"))
         min_rows_for_hires = max(50, self._current_cap // 8)
-        view_duration_s = max(1, int((self._view_end - self._view_start).total_seconds()))
+        view_duration_s = max(1, int((view_end - view_start).total_seconds()))
         auto_ideal_step = self._choose_nice_step_seconds(view_duration_s, self._current_cap, None)
 
         # coverage check
-        if not self._covers(self._hires_span, self._view_start, self._view_end):
+        if not self._covers(self._hires_span, view_start, view_end):
             _request_fetch("hires_not_covering_view")
         else:
             # resolution check on hires
-            est_rows = self._estimate_rows(self._hires_df, self._view_start, self._view_end)
+            est_rows = self._estimate_rows(self._hires_df, view_start, view_end)
             if est_rows < min_rows_for_hires:
                 _request_fetch("hires_rows_below_threshold")
             elif timestep_mode == "auto":
                 # Auto cadence should react to windows that are mostly empty bins.
                 # Counting only total bins can keep stale cadence when the visible
                 # region starts with long NaN runs.
-                est_non_null_rows = self._estimate_non_null_rows(self._hires_df, self._view_start, self._view_end)
+                est_non_null_rows = self._estimate_non_null_rows(self._hires_df, view_start, view_end)
                 if est_non_null_rows < min_rows_for_hires:
                     _request_fetch("hires_non_null_rows_below_threshold")
             if (
@@ -1219,14 +1324,14 @@ class HybridPandasModel(DatabaseModel):
 
         # Also check base resolution if no hires
         if not need_fetch and self._hires_df.empty:
-            if not self._covers(self._base_span, self._view_start, self._view_end):
+            if not self._covers(self._base_span, view_start, view_end):
                 _request_fetch("base_not_covering_view")
             else:
-                est_rows = self._estimate_rows(self._base_df, self._view_start, self._view_end)
+                est_rows = self._estimate_rows(self._base_df, view_start, view_end)
                 if est_rows < min_rows_for_hires:
                     _request_fetch("base_rows_below_threshold")
                 elif timestep_mode == "auto":
-                    est_non_null_rows = self._estimate_non_null_rows(self._base_df, self._view_start, self._view_end)
+                    est_non_null_rows = self._estimate_non_null_rows(self._base_df, view_start, view_end)
                     if est_non_null_rows < min_rows_for_hires:
                         _request_fetch("base_non_null_rows_below_threshold")
                 if (
@@ -1240,28 +1345,38 @@ class HybridPandasModel(DatabaseModel):
         if not need_fetch:
             if self._perf_debug_enabled:
                 self._perf_debug_emit(
-                    scope="ensure_best_cache_for_view",
+                    scope=debug_scope,
                     step="skip_fetch",
                     elapsed_ms=0.0,
                 )
             return
         if self._perf_debug_enabled:
             self._perf_debug_emit(
-                scope="ensure_best_cache_for_view",
+                scope=debug_scope,
                 step="fetch_needed",
                 elapsed_ms=0.0,
                 reason=fetch_reason,
             )
+        if stop_event is not None and stop_event.is_set():
+            return
 
         # ---- Build the HI-RES window with margin
-        duration = self._view_end - self._view_start
-        margin = pd.Timedelta(seconds=max(1, int(duration.total_seconds() * (self._margin_factor - 1.0) / 2)))
-        w0 = self._view_start - margin
-        w1 = self._view_end + margin
+        span = view_end - view_start
+        effective_margin_factor = float(margin_factor) if margin_factor is not None else float(self._margin_factor)
+        if effective_margin_factor < 1.0:
+            effective_margin_factor = 1.0
+        margin = pd.Timedelta(
+            seconds=max(
+                1,
+                int(span.total_seconds() * (effective_margin_factor - 1.0) / 2),
+            )
+        )
+        w0 = view_start - margin
+        w1 = view_end + margin
 
         # Count rows to decide RAW vs ZOOM
         window_start, window_end = self._expand_range_for_lag(w0, w1)
-        window_filters = self._filters.clone_with_range(window_start, window_end) if self._filters else DataFilters(features=[], start=window_start, end=window_end)
+        window_filters = active_filters.clone_with_range(window_start, window_end)
         cnt = self._count_rows(window_filters)
         cap_count = cnt
         if timestep_mode == "none" and cnt > self._hard_cap:
@@ -1291,7 +1406,7 @@ class HybridPandasModel(DatabaseModel):
             duration_s = max(1, int((w1 - w0).total_seconds()))
             step, _capped, _user_secs = self._resolve_effective_seconds(
                 duration_s,
-                None if timestep_mode == "none" else self._params.get("timestep"),
+                None if timestep_mode == "none" else active_params.get("timestep"),
                 self._hard_cap if timestep_mode == "none" else self._current_cap,
                 mode=timestep_mode,
             )
@@ -1308,15 +1423,24 @@ class HybridPandasModel(DatabaseModel):
                     use_raw = True
 
         # Fetch + normalize
-        df = self._fetch_window(start=window_start, end=window_end, use_raw=use_raw, agg=self._params.get("agg", "avg"), filters=self._filters, step_seconds=step)
+        df = self._fetch_window(
+            start=window_start,
+            end=window_end,
+            use_raw=use_raw,
+            agg=active_params.get("agg", "avg"),
+            filters=active_filters,
+            step_seconds=step,
+        )
+        if stop_event is not None and stop_event.is_set():
+            return
 
-        # Post-process at the effective cadence; we force cadence to ensure consistent fill/MA buckets
+        # Post-process at the effective cadence; force cadence for stable fill/MA buckets.
         df = self._postprocess_window(
             df,
             timestep_seconds=step,
-            params=self._params,
-            force=True,  # force cadence even if source was RAW
-            agg=self._params.get("agg", "avg"),
+            params=active_params,
+            force=True,
+            agg=active_params.get("agg", "avg"),
         )
         # Keep the hi-res cache span aligned to the requested window cadence even
         # when the first/last bins are empty. Otherwise coverage checks can fail
@@ -1327,8 +1451,21 @@ class HybridPandasModel(DatabaseModel):
             end=window_end,
             cadence_seconds=step,
         )
-        df = self._filter_frame_by_months(df, getattr(self._filters, "months", None))
+        df = self._filter_frame_by_months(df, getattr(active_filters, "months", None))
+        if stop_event is not None and stop_event.is_set():
+            return
 
+        if (
+            expected_base_cache_key is not None
+            and self._base_cache_key != expected_base_cache_key
+        ):
+            if self._perf_debug_enabled:
+                self._perf_debug_emit(
+                    scope=debug_scope,
+                    step="drop_stale_prefetch",
+                    elapsed_ms=0.0,
+                )
+            return
         self._hires_df = df.sort_values("t")
         self._hires_span = self._data_span(self._hires_df)
         self._hires_cadence_secs = step

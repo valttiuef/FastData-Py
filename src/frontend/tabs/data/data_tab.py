@@ -14,6 +14,7 @@ import pandas as pd
 from PySide6.QtWidgets import QWidget, QLabel, QSplitter, QPushButton, QHBoxLayout, QSizePolicy
 from PySide6.QtCore import Qt, QTimer, QDateTime
 from ...localization import tr
+from ...threading import run_in_main_thread, run_in_thread
 
 logger = logging.getLogger(__name__)
 
@@ -179,6 +180,10 @@ class DataTab(TabWidget):
         self._debounce.setSingleShot(True)
         self._debounce.setInterval(120)
         self._debounce.timeout.connect(self._reload_now)
+        self._chart_prefetch_debounce = QTimer(self)
+        self._chart_prefetch_debounce.setSingleShot(True)
+        self._chart_prefetch_debounce.setInterval(85)
+        self._chart_prefetch_debounce.timeout.connect(self._start_chart_prefetch)
 
         self._reload_epoch = 0
         self._last_requirements_key = None
@@ -202,6 +207,14 @@ class DataTab(TabWidget):
         self._last_debug_perf_message: Optional[str] = None
         self._initial_filter_timeframe_applied: bool = False
         self._pending_post_import_filter_state: dict | None = None
+        self._chart_prefetch_request_id: int = 0
+        self._active_chart_prefetch_request_id: int = 0
+        self._pending_chart_prefetch_range: tuple[pd.Timestamp, pd.Timestamp] | None = None
+        self._pending_chart_prefetch_cache_key: tuple | None = None
+        self._chart_prefetch_inflight_range: tuple[pd.Timestamp, pd.Timestamp] | None = None
+        self._chart_prefetch_margin_factor: float = 1.8
+        self._chart_prefetch_padding_ratio: float = 0.20
+        self._last_chart_range: tuple[pd.Timestamp, pd.Timestamp] | None = None
 
         self._wire_signals()
 
@@ -219,10 +232,14 @@ class DataTab(TabWidget):
         self._selection_sync_pending = False
         self._selection_sync_fallback.stop()
         self._initial_filter_timeframe_applied = False
+        self._invalidate_chart_prefetch_state()
+        self._last_chart_range = None
         self._clear_charts(tr("No data loaded"))
 
     def _on_selection_state_changed(self) -> None:
         self._reload_epoch += 1
+        self._invalidate_chart_prefetch_state()
+        self._last_chart_range = None
         # Selection application updates filters/features asynchronously in the
         # DataSelector. Wait for the selector's consolidated requirements signal
         # before reloading charts so we do not render stale feature selections.
@@ -587,6 +604,145 @@ class DataTab(TabWidget):
         except Exception:
             logger.warning("Exception in _sync_monthly_chart_title", exc_info=True)
 
+    def _invalidate_chart_prefetch_state(self) -> None:
+        self._chart_prefetch_debounce.stop()
+        self._pending_chart_prefetch_range = None
+        self._pending_chart_prefetch_cache_key = None
+        self._chart_prefetch_inflight_range = None
+        self._chart_prefetch_request_id += 1
+        self._active_chart_prefetch_request_id = self._chart_prefetch_request_id
+
+    def _next_chart_prefetch_request_id(self) -> int:
+        self._chart_prefetch_request_id += 1
+        return self._chart_prefetch_request_id
+
+    def _expand_chart_prefetch_range(
+        self, start_ts: pd.Timestamp, end_ts: pd.Timestamp
+    ) -> tuple[pd.Timestamp, pd.Timestamp]:
+        try:
+            start = pd.Timestamp(start_ts)
+            end = pd.Timestamp(end_ts)
+        except Exception:
+            return pd.Timestamp(start_ts), pd.Timestamp(end_ts)
+        if end <= start:
+            return start, end
+        span_seconds = max(1, int((end - start).total_seconds()))
+        padding_seconds = max(1, int(span_seconds * float(self._chart_prefetch_padding_ratio)))
+        padding = pd.Timedelta(seconds=padding_seconds)
+        return start - padding, end + padding
+
+    def _prefetch_inflight_covers(self, start_ts, end_ts) -> bool:
+        inflight = self._chart_prefetch_inflight_range
+        if inflight is None:
+            return False
+        try:
+            start = pd.Timestamp(start_ts)
+            end = pd.Timestamp(end_ts)
+        except Exception:
+            return False
+        if end <= start:
+            return False
+        inflight_start, inflight_end = inflight
+        return inflight_start <= start and inflight_end >= end
+
+    def _queue_chart_prefetch(self, start_ts, end_ts) -> None:
+        try:
+            start = pd.Timestamp(start_ts)
+            end = pd.Timestamp(end_ts)
+        except Exception:
+            return
+        if end <= start:
+            return
+        self._pending_chart_prefetch_range = self._expand_chart_prefetch_range(start, end)
+        try:
+            self._pending_chart_prefetch_cache_key = self._view_model.current_base_cache_key()
+        except Exception:
+            self._pending_chart_prefetch_cache_key = None
+        self._chart_prefetch_debounce.start()
+
+    def _start_chart_prefetch(self) -> None:
+        pending = self._pending_chart_prefetch_range
+        if pending is None:
+            return
+        self._pending_chart_prefetch_range = None
+        start_ts, end_ts = pending
+        expected_cache_key = self._pending_chart_prefetch_cache_key
+        self._pending_chart_prefetch_cache_key = None
+        request_id = self._next_chart_prefetch_request_id()
+        self._active_chart_prefetch_request_id = request_id
+        self._chart_prefetch_inflight_range = (start_ts, end_ts)
+
+        def _work(stop_event=None) -> bool:
+            if stop_event is not None and stop_event.is_set():
+                return False
+            return bool(
+                self._view_model.prefetch_view_window(
+                    start_ts,
+                    end_ts,
+                    margin_factor=self._chart_prefetch_margin_factor,
+                    expected_base_cache_key=expected_cache_key,
+                    stop_event=stop_event,
+                )
+            )
+
+        def _on_prefetch_done(ready: bool) -> None:
+            if request_id != self._active_chart_prefetch_request_id:
+                return
+            self._chart_prefetch_inflight_range = None
+            if not bool(ready):
+                return
+            last_range = self._last_chart_range
+            if last_range is None:
+                return
+            visible_start, visible_end = last_range
+            if not self._view_model.set_view_window_cached(visible_start, visible_end):
+                return
+            y_range = None
+            try:
+                y_min = float(self.timeseries_chart.axis_y.min())
+                y_max = float(self.timeseries_chart.axis_y.max())
+                if y_max > y_min:
+                    y_range = (y_min, y_max)
+            except Exception:
+                y_range = None
+            series_df = self._view_model.series_for_chart()
+            self.timeseries_chart.update_window_dataframe(
+                series_df,
+                preserve_x_range=True,
+                preserve_y_range=True,
+            )
+            try:
+                self.timeseries_chart.set_x_range(visible_start, visible_end)
+            except Exception:
+                logger.warning("Failed to apply prefetched chart X-range.", exc_info=True)
+            if y_range is not None:
+                try:
+                    self.timeseries_chart.axis_y.setRange(*y_range)
+                except Exception:
+                    logger.warning("Failed to restore chart Y-range after prefetch render.", exc_info=True)
+            self._set_dt_controls_from_range(visible_start, visible_end)
+            flt = self._build_filters()
+            if flt:
+                self._sync_monthly_chart_title(flt.clone_with_range(visible_start, visible_end))
+                self.data_info.setText(
+                    self._build_data_info_text(flt, visible_start, visible_end, rows=len(series_df))
+                )
+            self._update_features_info_button(flt)
+
+        def _on_prefetch_error(_message: str) -> None:
+            if request_id != self._active_chart_prefetch_request_id:
+                return
+            self._chart_prefetch_inflight_range = None
+
+        run_in_thread(
+            _work,
+            on_result=(lambda ready: run_in_main_thread(_on_prefetch_done, bool(ready))),
+            on_error=(lambda message: run_in_main_thread(_on_prefetch_error, str(message))),
+            owner=self,
+            key="data_tab_chart_prefetch",
+            cancel_previous=True,
+        )
+
     # --- chart interactions
     def _on_chart_range_changed(self, start_ts, end_ts):
         """
@@ -614,9 +770,25 @@ class DataTab(TabWidget):
         except Exception:
             logger.warning("Exception in _on_chart_range_changed", exc_info=True)
 
-        t_set_view = time.perf_counter()
-        self._view_model.set_view_window(start_ts, end_ts)
-        _perf("set_view_window", t_set_view)
+        try:
+            start_ts = pd.Timestamp(start_ts)
+            end_ts = pd.Timestamp(end_ts)
+        except Exception:
+            return
+        if end_ts <= start_ts:
+            return
+        self._last_chart_range = (start_ts, end_ts)
+
+        t_set_view_cached = time.perf_counter()
+        cached_ready = bool(self._view_model.set_view_window_cached(start_ts, end_ts))
+        _perf("set_view_window_cached", t_set_view_cached, cached_ready=cached_ready)
+        sync_fallback = False
+        if not cached_ready and not self._prefetch_inflight_covers(start_ts, end_ts):
+            sync_fallback = True
+            t_set_view_sync = time.perf_counter()
+            self._view_model.set_view_window(start_ts, end_ts)
+            _perf("set_view_window_sync_fallback", t_set_view_sync)
+
         t_series = time.perf_counter()
         series_df = self._view_model.series_for_chart()
         _perf("series_for_chart", t_series, rows=len(series_df))
@@ -631,7 +803,7 @@ class DataTab(TabWidget):
             # Keep the dragged viewport stable. set_dataframe() derives X-range
             # from data bounds, which can slightly snap on first drag event.
             t_set_x = time.perf_counter()
-            self.timeseries_chart.set_x_range(pd.Timestamp(start_ts), pd.Timestamp(end_ts))
+            self.timeseries_chart.set_x_range(start_ts, end_ts)
             _perf("timeseries_set_x_range", t_set_x)
         except Exception:
             logger.warning("Failed to restore dragged X-range after time-series refresh.", exc_info=True)
@@ -640,6 +812,15 @@ class DataTab(TabWidget):
                 self.timeseries_chart.axis_y.setRange(*y_range)
             except Exception:
                 logger.warning("Exception in _on_chart_range_changed", exc_info=True)
+        t_prefetch = time.perf_counter()
+        self._queue_chart_prefetch(start_ts, end_ts)
+        _perf(
+            "queue_chart_prefetch",
+            t_prefetch,
+            cached_ready=cached_ready,
+            sync_fallback=sync_fallback,
+            update_ok=bool(update_ok),
+        )
         # mirror to dt edits but do NOT trigger expensive reloads
         self._set_dt_controls_from_range(start_ts, end_ts)
         # info line
@@ -898,6 +1079,8 @@ class DataTab(TabWidget):
                 and self._last_reload_epoch == self._reload_epoch
             ):
                 return
+        self._invalidate_chart_prefetch_state()
+        self._last_chart_range = None
         flt = self._build_filters()
         if not flt:
             self._clear_charts(tr("Select at least one feature to load."))
@@ -997,6 +1180,10 @@ class DataTab(TabWidget):
             t_set_view = time.perf_counter()
             self._view_model.set_view_window(effective_start, effective_end)
             _perf("set_view_window", t_set_view)
+            try:
+                self._last_chart_range = (pd.Timestamp(effective_start), pd.Timestamp(effective_end))
+            except Exception:
+                self._last_chart_range = None
 
         working_df = pd.DataFrame(columns=["t"]) if base_df is None else base_df.copy()
         t_monthly = time.perf_counter()
@@ -1033,6 +1220,7 @@ class DataTab(TabWidget):
                 display_end = self._chart_display_end(pd.Timestamp(effective_start), pd.Timestamp(effective_end))
                 self.timeseries_chart.set_x_range(pd.Timestamp(effective_start), display_end)
                 _perf("timeseries_set_x_range", t_set_x)
+                self._queue_chart_prefetch(pd.Timestamp(effective_start), display_end)
             except Exception:
                 logger.warning("Failed to restore requested X-range after reload.", exc_info=True)
         t_title = time.perf_counter()
@@ -1051,6 +1239,8 @@ class DataTab(TabWidget):
     def _clear_charts(self, message: str) -> None:
         self.data_info.setText(message)
         self._owned_base_cache_key = None
+        self._invalidate_chart_prefetch_state()
+        self._last_chart_range = None
         try:
             self.monthly_chart.clear()
             self.monthly_chart.set_title("")
@@ -1094,7 +1284,6 @@ class DataTab(TabWidget):
 
         from PySide6.QtWidgets import QFileDialog, QDialog
         from frontend.windows.import_options_dialog import ImportOptionsDialog
-        from frontend.threading import run_in_main_thread, run_in_thread
         from frontend import utils as futils
 
         self._import_dialog_active = True
