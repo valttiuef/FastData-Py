@@ -116,7 +116,10 @@ class FeaturesListWidgetViewModel(QObject):
         try:
             df = self._load_base_features_dataframe(model)
         except Exception as exc:  # pragma: no cover
-            logger.exception("Failed to load features: %s", exc)
+            if model is not None and model._is_database_in_use_error(exc):
+                logger.info("Skipped feature reload because database file is in use.")
+            else:
+                logger.exception("Failed to load features: %s", exc)
             self.load_failed.emit(str(exc))
             df = self._empty_dataframe()
         self._base_features_df = df
@@ -695,7 +698,10 @@ class FeaturesListWidget(QGroupBox):
         return [self._payloads_by_feature_id[fid] for fid in feature_ids if fid in self._payloads_by_feature_id]
 
     def _log_failure(self, message: str) -> None:  # pragma: no cover
-        logger.warning("Features list reload failed: %s", message)
+        if self._view_model._data_model is not None and self._view_model._data_model._is_database_in_use_error(message):
+            logger.info("Features list unavailable because database file is in use.")
+        else:
+            logger.warning("Features list reload failed: %s", message)
         try:
             toast_error(
                 tr("Failed to load features: {message}").format(message=message),

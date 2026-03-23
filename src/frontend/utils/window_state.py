@@ -12,10 +12,12 @@ applied when a window is registered.
 """
 
 import weakref
+import time
 from pathlib import Path
 from typing import Optional
-from PySide6.QtCore import QUrl
+from PySide6.QtCore import QCoreApplication, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
+from ..threading.utils import run_in_main_thread
 from ..viewmodels.log_view_model import get_log_view_model
 
 # Weak reference to the main window
@@ -25,6 +27,123 @@ _main_window_ref: Optional[weakref.ref] = None
 _pending_status: Optional[str] = ""
 _pending_progress: Optional[int] = None
 _pending_toasts: list[tuple[str, str, str, Optional[int], Optional[str], Optional[object], Optional[str]]] = []
+_pending_toast_flush_scheduled: bool = False
+_recent_toast_times: dict[tuple[str, str, str, Optional[str]], float] = {}
+
+_DATABASE_IN_USE_MARKERS: tuple[str, ...] = (
+    "database file is in use",
+    "database is locked",
+    "database is busy",
+    "could not set lock on file",
+    "conflicting lock is held",
+    "being used by another process",
+    "the process cannot access the file",
+    "resource temporarily unavailable",
+    "access is denied",
+    "permission denied",
+)
+
+
+def _is_database_in_use_message(message: str) -> bool:
+    text = str(message or "").strip().casefold()
+    if not text:
+        return False
+    return any(marker in text for marker in _DATABASE_IN_USE_MARKERS)
+
+
+def _window_ready_for_toasts(window) -> bool:
+    if window is None:
+        return False
+    if getattr(window, "toast_manager", None) is None:
+        return False
+    try:
+        return bool(window.isVisible())
+    except Exception:
+        return False
+
+
+def _normalize_toast_key(
+    kind: str,
+    title: str,
+    message: str,
+    tab_key: Optional[str],
+) -> tuple[str, str, str, Optional[str]]:
+    return (
+        str(kind or "").strip().casefold(),
+        str(title or "").strip().casefold(),
+        " ".join(str(message or "").split()).strip().casefold(),
+        tab_key,
+    )
+
+
+def _should_emit_toast(
+    kind: str,
+    title: str,
+    message: str,
+    tab_key: Optional[str],
+) -> bool:
+    key = _normalize_toast_key(kind, title, message, tab_key)
+    now = time.monotonic()
+    cooldown = 20.0 if _is_database_in_use_message(message) else 2.0
+    last = _recent_toast_times.get(key)
+    if last is not None and (now - last) < cooldown:
+        return False
+    _recent_toast_times[key] = now
+    stale_before = now - 180.0
+    stale_keys = [k for k, ts in _recent_toast_times.items() if ts < stale_before]
+    for stale_key in stale_keys:
+        _recent_toast_times.pop(stale_key, None)
+    return True
+
+
+def _enqueue_toast(
+    kind: str,
+    title: str,
+    message: str,
+    msec: Optional[int],
+    tab_key: Optional[str],
+    on_click,
+    icon_key: Optional[str],
+) -> None:
+    item = (kind, title, str(message), msec, tab_key, on_click, icon_key)
+    if _pending_toasts and _pending_toasts[-1] == item:
+        return
+    _pending_toasts.append(item)
+    del _pending_toasts[:-10]
+    _schedule_pending_toast_flush()
+
+
+def _flush_pending_toasts() -> None:
+    global _pending_toast_flush_scheduled
+    _pending_toast_flush_scheduled = False
+    if not _pending_toasts:
+        return
+    w = _get_window()
+    if not _window_ready_for_toasts(w):
+        _schedule_pending_toast_flush(delay_ms=250)
+        return
+    pending = list(_pending_toasts)
+    _pending_toasts.clear()
+    for kind, title, message, msec, tab_key, on_click, icon_key in pending:
+        _dispatch_toast(
+            kind,
+            message,
+            title=title,
+            msec=msec,
+            tab_key=tab_key,
+            on_click=on_click,
+            icon_key=icon_key,
+        )
+
+
+def _schedule_pending_toast_flush(*, delay_ms: int = 120) -> None:
+    global _pending_toast_flush_scheduled
+    if _pending_toast_flush_scheduled:
+        return
+    if QCoreApplication.instance() is None:
+        return
+    _pending_toast_flush_scheduled = True
+    QTimer.singleShot(max(0, int(delay_ms)), _flush_pending_toasts)
 
 
 def _log_toast(kind: str, message: str, *, title: str = "", tab_key: Optional[str] = None) -> None:
@@ -64,6 +183,7 @@ def _get_window():
 
 
 def register_main_window(win) -> None:
+    # @ai(gpt-5, codex-cli, bugfix, 2026-03-23)
     """Register the application main window so helpers forward to it.
 
     The function will also apply any pending status/progress values.
@@ -84,10 +204,7 @@ def register_main_window(win) -> None:
         _pending_progress = None
 
     if _pending_toasts:
-        pending = list(_pending_toasts)
-        _pending_toasts.clear()
-        for kind, title, message, msec, tab_key, on_click, icon_key in pending:
-            _dispatch_toast(kind, message, title=title, msec=msec, tab_key=tab_key, on_click=on_click, icon_key=icon_key)
+        _schedule_pending_toast_flush(delay_ms=120)
 
 
 def unregister_main_window() -> None:
@@ -106,7 +223,7 @@ def set_status_text(text: Optional[str]) -> None:
     w = _get_window()
     if w is not None:
         try:
-            w.set_status_text(text)
+            run_in_main_thread(w.set_status_text, text)
             return
         except Exception:
             logger.warning("Exception in set_status_text", exc_info=True)
@@ -119,7 +236,7 @@ def clear_status_text() -> None:
     w = _get_window()
     if w is not None:
         try:
-            w.clear_status_text()
+            run_in_main_thread(w.clear_status_text)
             return
         except Exception:
             logger.warning("Exception in clear_status_text", exc_info=True)
@@ -136,7 +253,7 @@ def set_progress(percent: Optional[int]) -> None:
     w = _get_window()
     if w is not None:
         try:
-            w.set_progress(percent)
+            run_in_main_thread(w.set_progress, percent)
             return
         except Exception:
             logger.warning("Exception in set_progress", exc_info=True)
@@ -155,7 +272,7 @@ def clear_progress() -> None:
     w = _get_window()
     if w is not None:
         try:
-            w.clear_progress()
+            run_in_main_thread(w.clear_progress)
             return
         except Exception:
             logger.warning("Exception in clear_progress", exc_info=True)
@@ -171,13 +288,15 @@ def increment_progress(delta: int = 1) -> None:
     global _pending_progress
     if w is not None:
         try:
-            # read current value in a defensive way then set new value
-            cur = 0
-            try:
-                cur = int(w._progress.value())
-            except Exception:
+            def _increment() -> None:
                 cur = 0
-            w.set_progress(cur + int(delta))
+                try:
+                    cur = int(w._progress.value())
+                except Exception:
+                    cur = 0
+                w.set_progress(cur + int(delta))
+
+            run_in_main_thread(_increment)
             return
         except Exception:
             logger.warning("Exception in increment_progress", exc_info=True)
@@ -206,45 +325,48 @@ def _dispatch_toast(
     manager = getattr(w, "toast_manager", None)
     if manager is None:
         return
-    try:
-        if kind == "success":
-            manager.success(
-                message,
-                title=title or "Done",
-                msec=msec,
-                tab_key=tab_key,
-                on_click=on_click,
-                icon_key=icon_key,
-            )
-        elif kind == "warn":
-            manager.warn(
-                message,
-                title=title or "Warning",
-                msec=msec,
-                tab_key=tab_key,
-                on_click=on_click,
-                icon_key=icon_key,
-            )
-        elif kind == "error":
-            manager.error(
-                message,
-                title=title or "Error",
-                msec=msec,
-                tab_key=tab_key,
-                on_click=on_click,
-                icon_key=icon_key,
-            )
-        else:
-            manager.info(
-                message,
-                title=title or "Info",
-                msec=msec,
-                tab_key=tab_key,
-                on_click=on_click,
-                icon_key=icon_key,
-            )
-    except Exception:
-        logger.warning("Exception in _dispatch_toast", exc_info=True)
+    def _emit() -> None:
+        try:
+            if kind == "success":
+                manager.success(
+                    message,
+                    title=title or "Done",
+                    msec=msec,
+                    tab_key=tab_key,
+                    on_click=on_click,
+                    icon_key=icon_key,
+                )
+            elif kind == "warn":
+                manager.warn(
+                    message,
+                    title=title or "Warning",
+                    msec=msec,
+                    tab_key=tab_key,
+                    on_click=on_click,
+                    icon_key=icon_key,
+                )
+            elif kind == "error":
+                manager.error(
+                    message,
+                    title=title or "Error",
+                    msec=msec,
+                    tab_key=tab_key,
+                    on_click=on_click,
+                    icon_key=icon_key,
+                )
+            else:
+                manager.info(
+                    message,
+                    title=title or "Info",
+                    msec=msec,
+                    tab_key=tab_key,
+                    on_click=on_click,
+                    icon_key=icon_key,
+                )
+        except Exception:
+            logger.warning("Exception in _dispatch_toast", exc_info=True)
+
+    run_in_main_thread(_emit)
 
 
 def toast_info(
@@ -257,13 +379,14 @@ def toast_info(
     icon_key: Optional[str] = None,
 ) -> None:
     """Show a non-blocking toast (best-effort). Falls back to pending queue."""
+    if not _should_emit_toast("info", title, message, tab_key):
+        return
     _log_toast("info", message, title=title, tab_key=tab_key)
     w = _get_window()
-    if w is not None and getattr(w, "toast_manager", None) is not None:
+    if _window_ready_for_toasts(w):
         _dispatch_toast("info", message, title=title, msec=msec, tab_key=tab_key, on_click=on_click, icon_key=icon_key)
         return
-    _pending_toasts.append(("info", title, str(message), msec, tab_key, on_click, icon_key))
-    del _pending_toasts[:-10]
+    _enqueue_toast("info", title, str(message), msec, tab_key, on_click, icon_key)
 
 
 def toast_success(
@@ -275,13 +398,14 @@ def toast_success(
     on_click=None,
     icon_key: Optional[str] = None,
 ) -> None:
+    if not _should_emit_toast("success", title, message, tab_key):
+        return
     _log_toast("success", message, title=title, tab_key=tab_key)
     w = _get_window()
-    if w is not None and getattr(w, "toast_manager", None) is not None:
+    if _window_ready_for_toasts(w):
         _dispatch_toast("success", message, title=title, msec=msec, tab_key=tab_key, on_click=on_click, icon_key=icon_key)
         return
-    _pending_toasts.append(("success", title, str(message), msec, tab_key, on_click, icon_key))
-    del _pending_toasts[:-10]
+    _enqueue_toast("success", title, str(message), msec, tab_key, on_click, icon_key)
 
 
 def toast_warn(
@@ -293,16 +417,18 @@ def toast_warn(
     on_click=None,
     icon_key: Optional[str] = None,
 ) -> None:
+    if not _should_emit_toast("warn", title, message, tab_key):
+        return
     _log_toast("warn", message, title=title, tab_key=tab_key)
     w = _get_window()
-    if w is not None and getattr(w, "toast_manager", None) is not None:
+    if _window_ready_for_toasts(w):
         _dispatch_toast("warn", message, title=title, msec=msec, tab_key=tab_key, on_click=on_click, icon_key=icon_key)
         return
-    _pending_toasts.append(("warn", title, str(message), msec, tab_key, on_click, icon_key))
-    del _pending_toasts[:-10]
+    _enqueue_toast("warn", title, str(message), msec, tab_key, on_click, icon_key)
 
 
 def toast_error(
+    # @ai(gpt-5, codex-cli, bugfix, 2026-03-23)
     message: str,
     *,
     title: str = "Error",
@@ -311,13 +437,19 @@ def toast_error(
     on_click=None,
     icon_key: Optional[str] = None,
 ) -> None:
+    if _is_database_in_use_message(message):
+        set_status_text(
+            "Database in use. Close other apps using the database file, then use Refresh Databases or create a new database."
+        )
+        return
+    if not _should_emit_toast("error", title, message, tab_key):
+        return
     _log_toast("error", message, title=title, tab_key=tab_key)
     w = _get_window()
-    if w is not None and getattr(w, "toast_manager", None) is not None:
+    if _window_ready_for_toasts(w):
         _dispatch_toast("error", message, title=title, msec=msec, tab_key=tab_key, on_click=on_click, icon_key=icon_key)
         return
-    _pending_toasts.append(("error", title, str(message), msec, tab_key, on_click, icon_key))
-    del _pending_toasts[:-10]
+    _enqueue_toast("error", title, str(message), msec, tab_key, on_click, icon_key)
 
 
 # @ai(gpt-5, codex, refactor, 2026-03-11)

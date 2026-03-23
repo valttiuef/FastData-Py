@@ -45,7 +45,17 @@ class ForecastingTab(TabWidget):
         self.results_panel.details_requested.connect(self._show_model_details_dialog)
         self.results_panel.save_requested.connect(self._save_selected_runs)
         self.results_panel.delete_requested.connect(self._delete_selected_runs)
-        self._on_model_database_changed(self._view_model.data_model.db)
+        self._on_model_database_changed(self._safe_initial_database_handle())
+
+    def _safe_initial_database_handle(self):
+        try:
+            return self._view_model.data_model.db
+        except Exception as exc:
+            if self._view_model.data_model._is_database_in_use_error(exc):
+                logger.info("Forecasting tab initialized without database handle because database file is in use.")
+            else:
+                logger.warning("Forecasting tab database bootstrap failed", exc_info=True)
+            return None
 
     # ------------------------------------------------------------------
     def _create_sidebar(self) -> QWidget:

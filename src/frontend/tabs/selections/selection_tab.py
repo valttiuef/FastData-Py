@@ -697,7 +697,10 @@ class SelectionsTab(TabWidget):
                 return
             kinds = all_groups.get("kind", pd.Series(dtype=object)).astype(str).str.strip()
             fw.set_groups(all_groups.loc[kinds.isin(enabled_kinds)].reset_index(drop=True))
-        except Exception:
+        except Exception as exc:
+            if self._database_model._is_database_in_use_error(exc):
+                logger.info("Skipped group filter refresh because database file is in use.")
+                return
             logger.warning("Exception in _refresh_group_filters_for_enabled_group_features", exc_info=True)
 
     def _on_load_setting(self) -> None:

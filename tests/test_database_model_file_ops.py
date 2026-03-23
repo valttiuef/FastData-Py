@@ -71,3 +71,36 @@ def test_use_database_does_not_switch_path_when_access_check_fails(
         assert settings.database_path == source
     finally:
         model._close_database()
+
+
+def test_database_in_use_error_detection() -> None:
+    assert DatabaseModel._is_database_in_use_error(
+        "IO Error: Could not set lock on file C:\\temp\\x.duckdb. Conflicting lock is held"
+    )
+    assert DatabaseModel._is_database_in_use_error(
+        "database is locked"
+    )
+    assert not DatabaseModel._is_database_in_use_error(
+        "Database file does not exist"
+    )
+
+
+def test_instantiate_database_raises_permission_error_for_lock_messages(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _LockedDatabase:
+        def __init__(self, _path: Path) -> None:
+            raise RuntimeError(
+                "IO Error: Could not set lock on file C:\\temp\\locked.duckdb. Conflicting lock is held"
+            )
+
+    settings = SettingsModel(
+        organization="FastDataTests",
+        application="FastDataInstantiateDbLockMessage",
+    )
+    model = DatabaseModel(settings)
+    monkeypatch.setattr("frontend.models.database_model.Database", _LockedDatabase)
+
+    with pytest.raises(PermissionError, match="Database file is in use"):
+        model._instantiate_database(tmp_path / "locked.duckdb")

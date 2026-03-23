@@ -154,6 +154,7 @@ class MainWindow(QMainWindow):
             if module.lazy_load
         ]
         self._tab_spec_by_help_key = {spec.help_key: spec for spec in self._tab_specs}
+        self._suspend_background_tab_loading = False
 
         data_module = self._module_by_key.get("data")
         if data_module is not None:
@@ -161,17 +162,30 @@ class MainWindow(QMainWindow):
             try:
                 self.data_tab = data_module.builder(self)
                 setattr(self, data_module.instance_attr, self.data_tab)
-            except Exception:
-                logging.getLogger(__name__).exception("Failed to load data tab")
-                self._report_startup_status(
-                    self.tr("ERROR: {name} failed to load (see logs)").format(name=data_module.label),
-                    66,
-                    error=True,
-                )
-                self.data_tab = self._build_error_tab(
-                    self.tr("{name} failed to load.").format(name=data_module.label),
-                    self.tr("Check the log for details and try restarting the app."),
-                )
+            except Exception as exc:
+                if self._exception_is_database_in_use(exc):
+                    self._suspend_background_tab_loading = True
+                    logging.getLogger(__name__).warning("Data tab unavailable: database file is in use")
+                    self._report_startup_status(
+                        self.tr("Database in use. Close it, then refresh databases."),
+                        66,
+                        error=True,
+                    )
+                    self.data_tab = self._build_error_tab(
+                        self.tr("Database file is currently in use."),
+                        self.tr("Close other apps using the database, then use Refresh Databases or create a new database."),
+                    )
+                else:
+                    logging.getLogger(__name__).exception("Failed to load data tab")
+                    self._report_startup_status(
+                        self.tr("ERROR: {name} failed to load (see logs)").format(name=data_module.label),
+                        66,
+                        error=True,
+                    )
+                    self.data_tab = self._build_error_tab(
+                        self.tr("{name} failed to load.").format(name=data_module.label),
+                        self.tr("Check the log for details and try restarting the app."),
+                    )
         else:
             self.data_tab = QWidget(self)
 
@@ -405,6 +419,8 @@ class MainWindow(QMainWindow):
             self.tabs.setCurrentIndex(index)
 
     def _load_next_pending_tab(self) -> None:
+        if self._suspend_background_tab_loading:
+            return
         if not self._pending_help_keys:
             return
         for spec in self._tab_specs:
@@ -429,18 +445,25 @@ class MainWindow(QMainWindow):
             self._fill_placeholder(spec, widget)
             self._loaded_count += 1
             self._pending_help_keys.discard(spec.help_key)
-        except Exception:
-            logging.getLogger(__name__).exception("Failed to build tab %s", spec.help_key)
+        except Exception as exc:
+            if self._exception_is_database_in_use(exc):
+                self._suspend_background_tab_loading = True
+                logging.getLogger(__name__).warning("Tab unavailable (%s): database file is in use", spec.help_key)
+                error_text = self.tr("Database in use. Close it, then refresh databases.")
+                startup_error_text = self.tr("Database in use. Close it, then refresh databases.")
+            else:
+                logging.getLogger(__name__).exception("Failed to build tab %s", spec.help_key)
+                error_text = self.tr("Failed to load {name}. Check the log for details.").format(name=spec.label)
+                startup_error_text = self.tr("ERROR: {name} failed to load (see logs)").format(name=spec.label)
             self._pending_help_keys.discard(spec.help_key)
             self._loaded_count += 1
             self._loaded_tabs[spec.help_key] = placeholder or QWidget(self.tabs)
-            error_text = self.tr("Failed to load {name}. Check the log for details.").format(name=spec.label)
             label = self._placeholder_labels.get(spec.help_key)
             if label is not None:
                 label.setText(error_text)
             self._status_label.setText(error_text)
             self._report_startup_status(
-                self.tr("ERROR: {name} failed to load (see logs)").format(name=spec.label),
+                startup_error_text,
                 max(self._progress.value(), 0),
                 error=True,
             )
@@ -448,8 +471,23 @@ class MainWindow(QMainWindow):
             if placeholder is not None:
                 placeholder.setEnabled(True)
             self._update_tab_loading_status()
-            if schedule_next:
+            if schedule_next and not self._suspend_background_tab_loading:
                 QTimer.singleShot(0, self._load_next_pending_tab)
+
+    def _exception_is_database_in_use(self, error: BaseException) -> bool:
+        current: BaseException | None = error
+        seen: set[int] = set()
+        while current is not None and id(current) not in seen:
+            seen.add(id(current))
+            try:
+                if self.database_model._is_database_in_use_error(current):
+                    return True
+            except Exception:
+                logger.warning("Exception in _exception_is_database_in_use", exc_info=True)
+                return False
+            next_error = current.__cause__ if current.__cause__ is not None else current.__context__
+            current = next_error if isinstance(next_error, BaseException) else None
+        return False
 
     def _fill_placeholder(self, spec: _TabSpec, widget: QWidget) -> None:
         container = self._placeholder_containers.get(spec.help_key)
@@ -527,6 +565,7 @@ class MainWindow(QMainWindow):
         error_status_prefix: str | None = None,
         clear_data_on_error: bool = False,
         recovery_hint: str | None = None,
+        resume_background_tabs_on_success: bool = False,
     ) -> None:
         if start_title is None:
             start_title = self.tr("Database")
@@ -559,6 +598,8 @@ class MainWindow(QMainWindow):
                     self.toast_manager.success(success_message, title=success_title)
                 except Exception:
                     logger.warning("Exception in _handle_success", exc_info=True)
+            if resume_background_tabs_on_success:
+                self._resume_background_tab_loading()
             self.clear_progress()
             if success_status:
                 self.set_status_text(success_status)
@@ -566,20 +607,38 @@ class MainWindow(QMainWindow):
                 self.clear_status_text()
 
         def _handle_error(msg: str):
-            message = f"{error_prefix}{msg}" if error_prefix else str(msg)
+            is_database_in_use = self.database_model._is_database_in_use_error(msg)
+            recovery_text = (recovery_hint or "").strip()
+            if is_database_in_use:
+                if recovery_text:
+                    message = self.tr("Database file is currently in use. {hint}").format(hint=recovery_text)
+                else:
+                    message = self.tr("Database file is currently in use.")
+                error_title_local = self.tr("Database in use")
+            else:
+                message = f"{error_prefix}{msg}" if error_prefix else str(msg)
+                error_title_local = error_title
             try:
-                self.toast_manager.error(message, title=error_title)
+                self.toast_manager.error(message, title=error_title_local)
             except Exception:
                 logger.warning("Exception in _handle_error", exc_info=True)
             if clear_data_on_error:
                 self._recover_after_database_failure()
-                if recovery_hint:
+                if recovery_hint and not is_database_in_use:
                     try:
                         self.toast_manager.warn(recovery_hint, title=self.tr("Database unavailable"))
                     except Exception:
                         logger.warning("Exception in _handle_error", exc_info=True)
+            if is_database_in_use:
+                self._suspend_background_tab_loading = True
             self.clear_progress()
-            if error_status_prefix is not None:
+            if is_database_in_use:
+                if recovery_text:
+                    status_message = self.tr("Database in use. {hint}").format(hint=recovery_text)
+                else:
+                    status_message = self.tr("Database in use.")
+                self.set_status_text(status_message)
+            elif error_status_prefix is not None:
                 self.set_status_text(f"{error_status_prefix}{msg}")
             else:
                 self.clear_status_text()
@@ -646,8 +705,16 @@ class MainWindow(QMainWindow):
             success_status=self.tr("Database created."),
             error_status_prefix=self.tr("Database creation failed: "),
             clear_data_on_error=True,
-            recovery_hint=self.tr("Close other apps using the database file, then use Refresh Databases."),
+            recovery_hint=self.tr("Close other apps using the database file, then use Refresh Databases or create a new database."),
+            resume_background_tabs_on_success=True,
         )
+
+    def _resume_background_tab_loading(self) -> None:
+        if not self._suspend_background_tab_loading:
+            return
+        self._suspend_background_tab_loading = False
+        if self._pending_help_keys:
+            QTimer.singleShot(0, self._load_next_pending_tab)
 
     def open_database(self):
         sel = self._ask_for_db_file("Open database file")
@@ -682,7 +749,8 @@ class MainWindow(QMainWindow):
             success_status=self.tr("Database loaded."),
             error_status_prefix=self.tr("Database load failed: "),
             clear_data_on_error=True,
-            recovery_hint=self.tr("Close other apps using the database file, then use Refresh Databases."),
+            recovery_hint=self.tr("Close other apps using the database file, then use Refresh Databases or create a new database."),
+            resume_background_tabs_on_success=True,
         )
 
     def save_database_as(self):
@@ -718,6 +786,7 @@ class MainWindow(QMainWindow):
             start_status=self.tr("Saving database..."),
             success_status=self.tr("Database saved."),
             error_status_prefix=self.tr("Database save failed: "),
+            resume_background_tabs_on_success=True,
         )
 
     def reset_database(self):
@@ -745,7 +814,8 @@ class MainWindow(QMainWindow):
             success_status=self.tr("Database reset finished."),
             error_status_prefix=self.tr("Database reset failed: "),
             clear_data_on_error=True,
-            recovery_hint=self.tr("Close other apps using the database file, then use Refresh Databases."),
+            recovery_hint=self.tr("Close other apps using the database file, then use Refresh Databases or create a new database."),
+            resume_background_tabs_on_success=True,
         )
 
     def open_selection_settings_database(self):
@@ -872,7 +942,8 @@ class MainWindow(QMainWindow):
             success_status=self.tr("Databases refreshed."),
             error_status_prefix=self.tr("Database refresh failed: "),
             clear_data_on_error=True,
-            recovery_hint=self.tr("Close other apps using the database file, then use Refresh Databases."),
+            recovery_hint=self.tr("Close other apps using the database file, then use Refresh Databases or create a new database."),
+            resume_background_tabs_on_success=True,
         )
 
     def _release_database_handles(self) -> None:
@@ -888,6 +959,11 @@ class MainWindow(QMainWindow):
                     logger.warning("Exception in _release_database_handles", exc_info=True)
 
     def _on_database_changed(self, path) -> None:
+        if self._suspend_background_tab_loading:
+            self.set_status_text(
+                self.tr("Database in use. Close other apps using the database file, then refresh databases or create a new database.")
+            )
+            return
         try:
             name = Path(path).name if path else ""
         except Exception:
@@ -958,6 +1034,8 @@ class MainWindow(QMainWindow):
         try:
             if text:
                 message = str(text)
+                if self._status_label.text() == message:
+                    return
                 self._status_label.setText(message)
                 self.log_view_model.log_message(message, level=logging.INFO, origin="status")
             else:

@@ -31,8 +31,27 @@ from ..threading.utils import run_in_main_thread
 logger = logging.getLogger(__name__)
 
 NO_TAG_FILTER_VALUE = "__NO_TAG__"
+_DATABASE_IN_USE_MARKERS: tuple[str, ...] = (
+    "database file is in use",
+    "database is locked",
+    "database is busy",
+    "could not set lock on file",
+    "conflicting lock is held",
+    "being used by another process",
+    "the process cannot access the file",
+    "resource temporarily unavailable",
+    "access is denied",
+    "permission denied",
+)
 
 _MODE_TYPE_PATTERN = re.compile(r"^\s*(text|group)\s*\((.*)\)\s*$", re.IGNORECASE)
+
+
+def _is_database_in_use_error(error: object) -> bool:
+    text = str(error or "").strip().casefold()
+    if not text:
+        return False
+    return any(marker in text for marker in _DATABASE_IN_USE_MARKERS)
 
 def _extract_original_type(type_value: object) -> str:
     text = str(type_value or "").strip()
@@ -330,16 +349,29 @@ class DatabaseModel(QObject):
         return self._ensure_database()
 
     def _instantiate_database(self, path: Path) -> Database:
-        if Database is None:  # pragma: no cover - guard for optional import failure
-            from backend.data_db import Database as _Database  # type: ignore
-            return _Database(path)
-        return Database(path)
+        try:
+            if Database is None:  # pragma: no cover - guard for optional import failure
+                from backend.data_db import Database as _Database  # type: ignore
+                return _Database(path)
+            return Database(path)
+        except Exception as exc:
+            if self._is_database_in_use_error(exc):
+                raise PermissionError(f"Database file is in use: {path}") from exc
+            raise
+
+    @staticmethod
+    def _is_database_in_use_error(error: object) -> bool:
+        return _is_database_in_use_error(error)
 
     def _validate_database_access(self, path: Path) -> None:
         db = self._instantiate_database(path)
         try:
             with db.connection() as con:
                 con.execute("SELECT 1").fetchone()
+        except Exception as exc:
+            if self._is_database_in_use_error(exc):
+                raise PermissionError(f"Database file is in use: {path}") from exc
+            raise
         finally:
             try:
                 db.close()
@@ -354,7 +386,12 @@ class DatabaseModel(QObject):
         return cast(Database, _DatabaseHandle(self._database))
 
     def _instantiate_selection_database(self, path: Path) -> SelectionSettingsDatabase:
-        return SelectionSettingsDatabase(path)
+        try:
+            return SelectionSettingsDatabase(path)
+        except Exception as exc:
+            if self._is_database_in_use_error(exc):
+                raise PermissionError(f"Selection settings database file is in use: {path}") from exc
+            raise
 
     def _ensure_selection_database(self) -> SelectionSettingsDatabase:
         if self._selection_database is None:

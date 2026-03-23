@@ -71,7 +71,17 @@ class RegressionTab(TabWidget):
         self.sidebar.save_predictions_requested.connect(self._save_predictions_from_selected_run)
         self.sidebar.save_models_requested.connect(self._save_selected_runs)
         self.sidebar.delete_models_requested.connect(self._delete_selected_runs)
-        self._on_model_database_changed(self._view_model.data_model.db)
+        self._on_model_database_changed(self._safe_initial_database_handle())
+
+    def _safe_initial_database_handle(self):
+        try:
+            return self._view_model.data_model.db
+        except Exception as exc:
+            if self._view_model.data_model._is_database_in_use_error(exc):
+                logger.info("Regression tab initialized without database handle because database file is in use.")
+            else:
+                logger.warning("Regression tab database bootstrap failed", exc_info=True)
+            return None
 
     # ------------------------------------------------------------------
     def _create_sidebar(self) -> QWidget:
