@@ -105,7 +105,7 @@ class TimelineTabWidget(QWidget):
             container = QWidget(self)
             container.setObjectName("DataSubInfoRow")
             layout = QHBoxLayout(container)
-            layout.setContentsMargins(4, 0, 4, 0)
+            layout.setContentsMargins(8, 8, 0, 0)
             layout.setSpacing(6)
             label = QLabel(text, container)
             label.setObjectName("DataSubInfo")
