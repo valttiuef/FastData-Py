@@ -21,6 +21,7 @@ from .clustering import (
 
 import logging
 logger = logging.getLogger(__name__)
+from .logging.perf_debug import PerfDebugStopwatch
 
 class MiniSomWithCallback(MiniSom):
     # --- TRUE BATCH EPOCH (vectorized) ---
@@ -262,6 +263,14 @@ class SOMService:
         self._som: Optional[Any] = None
         self._clustering = clustering_service or ClusteringService()
         self._last_norm_df: Optional[pd.DataFrame] = None
+        self._inputs_lock = threading.RLock()
+        self._cached_clustering_inputs_full: Optional[ClusteringInputs] = None
+        self._cached_clustering_inputs_light: Optional[ClusteringInputs] = None
+
+    def _invalidate_clustering_inputs_cache(self) -> None:
+        with self._inputs_lock:
+            self._cached_clustering_inputs_full = None
+            self._cached_clustering_inputs_light = None
 
     def load_from_state(
         self,
@@ -288,6 +297,7 @@ class SOMService:
         som._weights = weights.astype(float, copy=False)
         self._som = som
         self._last_norm_df = None if normalized_dataframe is None else normalized_dataframe.copy()
+        self._invalidate_clustering_inputs_cache()
         return som
 
     @property
@@ -302,32 +312,65 @@ class SOMService:
         codebook = W.reshape(-1, W.shape[2])      # (n_units, n_features)
         return codebook
 
-    def _bmus_for_rows(self, data_array: np.ndarray) -> np.ndarray:
+    def _bmus_for_rows(self, data_array: np.ndarray, *, chunk_size: int = 512) -> np.ndarray:
         """Return BMU indices (flattened unit index) for each row in data_array."""
-        W = self._som.get_weights()               # (w,h,f)
-        w, h, f = W.shape
-        flat_W = W.reshape(-1, f)                 # (n_units, f)
-        # compute BMUs
-        dists = ((data_array[:, None, :] - flat_W[None, :, :])**2).sum(axis=2)  # (n_samples, n_units)
-        return np.argmin(dists, axis=1)           # (n_samples,)
+        if self._som is None:
+            raise RuntimeError("SOM not trained.")
+        if data_array is None or data_array.size == 0:
+            return np.array([], dtype=int)
 
-    def clustering_inputs(self) -> ClusteringInputs:
+        W = self._som.get_weights()               # (w,h,f)
+        _w, _h, f = W.shape
+        flat_W = W.reshape(-1, f).astype(float, copy=False)  # (n_units, f)
+        w2 = np.sum(flat_W * flat_W, axis=1, keepdims=True).T
+
+        X = np.asarray(data_array, dtype=float)
+        n_rows = int(X.shape[0])
+        out = np.empty(n_rows, dtype=np.int32)
+        step = max(64, int(chunk_size))
+
+        for start in range(0, n_rows, step):
+            stop = min(n_rows, start + step)
+            Xc = X[start:stop]
+            x2 = np.sum(Xc * Xc, axis=1, keepdims=True)
+            d2 = x2 + w2 - (2.0 * (Xc @ flat_W.T))
+            out[start:stop] = np.argmin(d2, axis=1).astype(np.int32)
+
+        return out.astype(int, copy=False)
+
+    # @ai(gpt-5, codex, performance-fix, 2026-03-23)
+    def clustering_inputs(self, *, include_bmu_indices: bool = True) -> ClusteringInputs:
         """Return pre-computed state required for clustering operations."""
 
-        if self._som is None:
+        with self._inputs_lock:
+            cached = (
+                self._cached_clustering_inputs_full
+                if include_bmu_indices
+                else self._cached_clustering_inputs_light
+            )
+            if cached is not None:
+                return cached
+
+            som = self._som
+            last_norm_df = self._last_norm_df
+
+        if som is None:
             raise RuntimeError("SOM not trained.")
 
         codebook = self._get_codebook()
-        weights = self._som.get_weights()
+        weights = som.get_weights()
         map_shape = (int(weights.shape[0]), int(weights.shape[1]))
 
-        if self._last_norm_df is not None:
-            X = self._last_norm_df.to_numpy(dtype=float)
-            if X.size:
-                bmu_indices = self._bmus_for_rows(X)
+        if last_norm_df is not None:
+            X = last_norm_df.to_numpy(dtype=float)
+            if include_bmu_indices:
+                if X.size:
+                    bmu_indices = self._bmus_for_rows(X)
+                else:
+                    bmu_indices = np.array([], dtype=int)
             else:
-                bmu_indices = np.array([], dtype=int)
-            cols = list(self._last_norm_df.columns)
+                bmu_indices = None
+            cols = list(last_norm_df.columns)
             if len(cols) == codebook.shape[1]:
                 feature_names = list(cols)
             else:
@@ -336,12 +379,25 @@ class SOMService:
             bmu_indices = None
             feature_names = [f"f{i}" for i in range(codebook.shape[1])]
 
-        return ClusteringInputs(
+        inputs = ClusteringInputs(
             codebook=codebook,
             map_shape=map_shape,
             bmu_indices=bmu_indices,
             feature_names=feature_names,
         )
+        with self._inputs_lock:
+            if include_bmu_indices:
+                self._cached_clustering_inputs_full = inputs
+                if self._cached_clustering_inputs_light is None:
+                    self._cached_clustering_inputs_light = ClusteringInputs(
+                        codebook=inputs.codebook,
+                        map_shape=inputs.map_shape,
+                        bmu_indices=None,
+                        feature_names=list(inputs.feature_names),
+                    )
+            else:
+                self._cached_clustering_inputs_light = inputs
+        return inputs
 
     def available_clustering_methods(self) -> List[ClusteringMethodSpec]:
         """Expose clustering methods available from the clustering service."""
@@ -433,6 +489,14 @@ class SOMService:
         stop_event: Optional[threading.Event] = None,
         init_mode = "pca"  # "pca" | "data" | "random"
     ) -> SomResult:
+        # @ai(gpt-5, codex, observability, 2026-03-23)
+        perf_watch = PerfDebugStopwatch(
+            "som.service.train",
+            rows=len(df) if isinstance(df, pd.DataFrame) else None,
+            cols=len(df.columns) if isinstance(df, pd.DataFrame) else None,
+            map_width=map_shape[0] if isinstance(map_shape, tuple) and len(map_shape) > 0 else None,
+            map_height=map_shape[1] if isinstance(map_shape, tuple) and len(map_shape) > 1 else None,
+        )
         """
         Train a SOM on the provided dataframe and return structured outputs.
 
@@ -469,12 +533,15 @@ class SOMService:
 
         try:
             data = self._prepare_dataframe(df, columns=columns)
+            perf_watch.mark("prepare_dataframe", rows=len(data), cols=len(data.columns))
 
             _emit_status("Normalising features…")
             norm_df, scaler = self._normalise(data, normalisation)
+            perf_watch.mark("normalise", rows=len(norm_df), cols=len(norm_df.columns))
 
             #keep copy so easier to cluster per row
             self._last_norm_df = norm_df.copy()
+            self._invalidate_clustering_inputs_cache()
 
             #default to 100 epochs if not specified
             if num_epochs is None or num_epochs <= 0:
@@ -497,6 +564,7 @@ class SOMService:
                 neighborhood_function=neighborhood_function,
                 random_seed=42,
             )
+            perf_watch.mark("configure_grid", input_len=input_len)
 
             _emit_status("Initializing weights…")
             # ---- Weight init on the SAME normalized data ----
@@ -510,6 +578,7 @@ class SOMService:
                 som.random_weights_init(data_array)
             else:
                 logger.warning("Unknown init mode '%s', using default MiniSom init", mode)
+            perf_watch.mark("initialise_weights", init_mode=mode)
 
             # pick mode
             mode = (training_mode or "batch").lower()
@@ -580,8 +649,10 @@ class SOMService:
                     callback_every=max(1, (len(data_array) * int(num_epochs)) // 100),
                     report_qe=False,
                 )
+            perf_watch.mark("som_train_loop", training_mode=tm, epochs=num_epochs)
 
             self._som = som
+            self._invalidate_clustering_inputs_cache()
 
             _emit_status("Calculating component planes…")
 
@@ -598,6 +669,7 @@ class SOMService:
                     index=pd.RangeIndex(start=0, stop=height, step=1, name="x"),
                     columns=pd.RangeIndex(start=0, stop=width, step=1, name="y"),
                 )
+            perf_watch.mark("component_planes", planes=len(component_planes))
 
             _emit_status("Locating feature positions…")
             feature_rows = []
@@ -618,6 +690,7 @@ class SOMService:
                 )
 
             feature_positions = pd.DataFrame(feature_rows)
+            perf_watch.mark("feature_positions", rows=len(feature_positions))
 
             _emit_status("Assigning rows to best matching units…")
             row_records = []
@@ -643,6 +716,7 @@ class SOMService:
                 distance_accumulator[row_idx, col_idx] += distance
 
             row_bmus = pd.DataFrame(row_records, columns=["index", "step", "bmu_x", "bmu_y", "distance"])
+            perf_watch.mark("row_bmus_assignment", rows=len(row_bmus))
 
             if row_bmus.empty:
                 bmu_counts = pd.DataFrame(columns=["bmu_x", "bmu_y", "count"])
@@ -654,6 +728,7 @@ class SOMService:
                     .sort_values("count", ascending=False)
                     .reset_index(drop=True)
                 )
+            perf_watch.mark("bmu_counts", rows=len(bmu_counts))
 
             _emit_status("Calculating quantisation map…")
             with np.errstate(divide="ignore", invalid="ignore"):
@@ -669,6 +744,7 @@ class SOMService:
                 index=pd.RangeIndex(start=0, stop=height, step=1, name="x"),
                 columns=pd.RangeIndex(start=0, stop=width, step=1, name="y"),
             )
+            perf_watch.mark("quantization_map")
 
             _emit_status("Building activation response…")
             activation_counts = pd.DataFrame(
@@ -676,6 +752,7 @@ class SOMService:
                 index=pd.RangeIndex(start=0, stop=height, step=1, name="x"),
                 columns=pd.RangeIndex(start=0, stop=width, step=1, name="y"),
             )
+            perf_watch.mark("activation_response")
 
             _emit_status("Computing distance map…")
             distance_map_array = self._compute_umatrix(weights)
@@ -684,12 +761,14 @@ class SOMService:
                 index=pd.RangeIndex(start=0, stop=height, step=1, name="x"),
                 columns=pd.RangeIndex(start=0, stop=width, step=1, name="y"),
             )
+            perf_watch.mark("distance_map")
 
             _emit_status("Deriving correlations and errors…")
             correlations = data.corr().fillna(0.0)
 
             qe = float(som.quantization_error(data_array)) if len(data_array) else float("nan")
             topo = float(self._topographic_error(som, data_array))
+            perf_watch.mark("quality_metrics")
 
             _emit_progress(100)
 
@@ -709,7 +788,15 @@ class SOMService:
                 scaler=scaler,
                 som_object=som,
             )
+            perf_watch.total(
+                "train_done",
+                qe=qe,
+                topo=topo,
+                row_bmus=len(row_bmus),
+                features=len(norm_df.columns),
+            )
         except Exception:
+            perf_watch.total("train_failed")
             _emit_status("SOM ready (last run failed)")
             raise
         else:
@@ -728,7 +815,7 @@ class SOMService:
         method_params: Optional[Mapping[str, object]] = None,
     ) -> NeuronClusteringResult:
         """Cluster SOM neurons via the shared clustering service."""
-        inputs = self.clustering_inputs()
+        inputs = self.clustering_inputs(include_bmu_indices=True)
 
         return self._clustering.cluster_neurons(
             codebook=inputs.codebook,
@@ -758,7 +845,7 @@ class SOMService:
         Groups features by similarity of their component-plane patterns.
         If n_clusters is None, chooses K by 'scoring' over K in [2..k_list_max].
         """
-        clustering_state = self.clustering_inputs()
+        clustering_state = self.clustering_inputs(include_bmu_indices=False)
         codebook = clustering_state.codebook
         feature_names = clustering_state.feature_names
         return self._clustering.cluster_features(

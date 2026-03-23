@@ -2,6 +2,7 @@
 from __future__ import annotations
 import math
 import threading
+import time
 from functools import partial
 from typing import Callable, Optional, Sequence
 
@@ -32,6 +33,7 @@ from ...threading.runner import run_in_thread
 from ...threading.utils import run_in_main_thread
 from ...utils import set_status_text, set_progress, clear_progress, clear_status_text
 from ...utils.model_persistence import frame_to_records, normalize_for_json, records_to_frame
+from backend.services.logging.perf_debug import perf_debug_log, PerfDebugStopwatch
 
 
 class SomViewModel(QObject):
@@ -249,10 +251,10 @@ class SomViewModel(QObject):
     def last_dataframe(self) -> Optional[pd.DataFrame]:
         return None if self._last_dataframe is None else self._last_dataframe.copy()
 
-    def clustering_inputs(self) -> ClusteringInputs:
+    def clustering_inputs(self, *, include_bmu_indices: bool = True) -> ClusteringInputs:
         if self._result is None:
             raise RuntimeError("Train a SOM model before clustering")
-        return self._service.clustering_inputs()
+        return self._service.clustering_inputs(include_bmu_indices=include_bmu_indices)
 
     def available_clustering_methods(self) -> list[ClusteringMethodSpec]:
         return list(self._service.available_clustering_methods())
@@ -1075,6 +1077,11 @@ class SomViewModel(QObject):
         status_callback: Optional[callable] = None,
         data_frame: Optional[pd.DataFrame] = None,
     ) -> SomResult:
+        # @ai(gpt-5, codex, observability, 2026-03-23)
+        perf_watch = PerfDebugStopwatch(
+            "som.viewmodel.train_from_labels",
+            features=len(feature_labels or []),
+        )
         if not feature_labels:
             raise ValueError("Select at least one feature")
         if len(feature_labels) < 2:
@@ -1086,6 +1093,7 @@ class SomViewModel(QObject):
             feature_payloads = self._payloads_for_labels(feature_labels)
         if not feature_payloads:
             raise ValueError("Unable to resolve feature metadata for the selected features")
+        perf_watch.mark("payloads_resolved", payloads=len(feature_payloads))
 
         self._last_neuron_clusters = None
         self._last_feature_clusters = None
@@ -1108,16 +1116,23 @@ class SomViewModel(QObject):
         )
         if base_df is None or base_df.empty:
             raise ValueError("No measurements available for the selected features")
+        perf_watch.mark(
+            "base_dataframe_ready",
+            rows=len(base_df),
+            cols=len(base_df.columns),
+        )
 
         if months_set:
             tcol = pd.to_datetime(base_df["t"], errors="coerce")
             base_df = base_df[tcol.dt.month.isin(months_set)]
+            perf_watch.mark("months_filter_applied", months=len(months_set), rows=len(base_df))
 
         base_df["t"] = pd.to_datetime(base_df["t"], errors="coerce")
         base_df = base_df.dropna(subset=["t"])
         feature_cols = [c for c in base_df.columns if c != "t"]
         if not feature_cols:
             raise ValueError("No measurements available for the selected features")
+        perf_watch.mark("feature_columns_resolved", columns=len(feature_cols))
 
         numeric_df = base_df.set_index("t")[feature_cols].apply(pd.to_numeric, errors="coerce")
         nan_ratio = numeric_df.isna().mean(axis=0)
@@ -1134,6 +1149,7 @@ class SomViewModel(QObject):
 
             run_in_main_thread(_emit_sparse_warning, dropped_display)
             feature_cols = [name for name in feature_cols if name not in set(dropped_sparse_cols)]
+            perf_watch.mark("sparse_features_dropped", dropped=len(dropped_sparse_cols), remaining=len(feature_cols))
 
         dropped_static_cols: list[str] = []
         if feature_cols:
@@ -1150,6 +1166,7 @@ class SomViewModel(QObject):
 
                 run_in_main_thread(_emit_static_warning, dropped_display)
                 feature_cols = [name for name in feature_cols if name not in set(dropped_static_cols)]
+                perf_watch.mark("static_features_dropped", dropped=len(dropped_static_cols), remaining=len(feature_cols))
 
         if not feature_cols:
             raise ValueError("All selected features were dropped by training rules (>95% missing or static values).")
@@ -1175,6 +1192,11 @@ class SomViewModel(QObject):
 
         if combined.empty:
             raise ValueError("No rows remain after aligning the selected features")
+        perf_watch.mark(
+            "training_dataframe_ready",
+            rows=len(combined),
+            cols=len(combined.columns),
+        )
 
         auto_dim = max(2, math.ceil(math.sqrt(5 * math.sqrt(max(1, len(combined))))))
         width_hint, height_hint = map_shape
@@ -1192,6 +1214,11 @@ class SomViewModel(QObject):
             stop_event=stop_event,
             progress_callback=progress_callback,
             status_callback=status_callback,
+        )
+        perf_watch.mark(
+            "service_train_finished",
+            map_rows=result.map_shape[0] if result is not None else None,
+            map_cols=result.map_shape[1] if result is not None else None,
         )
         self._result = result
         self._last_dataframe = combined
@@ -1224,6 +1251,7 @@ class SomViewModel(QObject):
                 }
             ),
         }
+        perf_watch.total("train_from_labels_done")
         return result
 
     # ------------------------------------------------------------------
@@ -1315,6 +1343,15 @@ class SomViewModel(QObject):
         on_error=None,
         data_frame: Optional[pd.DataFrame] = None,
     ) -> None:
+        # @ai(gpt-5, codex, observability, 2026-03-23)
+        dispatch_started_at = time.perf_counter()
+        perf_debug_log(
+            "som.viewmodel.train_som",
+            "train_requested",
+            features=len(feature_labels or []),
+            rows=len(data_frame) if isinstance(data_frame, pd.DataFrame) else None,
+            cols=len(data_frame.columns) if isinstance(data_frame, pd.DataFrame) else None,
+        )
         if feature_payloads is not None:
             # Synchronize overlay selections with the features passed to training.
             self.set_selected_feature_payloads(feature_payloads)
@@ -1323,7 +1360,12 @@ class SomViewModel(QObject):
         self._training_running = True
 
         def _run(stop_event=None, progress_callback=None, status_callback=None):
+            worker_watch = PerfDebugStopwatch(
+                "som.viewmodel.train_som.worker",
+                features=len(feature_labels or []),
+            )
             self.training_started.emit()
+            worker_watch.mark("worker_started")
             try:
                 try:
                     result = self.train_from_labels(
@@ -1348,10 +1390,13 @@ class SomViewModel(QObject):
                         status_callback=status_callback,
                         data_frame=data_frame,
                     )
+                    worker_watch.mark("train_from_labels_returned")
                     return result
                 except ValueError as exc:
+                    worker_watch.mark("validation_error", error=exc)
                     return {"validation_error": str(exc)}
             finally:
+                worker_watch.total("worker_finished")
                 run_in_main_thread(partial(self._reset_status, preserve_text=True))
 
         def _on_finished(result: SomResult):
@@ -1360,6 +1405,13 @@ class SomViewModel(QObject):
                 return
             self._training_running = False
             self.status_changed.emit("SOM training finished.")
+            perf_debug_log(
+                "som.viewmodel.train_som",
+                "training_finished_signal_emitted",
+                elapsed_ms=(time.perf_counter() - dispatch_started_at) * 1000.0,
+                map_rows=getattr(result, "map_shape", [None, None])[0] if result is not None else None,
+                map_cols=getattr(result, "map_shape", [None, None])[1] if result is not None else None,
+            )
             self.training_finished.emit(result)
             if callable(on_finished):
                 on_finished(result)
@@ -1369,6 +1421,12 @@ class SomViewModel(QObject):
             text = str(message).strip() if message else "Unknown error"
             self.status_changed.emit(f"SOM training failed: {text}")
             clear_progress()
+            perf_debug_log(
+                "som.viewmodel.train_som",
+                "training_failed",
+                elapsed_ms=(time.perf_counter() - dispatch_started_at) * 1000.0,
+                error=text,
+            )
             self.error_occurred.emit(message)
             if callable(on_error):
                 on_error(message)

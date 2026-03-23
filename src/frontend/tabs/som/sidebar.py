@@ -9,6 +9,7 @@ the view models, not direct signals between widgets.
 
 
 from typing import Optional, TYPE_CHECKING
+import time
 
 from PySide6.QtCore import Qt, Signal
 
@@ -42,6 +43,7 @@ from ...models.hybrid_pandas_model import HybridPandasModel
 from .clustering_viewmodel import ClusteringRequest, ClusteringViewModel
 from ...utils import set_status_text, toast_error, toast_info, toast_warn
 from ...viewmodels.help_viewmodel import HelpViewModel, get_help_viewmodel
+from backend.services.logging.perf_debug import perf_debug_log
 
 if TYPE_CHECKING:
     from .viewmodel import SomViewModel
@@ -468,6 +470,7 @@ class SomSidebar(SidebarWidget):
 
     # ---- Button click handlers
     def _on_train_clicked(self) -> None:
+        # @ai(gpt-5, codex, observability, 2026-03-23)
         """Handle Train SOM button click."""
         if not self._view_model:
             return
@@ -497,23 +500,50 @@ class SomSidebar(SidebarWidget):
         self.train_button.setEnabled(False)
         set_status_text(tr("Fetching SOM data..."))
         self._log(tr("Fetching SOM data..."), level=logging.INFO)
+        fetch_started_at = time.perf_counter()
 
         feature_names = [
             name for payload in selected_payloads if (name := self._feature_display_name(payload))
         ]
         filters_widget = self.data_selector.filters_widget
+        perf_debug_log(
+            "som.sidebar.train",
+            "fetch_data_started",
+            features=len(feature_names),
+            map_width=map_width if map_width is not None else "auto",
+            map_height=map_height if map_height is not None else "auto",
+            epochs=epochs if epochs is not None else "auto",
+        )
 
         def _on_fetch_result(frame_token: str) -> None:
             data_frame = self.data_selector.resolve_dataframe_token(frame_token, consume=True)
+            fetch_elapsed_ms = (time.perf_counter() - fetch_started_at) * 1000.0
             if data_frame is None or getattr(data_frame, "empty", True):
+                perf_debug_log(
+                    "som.sidebar.train",
+                    "fetch_data_empty",
+                    elapsed_ms=fetch_elapsed_ms,
+                    frame_token=frame_token,
+                )
                 self.train_button.setEnabled(True)
                 set_status_text(tr("SOM data unavailable."))
                 self._log(tr("No measurements available for the selected features."), level=logging.INFO)
                 return
 
+            rows = int(len(data_frame))
+            cols = int(len(getattr(data_frame, "columns", [])))
+            perf_debug_log(
+                "som.sidebar.train",
+                "fetch_data_finished",
+                elapsed_ms=fetch_elapsed_ms,
+                frame_token=frame_token,
+                rows=rows,
+                cols=cols,
+            )
             set_status_text(tr("SOM data fetched."))
             self._log(tr("Data fetched. Training SOM..."), level=logging.INFO)
             try:
+                train_dispatch_start = time.perf_counter()
                 self._view_model.train_som(
                     feature_names,
                     feature_payloads=selected_payloads,
@@ -540,13 +570,32 @@ class SomSidebar(SidebarWidget):
                     training_mode=self.training_mode_combo.currentData(),
                     data_frame=data_frame,
                 )
+                perf_debug_log(
+                    "som.sidebar.train",
+                    "train_dispatch_finished",
+                    elapsed_ms=(time.perf_counter() - train_dispatch_start) * 1000.0,
+                    rows=rows,
+                    cols=cols,
+                    features=len(feature_names),
+                )
             except Exception as e:
+                perf_debug_log(
+                    "som.sidebar.train",
+                    "train_dispatch_failed",
+                    error=e,
+                )
                 self.train_button.setEnabled(True)
                 self._log(tr("Failed to start training: {error}").format(error=e), level=logging.ERROR)
 
         def _on_fetch_error(message: str) -> None:
             self.train_button.setEnabled(True)
             text = str(message or tr("Failed to load SOM data."))
+            perf_debug_log(
+                "som.sidebar.train",
+                "fetch_data_failed",
+                elapsed_ms=(time.perf_counter() - fetch_started_at) * 1000.0,
+                error=text,
+            )
             set_status_text(tr("SOM data fetch failed: {error}").format(error=text))
             self._log(text, level=logging.ERROR)
 
@@ -559,6 +608,11 @@ class SomSidebar(SidebarWidget):
         )
         if started:
             return
+        perf_debug_log(
+            "som.sidebar.train",
+            "fetch_data_not_started",
+            elapsed_ms=(time.perf_counter() - fetch_started_at) * 1000.0,
+        )
         self.train_button.setEnabled(True)
         set_status_text(tr("Failed to start SOM data fetch."))
         self._log(tr("Failed to start SOM data fetch."), level=logging.ERROR)

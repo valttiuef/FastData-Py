@@ -2,10 +2,7 @@
 from __future__ import annotations
 from dataclasses import asdict
 from pathlib import Path
-from datetime import datetime
-import os
 import logging
-import threading
 import time
 from typing import Optional
 
@@ -36,50 +33,11 @@ from .sidebar import Sidebar
 from .viewmodel import DataViewModel
 
 from backend.models import ImportOptions
-from backend.services.logging.storage import append_text_log, performance_debug_log_path
+from backend.services.logging.perf_debug import perf_debug_log
 from ..tab_widget import TabWidget
 
-_PERF_DEBUG_EVENT_LOCK = threading.RLock()
-_PERF_DEBUG_EVENT_COUNTER = 0
-
-
-def _perf_debug_enabled() -> bool:
-    raw = str(os.getenv("FASTDATA_PERF_DEBUG", "")).strip().lower()
-    return raw in {"1", "true", "yes", "on", "y"}
-
-
-def _next_perf_debug_event_id() -> int:
-    global _PERF_DEBUG_EVENT_COUNTER
-    with _PERF_DEBUG_EVENT_LOCK:
-        _PERF_DEBUG_EVENT_COUNTER += 1
-        return int(_PERF_DEBUG_EVENT_COUNTER)
-
-
 def _perf_debug_log(scope: str, step: str, *, elapsed_ms: float | None = None, **fields: object) -> None:
-    if not _perf_debug_enabled():
-        return
-    event_id = _next_perf_debug_event_id()
-    parts = [
-        f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}",
-        f"ui_id={event_id}",
-        f"scope={scope}",
-        f"step={step}",
-    ]
-    if elapsed_ms is not None:
-        parts.append(f"ms={float(elapsed_ms):.2f}")
-    for key, value in fields.items():
-        if value is None:
-            continue
-        text = str(value).replace("\n", " ").strip()
-        if not text:
-            continue
-        if len(text) > 200:
-            text = f"{text[:197]}..."
-        parts.append(f"{key}={text}")
-    try:
-        append_text_log(performance_debug_log_path(), " | ".join(parts))
-    except Exception:
-        logger.warning("Failed to write UI performance debug line.", exc_info=True)
+    perf_debug_log(scope, step, elapsed_ms=elapsed_ms, event_key="ui_id", **fields)
 
 
 # @ai(gpt-5, codex, fix, 2026-03-10)

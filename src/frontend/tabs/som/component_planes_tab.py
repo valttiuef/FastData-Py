@@ -112,7 +112,6 @@ class ComponentPlanesTab(QWidget):
 
         if view_model is not None:
             view_model.training_started.connect(self.clear)
-            view_model.training_finished.connect(self.set_result)
             view_model.cluster_names_changed.connect(self._on_cluster_names_changed)
 
         # Connect cluster rename signals from all plane views

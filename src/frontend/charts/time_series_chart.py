@@ -170,7 +170,7 @@ class TimeSeriesChart(QFrame):
         self._hover_group_ms: list[int] = []
         self._group_box_items: list[QGraphicsRectItem] = []
         self._group_box_text_items: list[QGraphicsSimpleTextItem] = []
-        self._group_timeline_max_runs: int = 12_000
+        self._group_timeline_max_runs: int = 250_000
         self._group_timeline_min_box_width_px: float = 2.0
         self._group_timeline_min_box_height_px: float = 1.5
         self._axis_lock_hint_bg_item: QGraphicsRectItem | None = None
@@ -919,11 +919,6 @@ class TimeSeriesChart(QFrame):
                 run_start_ms = start_ms
                 run_end_ms = end_ms
             runs.append(_Run(current_group, run_start_ms, run_end_ms))
-
-            max_runs = int(max(100, self._group_timeline_max_runs))
-            if len(runs) > max_runs:
-                stride = int(np.ceil(len(runs) / max_runs))
-                runs = runs[::max(1, stride)]
 
             self._series_segments = {}
             self._series_colors = {}
@@ -1730,6 +1725,61 @@ class TimeSeriesChart(QFrame):
         self._group_box_items = []
         self._group_box_text_items = []
 
+    def _collapse_group_specs_to_visible_pixels(
+        self,
+        specs: list[tuple[float, float, float, float, str, str]],
+        *,
+        visible_start: float,
+        visible_end: float,
+        plot_width: float,
+    ) -> list[tuple[float, float, float, float, str, str]]:
+        if not specs:
+            return []
+        span_ms = float(visible_end - visible_start)
+        if span_ms <= 0.0:
+            return []
+        width_px = max(1, int(np.ceil(float(plot_width))))
+
+        lanes: dict[tuple[str, float, float, str], list[tuple[float, float, int, int]]] = {}
+        for start, end, y0, y1, label, key in specs:
+            clamped_start = max(float(start), float(visible_start))
+            clamped_end = min(float(end), float(visible_end))
+            if clamped_end <= clamped_start:
+                continue
+            left_px = int(np.floor(((clamped_start - visible_start) / span_ms) * width_px))
+            right_px = int(np.ceil(((clamped_end - visible_start) / span_ms) * width_px))
+            if right_px <= left_px:
+                right_px = left_px + 1
+            lane_key = (str(key), float(y0), float(y1), str(label))
+            lanes.setdefault(lane_key, []).append((clamped_start, clamped_end, left_px, right_px))
+
+        collapsed: list[tuple[float, float, float, float, str, str]] = []
+        for lane_key, entries in lanes.items():
+            key, y0, y1, label = lane_key
+            entries.sort(key=lambda item: (item[2], item[0]))
+            current_start: float | None = None
+            current_end: float | None = None
+            current_right_px: int | None = None
+            for start, end, left_px, right_px in entries:
+                if current_start is None:
+                    current_start = float(start)
+                    current_end = float(end)
+                    current_right_px = int(right_px)
+                    continue
+                if left_px <= int(current_right_px or 0) + 1:
+                    current_end = max(float(current_end), float(end))
+                    current_right_px = max(int(current_right_px), int(right_px))
+                    continue
+                collapsed.append((float(current_start), float(current_end), float(y0), float(y1), str(label), str(key)))
+                current_start = float(start)
+                current_end = float(end)
+                current_right_px = int(right_px)
+            if current_start is not None and current_end is not None:
+                collapsed.append((float(current_start), float(current_end), float(y0), float(y1), str(label), str(key)))
+
+        collapsed.sort(key=lambda spec: (spec[0], spec[2], spec[5]))
+        return collapsed
+
     def _visible_group_box_cap(
         self,
         *,
@@ -1737,6 +1787,7 @@ class TimeSeriesChart(QFrame):
         plot_height: float,
         lane_count: int,
     ) -> int:
+        """Compatibility helper retained for tests/debug introspection."""
         try:
             width = float(plot_width)
         except Exception:
@@ -1752,10 +1803,6 @@ class TimeSeriesChart(QFrame):
 
         min_width = max(2.0, float(self._group_timeline_min_box_width_px))
         min_height = max(2.0, float(self._group_timeline_min_box_height_px))
-
-        # Display-aware cap:
-        # - horizontally, each distinguishable box needs minimum width
-        # - vertically, only lanes with sufficient pixel height can be distinguished
         horizontal_slots = max(1, int(np.floor(width / min_width)))
         visible_lane_capacity = max(1, int(np.floor(height / min_height)))
         effective_lanes = max(1, min(lanes, visible_lane_capacity))
@@ -1786,15 +1833,12 @@ class TimeSeriesChart(QFrame):
         visible_specs = [
             spec for spec in self._group_box_specs if not (spec[1] < visible_start or spec[0] > visible_end)
         ]
-        visible_lane_count = len({str(spec[5]) for spec in visible_specs}) or 1
-        max_visible_boxes = self._visible_group_box_cap(
+        visible_specs = self._collapse_group_specs_to_visible_pixels(
+            visible_specs,
+            visible_start=visible_start,
+            visible_end=visible_end,
             plot_width=float(plot_area.width()),
-            plot_height=float(plot_area.height()),
-            lane_count=visible_lane_count,
         )
-        if len(visible_specs) > max_visible_boxes:
-            stride = int(np.ceil(len(visible_specs) / max_visible_boxes))
-            visible_specs = visible_specs[::max(1, stride)]
 
         font = QFont()
         font.setPointSize(8)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 # @ai(gpt-5, codex, refactor, 2026-02-26)
 from pathlib import Path
+import time
 from typing import Optional, Any, List, Tuple, Iterable, Callable
 
 import numpy as np
@@ -42,6 +43,7 @@ from ...threading import run_in_main_thread, run_in_thread
 from ...style.group_colors import group_color_for_label
 from ...viewmodels.help_viewmodel import get_help_viewmodel
 from ...viewmodels.log_view_model import get_log_view_model
+from backend.services.logging.perf_debug import perf_debug_log, PerfDebugStopwatch
 
 # Tabs
 from .component_planes_tab import ComponentPlanesTab
@@ -672,7 +674,14 @@ class SomTab(TabWidget):
 
     # ------------------------------------------------------------------
     def _on_training_started(self) -> None:
+        # @ai(gpt-5, codex, observability, 2026-03-23)
         show_overlay = self._view_model.timeline_overlay_enabled()
+        perf_debug_log(
+            "som.tab.training",
+            "training_started_ui",
+            selected_features=len(self._selected_feature_payloads()),
+            show_overlay=show_overlay,
+        )
         if self.sidebar is not None:
             self.sidebar.train_button.setEnabled(False)
         try:
@@ -697,9 +706,20 @@ class SomTab(TabWidget):
                 self.timeline_display_combo.blockSignals(block)
         self._view_model.set_timeline_display_options(selected=selected)
         self.timeline_chart.clear()
+        if isinstance(self.component_planes, ComponentPlanesTab):
+            try:
+                self.component_planes.clear()
+            except Exception:
+                logger.warning("Exception in _on_training_started", exc_info=True)
         self._update_timeline_cluster_save_state()
 
     def _on_training_finished(self, result) -> None:
+        # @ai(gpt-5, codex, observability, 2026-03-23)
+        perf_debug_log(
+            "som.tab.training",
+            "training_finished_signal_received",
+            map_shape=getattr(result, "map_shape", None),
+        )
         if self.sidebar is not None:
             self.sidebar.train_button.setEnabled(True)
         self._result = result
@@ -775,8 +795,15 @@ class SomTab(TabWidget):
     # ------------------------------------------------------------------
     # @ai(gpt-5, codex, refactor, 2026-03-23)
     def _start_result_render(self, result) -> None:
+        # @ai(gpt-5, codex, observability, 2026-03-23)
         self._render_request_id += 1
         request_id = int(self._render_request_id)
+        render_started_at = time.perf_counter()
+        perf_debug_log(
+            "som.tab.render",
+            "render_requested",
+            request_id=request_id,
+        )
 
         selected_payloads: list[dict] = []
         for payload in self._selected_feature_payloads():
@@ -793,6 +820,7 @@ class SomTab(TabWidget):
         neuron_clusters = self._neuron_clusters
 
         def _work(stop_event=None) -> dict[str, Any]:
+            work_watch = PerfDebugStopwatch("som.tab.render.worker", request_id=request_id)
             payload = self._prepare_result_render_payload(
                 result=result,
                 feature_clusters=feature_clusters,
@@ -801,6 +829,13 @@ class SomTab(TabWidget):
                 feature_display_map=feature_display_map,
                 cluster_names=cluster_names,
                 value_df=value_df,
+            )
+            timeline_row_df = payload.get("timeline_row_df")
+            feature_table_df = payload.get("feature_table_df")
+            work_watch.total(
+                "payload_prepared",
+                rows=len(timeline_row_df) if isinstance(timeline_row_df, pd.DataFrame) else None,
+                feature_rows=len(feature_table_df) if isinstance(feature_table_df, pd.DataFrame) else None,
             )
             payload["request_id"] = request_id
             return payload
@@ -811,35 +846,73 @@ class SomTab(TabWidget):
             timeline_row_df: Optional[pd.DataFrame] = None,
             timeline_display_df: Optional[pd.DataFrame] = None,
         ) -> None:
+            finalize_watch = PerfDebugStopwatch("som.tab.render.finalize", request_id=request_id)
             self._render_result(
                 feature_table_df=feature_table_df,
                 timeline_row_df=timeline_row_df,
                 timeline_display_df=timeline_display_df,
             )
+            finalize_watch.mark(
+                "render_result_applied",
+                feature_rows=len(feature_table_df) if isinstance(feature_table_df, pd.DataFrame) else None,
+                timeline_rows=len(timeline_row_df) if isinstance(timeline_row_df, pd.DataFrame) else None,
+            )
             self._update_timeline_cluster_save_state()
+            finalize_watch.mark("timeline_cluster_save_state_updated")
             self._run_auto_clustering_after_training()
+            finalize_watch.mark("auto_clustering_triggered")
             try:
                 toast_success(tr("SOM training finished."), title=tr("SOM"), tab_key="som")
             except Exception:
                 logger.warning("Exception in _start_result_render", exc_info=True)
+            finalize_watch.total("finalize_done")
 
         def _on_ready(payload: dict[str, Any]) -> None:
             if not isinstance(payload, dict):
                 return
             if int(payload.get("request_id", -1)) != self._render_request_id:
+                perf_debug_log(
+                    "som.tab.render",
+                    "render_result_stale_request",
+                    request_id=request_id,
+                )
                 return
             if self._result is not result:
+                perf_debug_log(
+                    "som.tab.render",
+                    "render_result_stale_result",
+                    request_id=request_id,
+                )
                 return
+            perf_debug_log(
+                "som.tab.render",
+                "render_result_ready",
+                elapsed_ms=(time.perf_counter() - render_started_at) * 1000.0,
+                request_id=request_id,
+            )
             _finalize_success(
                 feature_table_df=payload.get("feature_table_df"),
                 timeline_row_df=payload.get("timeline_row_df"),
                 timeline_display_df=payload.get("timeline_display_df"),
+            )
+            perf_debug_log(
+                "som.tab.render",
+                "render_done",
+                elapsed_ms=(time.perf_counter() - render_started_at) * 1000.0,
+                request_id=request_id,
             )
 
         def _on_error(message: str) -> None:
             if request_id != self._render_request_id:
                 return
             logger.warning("Exception in _start_result_render: %s", message or "Unknown error")
+            perf_debug_log(
+                "som.tab.render",
+                "render_error",
+                elapsed_ms=(time.perf_counter() - render_started_at) * 1000.0,
+                request_id=request_id,
+                error=message or "Unknown error",
+            )
             _finalize_success()
 
         run_in_thread(
@@ -1040,10 +1113,13 @@ class SomTab(TabWidget):
         timeline_row_df: Optional[pd.DataFrame] = None,
         timeline_display_df: Optional[pd.DataFrame] = None,
     ) -> None:
+        # @ai(gpt-5, codex, observability, 2026-03-23)
+        render_watch = PerfDebugStopwatch("som.tab.render_result")
         if not self._result:
             # ensure component-planes UI clears too
             if isinstance(self.component_planes, ComponentPlanesTab):
                 self.component_planes.clear()
+            render_watch.total("render_result_cleared")
             return
 
         res = self._result
@@ -1054,16 +1130,22 @@ class SomTab(TabWidget):
                 "Grid {rows}×{cols} · Quantisation error {qe:.4f} · Topographic error {te:.4f}"
             ).format(rows=res.map_shape[0], cols=res.map_shape[1], qe=qe, te=te)
         )
+        render_watch.mark("metrics_label_updated")
 
         # Delegate planes + aux map rendering
         if isinstance(self.component_planes, ComponentPlanesTab):
             self.component_planes.set_result(res)
+        render_watch.mark("component_planes_updated")
 
         # --- The rest of the tabs rely on tables/charts owned by SomTab ----
         self._update_feature_table(feature_table_df)
+        render_watch.mark("feature_table_updated")
         self._update_timeline_views(row_df=timeline_row_df, display_df=timeline_display_df)
+        render_watch.mark("timeline_views_updated")
         self._sync_cluster_controls()
+        render_watch.mark("cluster_controls_synced")
         self._update_timeline_cluster_map()
+        render_watch.total("render_result_done")
 
     def _feature_table_export_dataframe(self) -> pd.DataFrame:
         base = self._build_feature_table_dataframe()
@@ -1344,6 +1426,12 @@ class SomTab(TabWidget):
 
     # -------------------------- generic tables/heatmaps (unchanged) -------
     def _on_neuron_clusters_updated(self, clusters) -> None:
+        perf_debug_log(
+            "som.tab.cluster.neurons",
+            "clusters_updated_signal",
+            has_clusters=clusters is not None,
+            k=getattr(clusters, "k", None),
+        )
         self._neuron_clusters = clusters
         # Update the view model's internal state so get_unique_cluster_ids() works
         self._view_model._last_neuron_clusters = clusters
@@ -1388,6 +1476,12 @@ class SomTab(TabWidget):
 
     def _on_feature_clusters_updated(self, clusters) -> None:
         """Called when feature clustering completes."""
+        perf_debug_log(
+            "som.tab.cluster.features",
+            "clusters_updated_signal",
+            has_clusters=clusters is not None,
+            k=getattr(clusters, "k", None),
+        )
         self._apply_feature_clusters_state(clusters, announce=True)
 
     def _feature_positions_dataframe(self) -> pd.DataFrame:
@@ -1417,6 +1511,12 @@ class SomTab(TabWidget):
         self._feature_clusters = clusters
         # Keep the SOM view model in sync so saved maps persist feature clusters.
         self._view_model._last_feature_clusters = clusters
+        perf_debug_log(
+            "som.tab.cluster.features",
+            "apply_cluster_state",
+            announce=announce,
+            has_clusters=clusters is not None,
+        )
         self._start_feature_cluster_refresh(announce=announce and clusters is not None)
 
     # @ai(gpt-5, codex, performance-fix, 2026-03-23)
@@ -1426,11 +1526,23 @@ class SomTab(TabWidget):
         announce: bool,
         update_chart: bool,
     ) -> None:
+        refresh_started_at = time.perf_counter()
+        perf_debug_log(
+            "som.tab.cluster.neurons",
+            "refresh_requested",
+            announce=announce,
+            update_chart=update_chart,
+        )
         result = self._result
         if result is None:
             self._update_timeline_views(update_chart=update_chart)
             self._sync_cluster_controls()
             self._update_timeline_cluster_save_state()
+            perf_debug_log(
+                "som.tab.cluster.neurons",
+                "refresh_skipped_no_result",
+                elapsed_ms=(time.perf_counter() - refresh_started_at) * 1000.0,
+            )
             return
 
         self._neuron_refresh_request_id += 1
@@ -1451,6 +1563,10 @@ class SomTab(TabWidget):
         neuron_clusters = self._neuron_clusters
 
         def _work(stop_event=None) -> dict[str, Any]:
+            work_watch = PerfDebugStopwatch(
+                "som.tab.cluster.neurons.refresh.worker",
+                request_id=request_id,
+            )
             payload = self._prepare_result_render_payload(
                 result=result,
                 feature_clusters=feature_clusters,
@@ -1459,6 +1575,11 @@ class SomTab(TabWidget):
                 feature_display_map=feature_display_map,
                 cluster_names=cluster_names,
                 value_df=value_df,
+            )
+            timeline_row_df = payload.get("timeline_row_df")
+            work_watch.total(
+                "payload_ready",
+                rows=len(timeline_row_df) if isinstance(timeline_row_df, pd.DataFrame) else None,
             )
             return {
                 "request_id": request_id,
@@ -1473,14 +1594,21 @@ class SomTab(TabWidget):
                 return
             if self._result is not result:
                 return
+            ui_watch = PerfDebugStopwatch(
+                "som.tab.cluster.neurons.refresh.ui",
+                request_id=request_id,
+            )
 
             self._update_timeline_views(
                 row_df=payload.get("timeline_row_df"),
                 display_df=payload.get("timeline_display_df"),
                 update_chart=update_chart,
             )
+            ui_watch.mark("timeline_views_updated")
             self._sync_cluster_controls()
+            ui_watch.mark("cluster_controls_synced")
             self._update_timeline_cluster_save_state()
+            ui_watch.mark("cluster_save_state_updated")
             if announce and self._neuron_clusters is not None:
                 try:
                     toast_success(
@@ -1491,6 +1619,13 @@ class SomTab(TabWidget):
                     )
                 except Exception:
                     logger.warning("Exception in _start_neuron_cluster_refresh", exc_info=True)
+            ui_watch.total("refresh_ui_done")
+            perf_debug_log(
+                "som.tab.cluster.neurons",
+                "refresh_done",
+                elapsed_ms=(time.perf_counter() - refresh_started_at) * 1000.0,
+                request_id=request_id,
+            )
 
         def _on_error(message: str) -> None:
             if request_id != self._neuron_refresh_request_id:
@@ -1509,6 +1644,13 @@ class SomTab(TabWidget):
                     )
                 except Exception:
                     logger.warning("Exception in _start_neuron_cluster_refresh", exc_info=True)
+            perf_debug_log(
+                "som.tab.cluster.neurons",
+                "refresh_failed",
+                elapsed_ms=(time.perf_counter() - refresh_started_at) * 1000.0,
+                request_id=request_id,
+                error=message or "Unknown error",
+            )
 
         run_in_thread(
             _work,
@@ -1521,10 +1663,21 @@ class SomTab(TabWidget):
 
     # @ai(gpt-5, codex, performance-fix, 2026-03-23)
     def _start_feature_cluster_refresh(self, *, announce: bool) -> None:
+        refresh_started_at = time.perf_counter()
+        perf_debug_log(
+            "som.tab.cluster.features",
+            "refresh_requested",
+            announce=announce,
+        )
         result = self._result
         if result is None:
             self._update_feature_table()
             self._sync_cluster_controls()
+            perf_debug_log(
+                "som.tab.cluster.features",
+                "refresh_skipped_no_result",
+                elapsed_ms=(time.perf_counter() - refresh_started_at) * 1000.0,
+            )
             return
 
         self._feature_refresh_request_id += 1
@@ -1545,6 +1698,10 @@ class SomTab(TabWidget):
         neuron_clusters = self._neuron_clusters
 
         def _work(stop_event=None) -> dict[str, Any]:
+            work_watch = PerfDebugStopwatch(
+                "som.tab.cluster.features.refresh.worker",
+                request_id=request_id,
+            )
             payload = self._prepare_result_render_payload(
                 result=result,
                 feature_clusters=feature_clusters,
@@ -1553,6 +1710,11 @@ class SomTab(TabWidget):
                 feature_display_map=feature_display_map,
                 cluster_names=cluster_names,
                 value_df=value_df,
+            )
+            feature_table_df = payload.get("feature_table_df")
+            work_watch.total(
+                "payload_ready",
+                rows=len(feature_table_df) if isinstance(feature_table_df, pd.DataFrame) else None,
             )
             return {
                 "request_id": request_id,
@@ -1566,8 +1728,14 @@ class SomTab(TabWidget):
                 return
             if self._result is not result:
                 return
+            ui_watch = PerfDebugStopwatch(
+                "som.tab.cluster.features.refresh.ui",
+                request_id=request_id,
+            )
             self._update_feature_table(df=payload.get("feature_table_df"))
+            ui_watch.mark("feature_table_updated")
             self._sync_cluster_controls()
+            ui_watch.mark("cluster_controls_synced")
             if announce and self._feature_clusters is not None:
                 try:
                     toast_success(
@@ -1578,6 +1746,13 @@ class SomTab(TabWidget):
                     )
                 except Exception:
                     logger.warning("Exception in _start_feature_cluster_refresh", exc_info=True)
+            ui_watch.total("refresh_ui_done")
+            perf_debug_log(
+                "som.tab.cluster.features",
+                "refresh_done",
+                elapsed_ms=(time.perf_counter() - refresh_started_at) * 1000.0,
+                request_id=request_id,
+            )
 
         def _on_error(message: str) -> None:
             if request_id != self._feature_refresh_request_id:
@@ -1595,6 +1770,13 @@ class SomTab(TabWidget):
                     )
                 except Exception:
                     logger.warning("Exception in _start_feature_cluster_refresh", exc_info=True)
+            perf_debug_log(
+                "som.tab.cluster.features",
+                "refresh_failed",
+                elapsed_ms=(time.perf_counter() - refresh_started_at) * 1000.0,
+                request_id=request_id,
+                error=message or "Unknown error",
+            )
 
         run_in_thread(
             _work,
@@ -2108,10 +2290,12 @@ class SomTab(TabWidget):
         display_df: Optional[pd.DataFrame] = None,
         update_chart: bool = True,
     ) -> None:
+        timeline_watch = PerfDebugStopwatch("som.tab.timeline_views", update_chart=update_chart)
         if row_df is None:
             row_df = self._timeline_dataframe()
         splitter = getattr(self, "timeline_rows_splitter", None)
         splitter_sizes = splitter.sizes() if splitter is not None else []
+        timeline_watch.mark("row_dataframe_resolved", rows=len(row_df) if isinstance(row_df, pd.DataFrame) else None)
         if row_df.empty:
             self._timeline_display_df = self._empty_timeline_table_dataframe()
             self._view_model.set_timeline_table_dataframe(self._timeline_display_df)
@@ -2126,6 +2310,7 @@ class SomTab(TabWidget):
                     splitter.setSizes(splitter_sizes)
                 except Exception:
                     logger.warning("Exception in _update_timeline_views", exc_info=True)
+            timeline_watch.total("timeline_views_cleared")
             return
 
         if display_df is None:
@@ -2134,16 +2319,21 @@ class SomTab(TabWidget):
             display_df = display_df.copy()
         self._timeline_display_df = display_df
         self._view_model.set_timeline_table_dataframe(self._timeline_display_df)
+        timeline_watch.mark("timeline_table_updated", rows=len(self._timeline_display_df))
 
         if update_chart:
             self._update_timeline_chart(row_df)
+            timeline_watch.mark("timeline_chart_updated")
         self._update_timeline_cluster_map()
+        timeline_watch.mark("timeline_cluster_map_updated")
         self._update_timeline_row_highlight(self._timeline_selected_cells())
+        timeline_watch.mark("timeline_row_highlight_updated")
         if splitter is not None and splitter_sizes:
             try:
                 splitter.setSizes(splitter_sizes)
             except Exception:
                 logger.warning("Exception in _update_timeline_views", exc_info=True)
+        timeline_watch.total("timeline_views_done")
 
     def _timeline_timeseries(self, timeline_df: pd.DataFrame) -> pd.Series:
         if "index" in timeline_df.columns:
