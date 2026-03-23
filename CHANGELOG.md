@@ -6,18 +6,29 @@ The format is based on Keep a Changelog, with entries grouped by release.
 
 ## [0.2.2] - 2026-03-23
 
+### Added
+- Monthly grouped bar charts now support hover and click interactions, making it easier to inspect and select grouped values directly.
+
 ### Changed
-- SOM results now render in the background after training, so the app stays responsive instead of freezing during heavy post-processing.
+- Chart zooming and panning now keep legends more stable and reduce visible flicker during navigation.
+- Time-series gaps are rendered more naturally when changing zoom levels.
+- Timeline section titles now use consistent spacing in the SOM timeline view.
+- Regression feature selections now use cleaner labels (internal notes are no longer shown in the selector text).
 - Feature and neuron cluster refreshes are now cancellable and superseded by newer actions, which keeps timeline/feature views aligned with your latest selection.
-- Timeline table refresh now preserves your current row selection highlight more reliably while updating related views.
 
 ### Fixed
+- Cluster timeline rendering now respects pixel-to-time ratios better, so short/dense cluster ranges stay visible instead of disappearing.
+- Monthly chart group ordering now matches ordering used in other grouped chart views.
+- Monthly chart signaling warnings were removed.
 - Feature list selection is now preserved more reliably during refreshes, especially when data content has not actually changed.
 - Restoring large feature selections no longer triggers a noisy burst of selection-change signals.
-- SOM clustering status updates now avoid redundant status channel writes, reducing duplicate/stale status behavior.
+- Startup and window-state recovery now handle in-use database files more safely: the app informs you and still builds the UI cleanly.
 
 ### Performance
-- Faster SOM post-processing for larger datasets by preparing feature/timeline tables off the UI thread.
+- Data fetching and drawing in the Data tab are faster, especially during large-table browsing and repeated viewport updates.
+- Zoom/pan chart updates reduce duplicate fetch/render work, improving responsiveness in interactive chart workflows.
+- SOM neuron clustering/training paths were optimized to reduce UI jamming on heavier runs.
+- SOM post-processing is faster for large datasets by preparing feature/timeline tables off the UI thread.
 - Group timeline overlays now use display-aware box limits, improving chart responsiveness and avoiding unreadable overdraw.
 - Feature summary statistics are computed with a more efficient vectorized path for large feature sets.
 - Feature table refresh avoids unnecessary re-sort/reselect work when incoming data is unchanged.
