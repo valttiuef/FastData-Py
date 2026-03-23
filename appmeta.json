@@ -3,7 +3,7 @@
   "product_name": "FastData",
   "company_name": "Valtteri Tiitta",
   "description": "Process data analysis and modeling tool",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "build": "",
   "icon_windows": "resources/icons/fastdata_icon.ico",
   "icon_linux": null,
