@@ -317,3 +317,64 @@ def test_fast_proxy_maps_source_rows_after_sort_and_filter():
     assert bravo_proxy.isValid()
     assert bravo_proxy.row() == 0
     assert not alpha_hidden.isValid()
+
+
+def test_restore_selection_blocks_signal_storm_for_large_restore(qapp):
+    widget = FeaturesListWidget()
+    rows = 1_000
+    widget._apply_dataframe(
+        pd.DataFrame(
+            {
+                "feature_id": list(range(1, rows + 1)),
+                "name": [f"Feature {i}" for i in range(1, rows + 1)],
+                "source": ["sensor"] * rows,
+                "unit": ["u"] * rows,
+                "type": ["numeric"] * rows,
+                "lag_seconds": [0] * rows,
+                "tags": [""] * rows,
+                "notes": [""] * rows,
+            }
+        )
+    )
+    _process_events(qapp)
+
+    selection = widget.table_view.selectionModel()
+    changes = {"count": 0}
+    selection.selectionChanged.connect(lambda *_args: changes.__setitem__("count", changes["count"] + 1))
+
+    restored = widget._restore_selection(set(range(1, rows + 1)))
+    _process_events(qapp)
+
+    assert restored is True
+    assert changes["count"] == 0
+    assert len(widget.selected_payloads()) == rows
+
+
+def test_apply_dataframe_skips_restore_when_frame_unchanged(qapp):
+    widget = FeaturesListWidget()
+    frame = _sample_features_df()
+    widget._apply_dataframe(frame)
+    _process_events(qapp)
+
+    selection = widget.table_view.selectionModel()
+    index = widget.table_view.model().index(1, 0)
+    selection.select(
+        index,
+        QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows,
+    )
+    widget._emit_selection_changed()
+    _process_events(qapp)
+    assert set(widget.selected_feature_ids()) == {2}
+
+    calls = {"count": 0}
+
+    def _count_restore(feature_ids):
+        calls["count"] += 1
+        return True
+
+    widget._restore_selection = _count_restore  # type: ignore[method-assign]
+    widget._apply_dataframe(frame.copy())
+    _process_events(qapp)
+
+    assert calls["count"] == 0
+    assert set(widget.selected_feature_ids()) == {2}

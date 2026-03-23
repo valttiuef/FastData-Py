@@ -92,6 +92,9 @@ class SomTab(TabWidget):
         self._timeline_overlay_cache_cols: list[str] = []
         self._timeline_overlay_signature: tuple | None = None
         self._timeline_overlay_fetch_signature: tuple | None = None
+        self._render_request_id: int = 0
+        self._neuron_refresh_request_id: int = 0
+        self._feature_refresh_request_id: int = 0
 
         # Attributes populated by tab builders (_create_content_widget).
         # Declaring them here keeps static analysis aligned with runtime wiring.
@@ -707,13 +710,8 @@ class SomTab(TabWidget):
             except Exception:
                 logger.warning("Exception in _on_training_finished", exc_info=True)
         self._sync_cluster_controls()
-        self._render_result()
         self._update_timeline_cluster_save_state()
-        self._run_auto_clustering_after_training()
-        try:
-            toast_success(tr("SOM training finished."), title=tr("SOM"), tab_key="som")
-        except Exception:
-            logger.warning("Exception in _on_training_finished", exc_info=True)
+        self._start_result_render(result)
 
     def _on_training_error(self, message: str) -> None:
         if self.sidebar is not None:
@@ -775,7 +773,273 @@ class SomTab(TabWidget):
             self._update_clustering_method_state("neuron")
 
     # ------------------------------------------------------------------
-    def _render_result(self) -> None:
+    # @ai(gpt-5, codex, refactor, 2026-03-23)
+    def _start_result_render(self, result) -> None:
+        self._render_request_id += 1
+        request_id = int(self._render_request_id)
+
+        selected_payloads: list[dict] = []
+        for payload in self._selected_feature_payloads():
+            if isinstance(payload, dict):
+                selected_payloads.append(dict(payload))
+
+        feature_display_map = dict(getattr(self._view_model, "_feature_display_map", {}) or {})
+        cluster_names = dict(self._view_model.get_all_cluster_names() or {})
+        value_df = self._view_model.last_dataframe()
+        if value_df is None or value_df.empty:
+            value_df = getattr(result, "normalized_dataframe", pd.DataFrame())
+
+        feature_clusters = self._feature_clusters
+        neuron_clusters = self._neuron_clusters
+
+        def _work(stop_event=None) -> dict[str, Any]:
+            payload = self._prepare_result_render_payload(
+                result=result,
+                feature_clusters=feature_clusters,
+                neuron_clusters=neuron_clusters,
+                selected_feature_payloads=selected_payloads,
+                feature_display_map=feature_display_map,
+                cluster_names=cluster_names,
+                value_df=value_df,
+            )
+            payload["request_id"] = request_id
+            return payload
+
+        def _finalize_success(
+            *,
+            feature_table_df: Optional[pd.DataFrame] = None,
+            timeline_row_df: Optional[pd.DataFrame] = None,
+            timeline_display_df: Optional[pd.DataFrame] = None,
+        ) -> None:
+            self._render_result(
+                feature_table_df=feature_table_df,
+                timeline_row_df=timeline_row_df,
+                timeline_display_df=timeline_display_df,
+            )
+            self._update_timeline_cluster_save_state()
+            self._run_auto_clustering_after_training()
+            try:
+                toast_success(tr("SOM training finished."), title=tr("SOM"), tab_key="som")
+            except Exception:
+                logger.warning("Exception in _start_result_render", exc_info=True)
+
+        def _on_ready(payload: dict[str, Any]) -> None:
+            if not isinstance(payload, dict):
+                return
+            if int(payload.get("request_id", -1)) != self._render_request_id:
+                return
+            if self._result is not result:
+                return
+            _finalize_success(
+                feature_table_df=payload.get("feature_table_df"),
+                timeline_row_df=payload.get("timeline_row_df"),
+                timeline_display_df=payload.get("timeline_display_df"),
+            )
+
+        def _on_error(message: str) -> None:
+            if request_id != self._render_request_id:
+                return
+            logger.warning("Exception in _start_result_render: %s", message or "Unknown error")
+            _finalize_success()
+
+        run_in_thread(
+            _work,
+            on_result=_on_ready,
+            on_error=_on_error,
+            owner=self,
+            key="som_render_result",
+            cancel_previous=True,
+        )
+
+    @staticmethod
+    def _safe_feature_id_from_payload(payload: dict) -> Optional[int]:
+        fid = payload.get("feature_id")
+        if fid is None:
+            return None
+        try:
+            return int(fid)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _cluster_label_with_names(value: object, cluster_names: dict[int, str]) -> object:
+        if value is None or pd.isna(value):
+            return pd.NA
+        try:
+            cluster_id = int(value)
+        except Exception:
+            return value
+        custom = str(cluster_names.get(cluster_id, "") or "").strip()
+        if custom:
+            return custom
+        return cluster_id
+
+    @staticmethod
+    def _build_feature_stats_map(value_df: Optional[pd.DataFrame]) -> dict[str, dict[str, float]]:
+        if value_df is None or value_df.empty:
+            return {"min": {}, "mean": {}, "max": {}}
+        numeric_df = value_df.apply(pd.to_numeric, errors="coerce")
+        if numeric_df.empty:
+            return {"min": {}, "mean": {}, "max": {}}
+        finite_df = numeric_df.replace([np.inf, -np.inf], np.nan)
+        min_series = finite_df.min(axis=0, skipna=True)
+        mean_series = finite_df.mean(axis=0, skipna=True)
+        max_series = finite_df.max(axis=0, skipna=True)
+        valid_columns = [column for column in finite_df.columns if not pd.isna(mean_series.get(column))]
+        min_map = {str(column): float(min_series[column]) for column in valid_columns}
+        mean_map = {str(column): float(mean_series[column]) for column in valid_columns}
+        max_map = {str(column): float(max_series[column]) for column in valid_columns}
+        return {"min": min_map, "mean": mean_map, "max": max_map}
+
+    @staticmethod
+    def _prepare_timeline_display_dataframe(
+        row_df: pd.DataFrame,
+        *,
+        preview_limit: int = 10_000,
+    ) -> pd.DataFrame:
+        if row_df is None or row_df.empty:
+            return SomTab._empty_timeline_table_dataframe()
+        display_df = row_df.head(int(preview_limit)).copy()
+        if "index" in display_df.columns:
+            display_df = display_df.assign(index=display_df["index"].apply(lambda value: str(value)))
+        return display_df
+
+    @staticmethod
+    def _prepare_result_render_payload(
+        *,
+        result,
+        feature_clusters,
+        neuron_clusters,
+        selected_feature_payloads: list[dict],
+        feature_display_map: dict[str, str],
+        cluster_names: dict[int, str],
+        value_df: Optional[pd.DataFrame],
+    ) -> dict[str, Any]:
+        positions = getattr(result, "feature_positions", pd.DataFrame())
+        positions = positions.copy() if isinstance(positions, pd.DataFrame) else pd.DataFrame()
+        if not positions.empty and feature_clusters is not None:
+            cluster_index_obj = getattr(feature_clusters, "index", None)
+            cluster_labels_obj = getattr(feature_clusters, "labels", None)
+            cluster_index = list(cluster_index_obj) if cluster_index_obj is not None else []
+            cluster_labels = list(cluster_labels_obj) if cluster_labels_obj is not None else []
+            if cluster_index and len(cluster_index) == len(cluster_labels):
+                cluster_df = pd.DataFrame({"feature": cluster_index, "cluster": cluster_labels})
+                positions = positions.merge(cluster_df, on="feature", how="left")
+        if "cluster" not in positions.columns:
+            positions = positions.copy()
+            positions["cluster"] = pd.NA
+        if not positions.empty and "cluster" in positions.columns:
+            positions = positions.copy()
+            positions["cluster"] = positions["cluster"].apply(
+                lambda value: SomTab._cluster_label_with_names(value, cluster_names)
+            )
+        if not positions.empty:
+            sort_columns = [column for column in ("x", "y", "feature") if column in positions.columns]
+            if sort_columns:
+                positions = positions.sort_values(by=sort_columns)
+
+        drop_columns = [column for column in ("label", "max_value", "mean_value", "min_value") if column in positions.columns]
+        if drop_columns:
+            positions = positions.drop(columns=drop_columns)
+
+        feature_id_map: dict[str, int] = {}
+        for payload in selected_feature_payloads:
+            feature_id = SomTab._safe_feature_id_from_payload(payload)
+            if feature_id is None:
+                continue
+            try:
+                selection = FeatureSelection.from_payload(payload)
+            except TypeError:
+                selection = FeatureSelection(
+                    feature_id=payload.get("feature_id"),
+                    label=payload.get("label"),
+                    base_name=payload.get("base_name"),
+                    source=payload.get("source"),
+                    unit=payload.get("unit"),
+                    type=payload.get("type"),
+                    lag_seconds=payload.get("lag_seconds"),
+                )
+            feature_name = str(selection.display_name() or "").strip()
+            if feature_name:
+                feature_id_map[feature_name] = int(feature_id)
+        if not positions.empty and "feature" in positions.columns and feature_id_map:
+            positions = positions.copy()
+            positions["feature_id"] = positions["feature"].map(feature_id_map)
+
+        stats = SomTab._build_feature_stats_map(value_df)
+        if not positions.empty and "feature" in positions.columns:
+            positions = positions.copy()
+            positions["min"] = positions["feature"].map(stats.get("min", {}))
+            positions["mean"] = positions["feature"].map(stats.get("mean", {}))
+            positions["max"] = positions["feature"].map(stats.get("max", {}))
+
+        if not positions.empty and "feature" in positions.columns and feature_display_map:
+            positions = positions.copy()
+            positions["feature"] = positions["feature"].apply(
+                lambda name: feature_display_map.get(str(name), str(name))
+            )
+
+        preferred_order = list(SomTab._FEATURE_TABLE_COLUMNS)
+        ordered = [column for column in preferred_order if column in positions.columns]
+        ordered.extend([column for column in positions.columns if column not in ordered])
+        feature_table_df = positions.loc[:, ordered] if ordered else SomTab._empty_feature_table_dataframe()
+        feature_table_df = SomTab._normalize_feature_table_dataframe(feature_table_df)
+
+        row_bmus = getattr(result, "row_bmus", pd.DataFrame())
+        row_df = row_bmus.copy() if isinstance(row_bmus, pd.DataFrame) else pd.DataFrame()
+        if not row_df.empty:
+            if "step" in row_df.columns:
+                row_df = row_df.drop(columns=["step"])
+            width = 0
+            map_shape = getattr(result, "map_shape", None)
+            if isinstance(map_shape, tuple) and len(map_shape) >= 2:
+                try:
+                    width = int(map_shape[1])
+                except Exception:
+                    width = 0
+            if "bmu" not in row_df.columns:
+                row_df = row_df.copy()
+                bmu_x = pd.to_numeric(row_df.get("bmu_x"), errors="coerce")
+                bmu_y = pd.to_numeric(row_df.get("bmu_y"), errors="coerce")
+                row_df["bmu"] = bmu_x * max(1, width) + bmu_y
+            else:
+                bmu_numeric = pd.to_numeric(row_df.get("bmu"), errors="coerce")
+                missing_mask = bmu_numeric.isna()
+                if bool(missing_mask.any()):
+                    row_df = row_df.copy()
+                    bmu_x = pd.to_numeric(row_df.get("bmu_x"), errors="coerce")
+                    bmu_y = pd.to_numeric(row_df.get("bmu_y"), errors="coerce")
+                    computed = bmu_x * max(1, width) + bmu_y
+                    row_df.loc[missing_mask, "bmu"] = computed.loc[missing_mask]
+            labels = getattr(neuron_clusters, "bmu_cluster_labels", None) if neuron_clusters is not None else None
+            if labels is not None and len(labels) == len(row_df):
+                row_df = row_df.copy()
+                row_df["cluster"] = pd.Series(labels, index=row_df.index)
+            if "cluster" not in row_df.columns:
+                row_df = row_df.copy()
+                row_df["cluster"] = pd.NA
+            if "distance" not in row_df.columns:
+                row_df = row_df.copy()
+                row_df["distance"] = pd.NA
+            row_df = row_df.copy()
+            row_df["cluster"] = row_df["cluster"].apply(
+                lambda value: SomTab._cluster_label_with_names(value, cluster_names)
+            )
+
+        timeline_display_df = SomTab._prepare_timeline_display_dataframe(row_df)
+        return {
+            "feature_table_df": feature_table_df,
+            "timeline_row_df": row_df,
+            "timeline_display_df": timeline_display_df,
+        }
+
+    def _render_result(
+        self,
+        *,
+        feature_table_df: Optional[pd.DataFrame] = None,
+        timeline_row_df: Optional[pd.DataFrame] = None,
+        timeline_display_df: Optional[pd.DataFrame] = None,
+    ) -> None:
         if not self._result:
             # ensure component-planes UI clears too
             if isinstance(self.component_planes, ComponentPlanesTab):
@@ -796,8 +1060,8 @@ class SomTab(TabWidget):
             self.component_planes.set_result(res)
 
         # --- The rest of the tabs rely on tables/charts owned by SomTab ----
-        self._update_feature_table()
-        self._update_timeline_views()
+        self._update_feature_table(feature_table_df)
+        self._update_timeline_views(row_df=timeline_row_df, display_df=timeline_display_df)
         self._sync_cluster_controls()
         self._update_timeline_cluster_map()
 
@@ -1090,6 +1354,7 @@ class SomTab(TabWidget):
                 self.component_planes.set_neuron_clusters(clusters)
             except Exception:
                 logger.warning("Exception in _on_neuron_clusters_updated", exc_info=True)
+        timeline_mode_changed = False
         # Auto-switch to cluster mode when clusters are available
         if clusters is not None:
             selected = self._view_model.timeline_display_selected()
@@ -1097,21 +1362,11 @@ class SomTab(TabWidget):
                 selected = [key for key in selected if key != "bmu"]
                 selected.insert(0, "cluster")
                 self._view_model.set_timeline_display_options(selected=selected)
-        self._update_timeline_views()
-        self._sync_cluster_controls()
-        self._on_timeline_rows_selected()
-        self._update_timeline_cluster_panel_state()
-        self._update_timeline_cluster_save_state()
-        if clusters is not None:
-            try:
-                toast_success(
-                    tr("Neuron clustering finished."),
-                    title=tr("SOM"),
-                    tab_key="som",
-                    on_click=lambda: self._activate_subtab("timeline"),
-                )
-            except Exception:
-                logger.warning("Exception in _on_neuron_clusters_updated", exc_info=True)
+                timeline_mode_changed = True
+        self._start_neuron_cluster_refresh(
+            announce=clusters is not None,
+            update_chart=not timeline_mode_changed,
+        )
 
     def _on_cluster_names_changed(self) -> None:
         """Called when cluster names are updated in the view model."""
@@ -1121,7 +1376,6 @@ class SomTab(TabWidget):
                 preserved_range = self._capture_timeline_x_range()
         except Exception:
             logger.warning("Exception in _on_cluster_names_changed", exc_info=True)
-        self._update_timeline_cluster_map()
         self._update_timeline_views()
         self._update_feature_group_chart()
         if preserved_range is not None:
@@ -1163,18 +1417,193 @@ class SomTab(TabWidget):
         self._feature_clusters = clusters
         # Keep the SOM view model in sync so saved maps persist feature clusters.
         self._view_model._last_feature_clusters = clusters
-        self._update_feature_table()
-        self._sync_cluster_controls()
-        if announce and clusters is not None:
-            try:
-                toast_success(
-                    tr("Feature clustering finished."),
-                    title=tr("SOM"),
-                    tab_key="som",
-                    on_click=lambda: self._activate_subtab("features"),
-                )
-            except Exception:
-                logger.warning("Exception in _apply_feature_clusters_state", exc_info=True)
+        self._start_feature_cluster_refresh(announce=announce and clusters is not None)
+
+    # @ai(gpt-5, codex, performance-fix, 2026-03-23)
+    def _start_neuron_cluster_refresh(
+        self,
+        *,
+        announce: bool,
+        update_chart: bool,
+    ) -> None:
+        result = self._result
+        if result is None:
+            self._update_timeline_views(update_chart=update_chart)
+            self._sync_cluster_controls()
+            self._update_timeline_cluster_save_state()
+            return
+
+        self._neuron_refresh_request_id += 1
+        request_id = int(self._neuron_refresh_request_id)
+
+        selected_payloads: list[dict] = []
+        for payload in self._selected_feature_payloads():
+            if isinstance(payload, dict):
+                selected_payloads.append(dict(payload))
+
+        feature_display_map = dict(getattr(self._view_model, "_feature_display_map", {}) or {})
+        cluster_names = dict(self._view_model.get_all_cluster_names() or {})
+        value_df = self._view_model.last_dataframe()
+        if value_df is None or value_df.empty:
+            value_df = getattr(result, "normalized_dataframe", pd.DataFrame())
+
+        feature_clusters = self._feature_clusters
+        neuron_clusters = self._neuron_clusters
+
+        def _work(stop_event=None) -> dict[str, Any]:
+            payload = self._prepare_result_render_payload(
+                result=result,
+                feature_clusters=feature_clusters,
+                neuron_clusters=neuron_clusters,
+                selected_feature_payloads=selected_payloads,
+                feature_display_map=feature_display_map,
+                cluster_names=cluster_names,
+                value_df=value_df,
+            )
+            return {
+                "request_id": request_id,
+                "timeline_row_df": payload.get("timeline_row_df"),
+                "timeline_display_df": payload.get("timeline_display_df"),
+            }
+
+        def _on_ready(payload: dict[str, Any]) -> None:
+            if not isinstance(payload, dict):
+                return
+            if int(payload.get("request_id", -1)) != self._neuron_refresh_request_id:
+                return
+            if self._result is not result:
+                return
+
+            self._update_timeline_views(
+                row_df=payload.get("timeline_row_df"),
+                display_df=payload.get("timeline_display_df"),
+                update_chart=update_chart,
+            )
+            self._sync_cluster_controls()
+            self._update_timeline_cluster_save_state()
+            if announce and self._neuron_clusters is not None:
+                try:
+                    toast_success(
+                        tr("Neuron clustering finished."),
+                        title=tr("SOM"),
+                        tab_key="som",
+                        on_click=lambda: self._activate_subtab("timeline"),
+                    )
+                except Exception:
+                    logger.warning("Exception in _start_neuron_cluster_refresh", exc_info=True)
+
+        def _on_error(message: str) -> None:
+            if request_id != self._neuron_refresh_request_id:
+                return
+            logger.warning("Exception in _start_neuron_cluster_refresh: %s", message or "Unknown error")
+            self._update_timeline_views(update_chart=update_chart)
+            self._sync_cluster_controls()
+            self._update_timeline_cluster_save_state()
+            if announce and self._neuron_clusters is not None:
+                try:
+                    toast_success(
+                        tr("Neuron clustering finished."),
+                        title=tr("SOM"),
+                        tab_key="som",
+                        on_click=lambda: self._activate_subtab("timeline"),
+                    )
+                except Exception:
+                    logger.warning("Exception in _start_neuron_cluster_refresh", exc_info=True)
+
+        run_in_thread(
+            _work,
+            on_result=_on_ready,
+            on_error=_on_error,
+            owner=self,
+            key="som_neuron_cluster_refresh",
+            cancel_previous=True,
+        )
+
+    # @ai(gpt-5, codex, performance-fix, 2026-03-23)
+    def _start_feature_cluster_refresh(self, *, announce: bool) -> None:
+        result = self._result
+        if result is None:
+            self._update_feature_table()
+            self._sync_cluster_controls()
+            return
+
+        self._feature_refresh_request_id += 1
+        request_id = int(self._feature_refresh_request_id)
+
+        selected_payloads: list[dict] = []
+        for payload in self._selected_feature_payloads():
+            if isinstance(payload, dict):
+                selected_payloads.append(dict(payload))
+
+        feature_display_map = dict(getattr(self._view_model, "_feature_display_map", {}) or {})
+        cluster_names = dict(self._view_model.get_all_cluster_names() or {})
+        value_df = self._view_model.last_dataframe()
+        if value_df is None or value_df.empty:
+            value_df = getattr(result, "normalized_dataframe", pd.DataFrame())
+
+        feature_clusters = self._feature_clusters
+        neuron_clusters = self._neuron_clusters
+
+        def _work(stop_event=None) -> dict[str, Any]:
+            payload = self._prepare_result_render_payload(
+                result=result,
+                feature_clusters=feature_clusters,
+                neuron_clusters=neuron_clusters,
+                selected_feature_payloads=selected_payloads,
+                feature_display_map=feature_display_map,
+                cluster_names=cluster_names,
+                value_df=value_df,
+            )
+            return {
+                "request_id": request_id,
+                "feature_table_df": payload.get("feature_table_df"),
+            }
+
+        def _on_ready(payload: dict[str, Any]) -> None:
+            if not isinstance(payload, dict):
+                return
+            if int(payload.get("request_id", -1)) != self._feature_refresh_request_id:
+                return
+            if self._result is not result:
+                return
+            self._update_feature_table(df=payload.get("feature_table_df"))
+            self._sync_cluster_controls()
+            if announce and self._feature_clusters is not None:
+                try:
+                    toast_success(
+                        tr("Feature clustering finished."),
+                        title=tr("SOM"),
+                        tab_key="som",
+                        on_click=lambda: self._activate_subtab("features"),
+                    )
+                except Exception:
+                    logger.warning("Exception in _start_feature_cluster_refresh", exc_info=True)
+
+        def _on_error(message: str) -> None:
+            if request_id != self._feature_refresh_request_id:
+                return
+            logger.warning("Exception in _start_feature_cluster_refresh: %s", message or "Unknown error")
+            self._update_feature_table()
+            self._sync_cluster_controls()
+            if announce and self._feature_clusters is not None:
+                try:
+                    toast_success(
+                        tr("Feature clustering finished."),
+                        title=tr("SOM"),
+                        tab_key="som",
+                        on_click=lambda: self._activate_subtab("features"),
+                    )
+                except Exception:
+                    logger.warning("Exception in _start_feature_cluster_refresh", exc_info=True)
+
+        run_in_thread(
+            _work,
+            on_result=_on_ready,
+            on_error=_on_error,
+            owner=self,
+            key="som_feature_cluster_refresh",
+            cancel_previous=True,
+        )
 
     def _activate_subtab(self, key: str) -> None:
         tabs = getattr(self, "tabs", None)
@@ -1221,8 +1650,9 @@ class SomTab(TabWidget):
         df = df.loc[:, ordered] if ordered else self._empty_feature_table_dataframe()
         return self._normalize_feature_table_dataframe(df)
 
-    def _update_feature_table(self) -> None:
-        df = self._build_feature_table_dataframe()
+    def _update_feature_table(self, df: Optional[pd.DataFrame] = None) -> None:
+        if df is None:
+            df = self._build_feature_table_dataframe()
         self._fill_table(self.feature_table, df)
         self._update_feature_group_chart()
 
@@ -1260,21 +1690,7 @@ class SomTab(TabWidget):
         value_df = view_model.last_dataframe() if view_model is not None else None
         if value_df is None or value_df.empty:
             value_df = getattr(self._result, "normalized_dataframe", pd.DataFrame())
-        if value_df is None or value_df.empty:
-            return {"min": {}, "mean": {}, "max": {}}
-        min_out: dict[str, float] = {}
-        mean_out: dict[str, float] = {}
-        max_out: dict[str, float] = {}
-        for column in value_df.columns:
-            numeric = pd.to_numeric(value_df[column], errors="coerce")
-            finite = numeric.replace([np.inf, -np.inf], np.nan).dropna()
-            if finite.empty:
-                continue
-            name = str(column)
-            min_out[name] = float(finite.min())
-            mean_out[name] = float(finite.mean())
-            max_out[name] = float(finite.max())
-        return {"min": min_out, "mean": mean_out, "max": max_out}
+        return self._build_feature_stats_map(value_df)
 
     def _feature_table_selected_display_names(self) -> list[str]:
         table = getattr(self, "feature_table", None)
@@ -1685,8 +2101,15 @@ class SomTab(TabWidget):
 
         return formatter
 
-    def _update_timeline_views(self) -> None:
-        row_df = self._timeline_dataframe()
+    def _update_timeline_views(
+        self,
+        *,
+        row_df: Optional[pd.DataFrame] = None,
+        display_df: Optional[pd.DataFrame] = None,
+        update_chart: bool = True,
+    ) -> None:
+        if row_df is None:
+            row_df = self._timeline_dataframe()
         splitter = getattr(self, "timeline_rows_splitter", None)
         splitter_sizes = splitter.sizes() if splitter is not None else []
         if row_df.empty:
@@ -1705,16 +2128,17 @@ class SomTab(TabWidget):
                     logger.warning("Exception in _update_timeline_views", exc_info=True)
             return
 
-        preview_limit = 10_000
-        display_df = row_df.head(preview_limit).copy()
-        if "index" in display_df.columns:
-            display_df = display_df.assign(index=display_df["index"].apply(lambda v: str(v)))
+        if display_df is None:
+            display_df = self._prepare_timeline_display_dataframe(row_df)
+        else:
+            display_df = display_df.copy()
         self._timeline_display_df = display_df
         self._view_model.set_timeline_table_dataframe(self._timeline_display_df)
 
-        self._update_timeline_chart(row_df)
+        if update_chart:
+            self._update_timeline_chart(row_df)
         self._update_timeline_cluster_map()
-        self._update_timeline_row_highlight([])
+        self._update_timeline_row_highlight(self._timeline_selected_cells())
         if splitter is not None and splitter_sizes:
             try:
                 splitter.setSizes(splitter_sizes)

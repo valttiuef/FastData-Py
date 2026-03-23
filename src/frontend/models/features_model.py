@@ -68,7 +68,7 @@ class FeaturesTableModel(QAbstractTableModel):
         # Search cache for quick filter fallback / other uses
         self._search_cache: list[str] | None = None
 
-    def set_dataframe(self, df: pd.DataFrame):
+    def set_dataframe(self, df: pd.DataFrame) -> bool:
         normalized_payload = self._normalize_payload_dataframe(df)
         normalized = self._normalize_for_table(normalized_payload)
         payload_cache = self._build_payload_cache(normalized_payload)
@@ -81,7 +81,7 @@ class FeaturesTableModel(QAbstractTableModel):
                     self._payload_cache = payload_cache
                     self._row_by_feature_id = row_by_feature_id
                     self._search_cache = None
-                    return
+                    return False
         except Exception:
             logger.warning("Exception in set_dataframe equality check", exc_info=True)
 
@@ -102,7 +102,7 @@ class FeaturesTableModel(QAbstractTableModel):
             self._row_by_feature_id = row_by_feature_id
             self._np = self._df.to_numpy(copy=False) if self._df is not None else None
             self.endResetModel()
-            return
+            return True
 
         self._payload_df = normalized_payload
         self._df = normalized
@@ -115,6 +115,7 @@ class FeaturesTableModel(QAbstractTableModel):
                 self.index(new_shape[0] - 1, new_shape[1] - 1),
                 [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole],
             )
+        return True
 
     def _normalize_payload_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         if not isinstance(df, pd.DataFrame):

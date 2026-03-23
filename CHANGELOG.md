@@ -4,6 +4,24 @@ All notable end-user changes are documented in this file.
 
 The format is based on Keep a Changelog, with entries grouped by release.
 
+## [0.2.2] - 2026-03-23
+
+### Changed
+- SOM results now render in the background after training, so the app stays responsive instead of freezing during heavy post-processing.
+- Feature and neuron cluster refreshes are now cancellable and superseded by newer actions, which keeps timeline/feature views aligned with your latest selection.
+- Timeline table refresh now preserves your current row selection highlight more reliably while updating related views.
+
+### Fixed
+- Feature list selection is now preserved more reliably during refreshes, especially when data content has not actually changed.
+- Restoring large feature selections no longer triggers a noisy burst of selection-change signals.
+- SOM clustering status updates now avoid redundant status channel writes, reducing duplicate/stale status behavior.
+
+### Performance
+- Faster SOM post-processing for larger datasets by preparing feature/timeline tables off the UI thread.
+- Group timeline overlays now use display-aware box limits, improving chart responsiveness and avoiding unreadable overdraw.
+- Feature summary statistics are computed with a more efficient vectorized path for large feature sets.
+- Feature table refresh avoids unnecessary re-sort/reselect work when incoming data is unchanged.
+
 ## [0.2.1] - 2026-03-16
 - Fix issues with icons + small styling changes
 

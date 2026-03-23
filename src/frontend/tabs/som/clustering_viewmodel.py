@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 from ...threading.runner import run_in_thread
 from ...threading.utils import run_in_main_thread
-from ...utils import set_progress, clear_progress, set_status_text
+from ...utils import set_progress, clear_progress
 
 if TYPE_CHECKING:
     from .viewmodel import SomViewModel
@@ -63,10 +63,6 @@ class ClusteringViewModel(QObject):
             target_label = "neurons" if target == "neuron" else "features"
             status_text = f"Clustering SOM {target_label}..."
             try:
-                set_status_text(status_text)
-            except Exception:
-                logger.warning("Exception in _cluster_set_running_status", exc_info=True)
-            try:
                 self._som_viewmodel.status_changed.emit(status_text)
             except Exception:
                 logger.warning("Exception in _cluster_set_running_status", exc_info=True)
@@ -93,10 +89,6 @@ class ClusteringViewModel(QObject):
             clear_progress()
             status_text = f"SOM {target} clustering finished."
             try:
-                set_status_text(status_text)
-            except Exception:
-                logger.warning("Exception in _cluster_set_finished_status", exc_info=True)
-            try:
                 self._som_viewmodel.status_changed.emit(status_text)
             except Exception:
                 logger.warning("Exception in _cluster_set_finished_status", exc_info=True)
@@ -108,10 +100,6 @@ class ClusteringViewModel(QObject):
             clear_progress()
             reason_text = str(reason).strip() if reason else "unknown error"
             text = f"SOM {target} clustering failed: {reason_text}"
-            try:
-                set_status_text(text)
-            except Exception:
-                logger.warning("Exception in _cluster_set_failed_status", exc_info=True)
             try:
                 self._som_viewmodel.status_changed.emit(text)
             except Exception:

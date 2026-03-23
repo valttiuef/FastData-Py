@@ -170,6 +170,9 @@ class TimeSeriesChart(QFrame):
         self._hover_group_ms: list[int] = []
         self._group_box_items: list[QGraphicsRectItem] = []
         self._group_box_text_items: list[QGraphicsSimpleTextItem] = []
+        self._group_timeline_max_runs: int = 12_000
+        self._group_timeline_min_box_width_px: float = 2.0
+        self._group_timeline_min_box_height_px: float = 1.5
         self._axis_lock_hint_bg_item: QGraphicsRectItem | None = None
         self._axis_lock_hint_text_item: QGraphicsSimpleTextItem | None = None
         self._deferred_refresh_pending: bool = False
@@ -917,7 +920,7 @@ class TimeSeriesChart(QFrame):
                 run_end_ms = end_ms
             runs.append(_Run(current_group, run_start_ms, run_end_ms))
 
-            max_runs = 30_000
+            max_runs = int(max(100, self._group_timeline_max_runs))
             if len(runs) > max_runs:
                 stride = int(np.ceil(len(runs) / max_runs))
                 runs = runs[::max(1, stride)]
@@ -1727,6 +1730,37 @@ class TimeSeriesChart(QFrame):
         self._group_box_items = []
         self._group_box_text_items = []
 
+    def _visible_group_box_cap(
+        self,
+        *,
+        plot_width: float,
+        plot_height: float,
+        lane_count: int,
+    ) -> int:
+        try:
+            width = float(plot_width)
+        except Exception:
+            width = 0.0
+        try:
+            height = float(plot_height)
+        except Exception:
+            height = 0.0
+        try:
+            lanes = max(1, int(lane_count))
+        except Exception:
+            lanes = 1
+
+        min_width = max(2.0, float(self._group_timeline_min_box_width_px))
+        min_height = max(2.0, float(self._group_timeline_min_box_height_px))
+
+        # Display-aware cap:
+        # - horizontally, each distinguishable box needs minimum width
+        # - vertically, only lanes with sufficient pixel height can be distinguished
+        horizontal_slots = max(1, int(np.floor(width / min_width)))
+        visible_lane_capacity = max(1, int(np.floor(height / min_height)))
+        effective_lanes = max(1, min(lanes, visible_lane_capacity))
+        return max(50, horizontal_slots * effective_lanes)
+
     def _refresh_group_timeline_overlays(self) -> None:
         self._clear_group_timeline_overlays()
         if not self._group_box_specs:
@@ -1752,7 +1786,12 @@ class TimeSeriesChart(QFrame):
         visible_specs = [
             spec for spec in self._group_box_specs if not (spec[1] < visible_start or spec[0] > visible_end)
         ]
-        max_visible_boxes = 5_000
+        visible_lane_count = len({str(spec[5]) for spec in visible_specs}) or 1
+        max_visible_boxes = self._visible_group_box_cap(
+            plot_width=float(plot_area.width()),
+            plot_height=float(plot_area.height()),
+            lane_count=visible_lane_count,
+        )
         if len(visible_specs) > max_visible_boxes:
             stride = int(np.ceil(len(visible_specs) / max_visible_boxes))
             visible_specs = visible_specs[::max(1, stride)]
@@ -1760,8 +1799,8 @@ class TimeSeriesChart(QFrame):
         font = QFont()
         font.setPointSize(8)
         text_budget = 1_000
-        min_box_width_px = 2.0
-        min_box_height_px = 1.5
+        min_box_width_px = max(1.0, float(self._group_timeline_min_box_width_px))
+        min_box_height_px = max(1.0, float(self._group_timeline_min_box_height_px))
         for start_ms, end_ms, y0, y1, label, key in visible_specs:
             x1 = self.chart.mapToPosition(QPointF(float(start_ms), float(y0)), ref_series).x()
             x2 = self.chart.mapToPosition(QPointF(float(end_ms), float(y0)), ref_series).x()

@@ -4,7 +4,15 @@ from typing import Optional, Sequence, Any
 import logging
 import pandas as pd
 
-from PySide6.QtCore import QObject, Qt, Signal, QTimer, QItemSelectionModel, QItemSelection
+from PySide6.QtCore import (
+    QObject,
+    Qt,
+    Signal,
+    QTimer,
+    QItemSelectionModel,
+    QItemSelection,
+    QSignalBlocker,
+)
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QGroupBox, QLineEdit, QVBoxLayout
 
@@ -556,6 +564,7 @@ class FeaturesListWidget(QGroupBox):
 
     # ------------------------------------------------------------------
     def _apply_dataframe(self, df: pd.DataFrame) -> None:
+        # @ai(gpt-5, codex, performance-fix, 2026-03-23)
         previously_selected_ids = set(self._selection_memory_ids)
         if not previously_selected_ids:
             previously_selected_ids = set(self.selected_feature_ids())
@@ -570,12 +579,9 @@ class FeaturesListWidget(QGroupBox):
         self._invalidate_selection_cache()
 
         try:
-            selection = self._table.selectionModel()
-            if selection is not None:
-                selection.clearSelection()
-
+            data_changed = False
             try:
-                self._table_model.set_dataframe(df)
+                data_changed = bool(self._table_model.set_dataframe(df))
                 self._payloads_by_feature_id = self._table_model._payload_map_by_feature_id()
             except Exception as exc:
                 logger.exception(
@@ -591,20 +597,27 @@ class FeaturesListWidget(QGroupBox):
                 )
                 return
 
-            # Re-apply existing sort after data reload (keeps UX stable)
-            try:
-                hdr = self._table.horizontalHeader()
-                sort_col = int(hdr.sortIndicatorSection())
-                sort_ord = hdr.sortIndicatorOrder()
-                self._table.sortByColumn(sort_col, sort_ord)
-            except Exception:
-                pass
+            # Fast path: filtered dataframe unchanged -> preserve current view selection
+            # and skip expensive clear/reselect work.
+            if data_changed:
+                selection = self._table.selectionModel()
+                if selection is not None:
+                    selection.clearSelection()
 
-            selection_restored = False
-            if previously_selected_ids and self._table_model.rowCount() > 0:
-                selection_restored = self._restore_selection(previously_selected_ids)
-            if previously_selected_ids and selection_restored:
-                self._selection_memory_ids = set(previously_selected_ids)
+                # Re-apply existing sort after data reload (keeps UX stable)
+                try:
+                    hdr = self._table.horizontalHeader()
+                    sort_col = int(hdr.sortIndicatorSection())
+                    sort_ord = hdr.sortIndicatorOrder()
+                    self._table.sortByColumn(sort_col, sort_ord)
+                except Exception:
+                    pass
+
+                selection_restored = False
+                if previously_selected_ids and self._table_model.rowCount() > 0:
+                    selection_restored = self._restore_selection(previously_selected_ids)
+                if previously_selected_ids and selection_restored:
+                    self._selection_memory_ids = set(previously_selected_ids)
 
         finally:
             self._table.setUpdatesEnabled(True)
@@ -616,6 +629,7 @@ class FeaturesListWidget(QGroupBox):
         self.features_reloaded.emit(df)
 
     def _restore_selection(self, feature_ids: set[int]) -> bool:
+        # @ai(gpt-5, codex, performance-fix, 2026-03-23)
         selection = self._table.selectionModel()
         if selection is None:
             return False
@@ -626,18 +640,45 @@ class FeaturesListWidget(QGroupBox):
             return False
 
         try:
-            selected_any = False
-            selection.clearSelection()
+            proxy_rows: list[int] = []
             for row in rows_to_select:
                 source_index = self._table_model.index(row, 0)
                 proxy_index = self._proxy_model.mapFromSource(source_index)
                 if proxy_index.isValid():
-                    selection.select(
-                        proxy_index,
-                        QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows,
-                    )
-                    selected_any = True
-            return selected_any
+                    proxy_rows.append(int(proxy_index.row()))
+
+            if not proxy_rows:
+                return False
+
+            proxy_rows = sorted(set(proxy_rows))
+            selection_ranges = QItemSelection()
+            start_row = proxy_rows[0]
+            prev_row = proxy_rows[0]
+            for proxy_row in proxy_rows[1:]:
+                if proxy_row == prev_row + 1:
+                    prev_row = proxy_row
+                    continue
+                selection_ranges.select(
+                    self._proxy_model.index(start_row, 0),
+                    self._proxy_model.index(prev_row, 0),
+                )
+                start_row = proxy_row
+                prev_row = proxy_row
+            selection_ranges.select(
+                self._proxy_model.index(start_row, 0),
+                self._proxy_model.index(prev_row, 0),
+            )
+
+            blocker = QSignalBlocker(selection)
+            try:
+                selection.select(
+                    selection_ranges,
+                    QItemSelectionModel.SelectionFlag.ClearAndSelect
+                    | QItemSelectionModel.SelectionFlag.Rows,
+                )
+            finally:
+                del blocker
+            return True
         except Exception:
             return False
 
