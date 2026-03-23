@@ -58,3 +58,33 @@ def test_group_timeline_drawing_caps_unreadable_box_counts(qapp) -> None:
         assert len(chart._group_box_items) < row_count
     finally:
         chart.close()
+
+
+def test_group_timeline_preserves_transition_boundaries_when_max_rows_applies(qapp) -> None:
+    chart = TimeSeriesChart()
+    chart.resize(960, 360)
+    chart.show()
+    _process_events(qapp)
+
+    row_count = 401
+    frame = pd.DataFrame(
+        {
+            "t": pd.date_range("2026-02-01 00:00:00", periods=row_count, freq="min"),
+            # Every row is a transition boundary.
+            "group": [idx % 2 for idx in range(row_count)],
+        }
+    )
+
+    try:
+        chart.set_group_timeline(
+            frame,
+            time_col="t",
+            group_col="group",
+            max_rows=40,
+        )
+        _process_events(qapp, cycles=6)
+
+        # The timeline must not be stride-sampled into overlong runs.
+        assert len(chart._group_box_specs) == row_count
+    finally:
+        chart.close()

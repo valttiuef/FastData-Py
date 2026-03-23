@@ -171,7 +171,7 @@ class TimeSeriesChart(QFrame):
         self._group_box_items: list[QGraphicsRectItem] = []
         self._group_box_text_items: list[QGraphicsSimpleTextItem] = []
         self._group_timeline_max_runs: int = 250_000
-        self._group_timeline_min_box_width_px: float = 2.0
+        self._group_timeline_min_box_width_px: float = 1.0
         self._group_timeline_min_box_height_px: float = 1.5
         self._axis_lock_hint_bg_item: QGraphicsRectItem | None = None
         self._axis_lock_hint_text_item: QGraphicsSimpleTextItem | None = None
@@ -815,7 +815,7 @@ class TimeSeriesChart(QFrame):
                 logger.warning("Failed to refresh chart viewport after windowed time-series update.", exc_info=True)
         return True
 
-    # @ai(gpt-5, codex, fix, 2026-03-20)
+    # @ai(gpt-5, codex, fix, 2026-03-23)
     def set_group_timeline(
         self,
         frame: pd.DataFrame | None,
@@ -846,12 +846,25 @@ class TimeSeriesChart(QFrame):
             if df.empty:
                 return
 
+            # Keep every detected transition boundary. Naive stride sampling can
+            # stretch lanes across timestamps that actually belong to other groups.
             if len(df) > max_rows:
-                stride = int(np.ceil(len(df) / max(1, int(max_rows))))
-                sampled = df.iloc[::max(1, stride)].copy()
-                if sampled.index[-1] != df.index[-1]:
-                    sampled = pd.concat([sampled, df.iloc[[-1]]], ignore_index=True)
-                df = sampled.reset_index(drop=True)
+                max_rows = int(max_rows)
+                if max_rows > 0:
+                    group_values = pd.to_numeric(df[group_col], errors="coerce").to_numpy(dtype=float, copy=False)
+                    if group_values.size >= 2:
+                        change_idx = np.flatnonzero(group_values[1:] != group_values[:-1]) + 1
+                        keep_idx = np.unique(
+                            np.concatenate(
+                                (
+                                    np.array([0, len(df) - 1], dtype=int),
+                                    change_idx,
+                                    np.maximum(change_idx - 1, 0),
+                                )
+                            )
+                        )
+                        if keep_idx.size <= max_rows:
+                            df = df.iloc[keep_idx].reset_index(drop=True)
 
             group_counts = df[group_col].value_counts(dropna=True)
             if max_groups > 0 and len(group_counts) > max_groups:
@@ -878,47 +891,42 @@ class TimeSeriesChart(QFrame):
                     self.end_ms = int(end_ms)
 
             runs: list[_Run] = []
-            # Build per-row intervals from each timestamp to the next timestamp so
-            # timeline ranges align with saved group timeframes.
-            row_starts: list[int] = [0] * len(times_ms)
-            row_ends: list[int] = [0] * len(times_ms)
+            group_values = pd.to_numeric(df[group_col], errors="coerce").to_numpy(dtype=float, copy=False)
             if len(times_ms) == 1:
-                start = int(times_ms[0])
-                row_starts[0] = start
-                row_ends[0] = start + 1000
+                only_start = int(times_ms[0])
+                runs.append(_Run(float(group_values[0]), only_start, only_start + 1000))
             else:
-                positive_steps: list[int] = []
-                for idx in range(len(times_ms) - 1):
-                    left = int(times_ms[idx])
-                    right = int(times_ms[idx + 1])
-                    step = right - left
-                    if step > 0:
-                        positive_steps.append(step)
-                inferred_step = min(positive_steps) if positive_steps else 1000
-                for idx in range(len(times_ms) - 1):
-                    start = int(times_ms[idx])
-                    next_start = int(times_ms[idx + 1])
-                    row_starts[idx] = start
-                    row_ends[idx] = next_start if next_start > start else start + 1
-                last_start = int(times_ms[-1])
-                row_starts[-1] = last_start
-                row_ends[-1] = last_start + max(1, int(inferred_step))
+                steps = np.diff(times_ms.astype(np.int64, copy=False))
+                positive_steps = steps[steps > 0]
+                inferred_step = int(positive_steps.min()) if positive_steps.size else 1000
 
-            current_group = float(df[group_col].iat[0])
-            run_start_ms = int(row_starts[0])
-            run_end_ms = int(row_ends[0])
-            for idx in range(1, len(df)):
-                group_value = float(df[group_col].iat[idx])
-                start_ms = int(row_starts[idx])
-                end_ms = int(row_ends[idx])
-                if group_value == current_group:
-                    run_end_ms = max(run_end_ms, end_ms)
-                    continue
+                first_start = int(times_ms[0])
+                first_next = int(times_ms[1])
+                first_end = first_next if first_next > first_start else first_start + 1
+
+                current_group = float(group_values[0])
+                run_start_ms = first_start
+                run_end_ms = int(first_end)
+
+                for idx in range(1, len(times_ms)):
+                    start_ms = int(times_ms[idx])
+                    if idx < len(times_ms) - 1:
+                        next_start = int(times_ms[idx + 1])
+                        end_ms = next_start if next_start > start_ms else start_ms + 1
+                    else:
+                        end_ms = start_ms + max(1, inferred_step)
+
+                    group_value = float(group_values[idx])
+                    if group_value == current_group:
+                        run_end_ms = max(run_end_ms, int(end_ms))
+                        continue
+
+                    runs.append(_Run(current_group, run_start_ms, run_end_ms))
+                    current_group = group_value
+                    run_start_ms = int(start_ms)
+                    run_end_ms = int(end_ms)
+
                 runs.append(_Run(current_group, run_start_ms, run_end_ms))
-                current_group = group_value
-                run_start_ms = start_ms
-                run_end_ms = end_ms
-            runs.append(_Run(current_group, run_start_ms, run_end_ms))
 
             self._series_segments = {}
             self._series_colors = {}
@@ -932,8 +940,8 @@ class TimeSeriesChart(QFrame):
             # Create one minimal series per group to preserve legend entries/colors.
             legend_limit = 24
             group_meta: dict[float, tuple[str, str, QColor]] = {}
-            ms_min = int(min(row_starts)) if row_starts else int(times_ms.min())
-            ms_max = int(max(row_ends)) if row_ends else int(times_ms.max())
+            ms_min = int(times_ms.min())
+            ms_max = max((int(run.end_ms) for run in runs), default=int(times_ms.max()))
             if ms_min == ms_max:
                 ms_max += 1
             for idx, group in enumerate(ordered_groups):
@@ -1766,7 +1774,10 @@ class TimeSeriesChart(QFrame):
                     current_end = float(end)
                     current_right_px = int(right_px)
                     continue
-                if left_px <= int(current_right_px or 0) + 1:
+                # Only fuse when ranges actually touch in time. Pixel-only
+                # adjacency can incorrectly bridge real gaps between runs.
+                current_end_val = float(current_end) if current_end is not None else float(start)
+                if float(start) <= current_end_val and left_px <= int(current_right_px or 0) + 1:
                     current_end = max(float(current_end), float(end))
                     current_right_px = max(int(current_right_px), int(right_px))
                     continue
@@ -1801,7 +1812,7 @@ class TimeSeriesChart(QFrame):
         except Exception:
             lanes = 1
 
-        min_width = max(2.0, float(self._group_timeline_min_box_width_px))
+        min_width = max(1.0, float(self._group_timeline_min_box_width_px))
         min_height = max(2.0, float(self._group_timeline_min_box_height_px))
         horizontal_slots = max(1, int(np.floor(width / min_width)))
         visible_lane_capacity = max(1, int(np.floor(height / min_height)))
@@ -1839,6 +1850,89 @@ class TimeSeriesChart(QFrame):
             visible_end=visible_end,
             plot_width=float(plot_area.width()),
         )
+        if visible_specs:
+            span_ms = max(1.0, float(visible_end - visible_start))
+            width_px = max(1, int(np.ceil(float(plot_area.width()))))
+            # Per-pixel rendering tied to the current X-axis range:
+            # determine which cluster exists at each visible pixel center, then
+            # merge adjacent pixels with the same cluster.
+            clamped_specs: list[tuple[float, float, float, float, str, str]] = []
+            for start_ms, end_ms, y0, y1, label, key in sorted(
+                visible_specs,
+                key=lambda spec: (float(spec[0]), float(spec[1]), str(spec[5])),
+            ):
+                clamped_start = max(float(start_ms), float(visible_start))
+                clamped_end = min(float(end_ms), float(visible_end))
+                if clamped_end <= clamped_start:
+                    continue
+                clamped_specs.append(
+                    (
+                        float(clamped_start),
+                        float(clamped_end),
+                        float(y0),
+                        float(y1),
+                        str(label),
+                        str(key),
+                    )
+                )
+
+            if clamped_specs:
+                starts = np.array([spec[0] for spec in clamped_specs], dtype=float)
+                ends = np.array([spec[1] for spec in clamped_specs], dtype=float)
+                metas = [(spec[2], spec[3], spec[4], spec[5]) for spec in clamped_specs]
+
+                pixel_meta: list[tuple[float, float, str, str] | None] = [None] * width_px
+                spec_idx = 0
+                for px in range(width_px):
+                    center_ms = float(visible_start) + ((float(px) + 0.5) / float(width_px)) * float(span_ms)
+                    while spec_idx < len(clamped_specs) and center_ms >= ends[spec_idx]:
+                        spec_idx += 1
+                    if spec_idx < len(clamped_specs) and starts[spec_idx] <= center_ms < ends[spec_idx]:
+                        pixel_meta[px] = metas[spec_idx]
+                        continue
+                    prev_idx = spec_idx - 1
+                    if prev_idx >= 0 and starts[prev_idx] <= center_ms <= ends[prev_idx]:
+                        pixel_meta[px] = metas[prev_idx]
+
+                pixel_runs: list[tuple[int, int, float, float, str, str]] = []
+                run_start_px: int | None = None
+                run_meta: tuple[float, float, str, str] | None = None
+                for px, meta in enumerate(pixel_meta):
+                    if meta == run_meta:
+                        continue
+                    if run_meta is not None and run_start_px is not None:
+                        y0, y1, label, key = run_meta
+                        pixel_runs.append((int(run_start_px), int(px), float(y0), float(y1), str(label), str(key)))
+                    run_start_px = None if meta is None else int(px)
+                    run_meta = meta
+                if run_meta is not None and run_start_px is not None:
+                    y0, y1, label, key = run_meta
+                    pixel_runs.append((int(run_start_px), int(width_px), float(y0), float(y1), str(label), str(key)))
+
+                visible_specs = []
+                for left_px, right_px, y0, y1, label, key in pixel_runs:
+                    if right_px <= left_px:
+                        continue
+                    start_ms = float(visible_start) + (float(left_px) / float(width_px)) * float(span_ms)
+                    end_ms = float(visible_start) + (float(right_px) / float(width_px)) * float(span_ms)
+                    if end_ms <= start_ms:
+                        end_ms = start_ms + 1.0
+                    visible_specs.append((start_ms, end_ms, y0, y1, label, key))
+            else:
+                visible_specs = []
+
+            lane_count = len({str(spec[5]) for spec in visible_specs}) if visible_specs else 1
+            cap = int(
+                self._visible_group_box_cap(
+                    plot_width=float(plot_area.width()),
+                    plot_height=float(plot_area.height()),
+                    lane_count=max(1, lane_count),
+                )
+            )
+            if cap > 0 and len(visible_specs) > cap:
+                keep_idx = np.linspace(0, len(visible_specs) - 1, num=cap, dtype=int)
+                keep_idx = np.unique(keep_idx)
+                visible_specs = [visible_specs[int(i)] for i in keep_idx.tolist()]
 
         font = QFont()
         font.setPointSize(8)
