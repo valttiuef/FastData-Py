@@ -482,6 +482,7 @@ class DataTab(TabWidget):
     def _on_monthly_bucket_selected(self, start_ts, end_ts, level_code: str):
         if start_ts is None or end_ts is None:
             return
+        self._set_date_range_filters_enabled(True)
         self._set_dt_controls_from_range(start_ts, end_ts)
         level = str(level_code or "")
         if level == "h":
@@ -514,6 +515,7 @@ class DataTab(TabWidget):
         b0, b1 = self._view_model.time_bounds(flt_for_bounds)
         if b0 is None or b1 is None:
             return
+        self._set_date_range_filters_enabled(True)
         self._set_dt_controls_from_range(b0, b1)
         self._reload_now(force=True)
 
@@ -735,6 +737,12 @@ class DataTab(TabWidget):
             return
         if end_ts <= start_ts:
             return
+        filters_widget = getattr(self.sidebar.data_selector, "filters_widget", None)
+        if filters_widget is not None:
+            try:
+                filters_widget.set_date_range_enabled(True, emit_signals=False)
+            except Exception:
+                logger.warning("Exception in _on_chart_range_changed", exc_info=True)
         self._last_chart_range = (start_ts, end_ts)
 
         t_set_view_cached = time.perf_counter()
@@ -803,17 +811,35 @@ class DataTab(TabWidget):
         b0, b1 = self._view_model.time_bounds(flt_for_bounds)
         if b0 is None or b1 is None:
             return
+        filters_widget = getattr(self.sidebar.data_selector, "filters_widget", None)
+        date_range_was_enabled = True
+        if filters_widget is not None:
+            try:
+                date_range_was_enabled = bool(filters_widget.is_date_range_enabled())
+                filters_widget.set_date_range_enabled(False, emit_signals=False)
+            except Exception:
+                logger.warning("Exception in _on_chart_reset_requested", exc_info=True)
         already_at_bounds = (
             self._timestamps_match(flt.start, b0)
             and self._timestamps_match(flt.end, b1)
         )
         self._set_dt_controls_from_range(b0, b1)
-        if already_at_bounds:
+        if already_at_bounds and not date_range_was_enabled:
             return
         # Full reload with these new dt edits
         self._reload_now(force=True)
 
     # --- helpers
+    def _set_date_range_filters_enabled(self, enabled: bool) -> None:
+        filters_widget = getattr(self.sidebar.data_selector, "filters_widget", None)
+        if filters_widget is None:
+            return
+        try:
+            filters_widget.set_start_date_enabled(bool(enabled), emit_signals=False)
+            filters_widget.set_end_date_enabled(bool(enabled), emit_signals=False)
+        except Exception:
+            logger.warning("Exception in _set_date_range_filters_enabled", exc_info=True)
+
     def _set_dt_controls_from_range(self, start_ts, end_ts):
         if start_ts is None or end_ts is None:
             return

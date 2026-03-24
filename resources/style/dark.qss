@@ -71,6 +71,41 @@ QLabel#aboutCopyrightLabel {
     font-size: 10px;
 }
 
+QLabel#filterControlWatermark {
+    color: #8f8f8f;
+    font-style: italic;
+}
+
+QFrame#dateTimeFilterControl {
+    background: transparent;
+}
+
+QLineEdit#dateTimeFilterDisplay {
+    border-top-right-radius: 0px;
+    border-bottom-right-radius: 0px;
+}
+
+QToolButton#dateTimeFilterButton {
+    padding: 0px;
+    margin: 0px;
+    min-width: 18px;
+    max-width: 20px;
+    border-left: 0px;
+    border-top-left-radius: 0px;
+    border-bottom-left-radius: 0px;
+}
+
+QLineEdit#dateTimeFilterDisplay[dateControlDisabled="true"] {
+    color: #8f8f8f;
+    font-style: italic;
+}
+
+QFrame#dateTimeFilterPopup {
+    background: #2a2a2a;
+    border: 1px solid #4a4a4a;
+    border-radius: 6px;
+}
+
 /* GroupBox */
 QGroupBox {
     border: 1px solid #3a3a3a;

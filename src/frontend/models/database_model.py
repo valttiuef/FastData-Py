@@ -3136,20 +3136,44 @@ class DatabaseModel(QObject):
 
     def _normalize_filter_state(self, state: Dict[str, Any]) -> Dict[str, Any]:
         normalized: Dict[str, Any] = {}
+        start_enabled = state.get("start_enabled")
+        end_enabled = state.get("end_enabled")
+        if start_enabled is None and end_enabled is None:
+            date_range_enabled = state.get("date_range_enabled", False)
+            if isinstance(date_range_enabled, str):
+                date_range_enabled = date_range_enabled.strip().lower() in {"1", "true", "yes", "on"}
+            else:
+                date_range_enabled = bool(date_range_enabled)
+            start_enabled = bool(date_range_enabled)
+            end_enabled = bool(date_range_enabled)
+        else:
+            if isinstance(start_enabled, str):
+                start_enabled = start_enabled.strip().lower() in {"1", "true", "yes", "on"}
+            else:
+                start_enabled = bool(start_enabled) if start_enabled is not None else False
+            if isinstance(end_enabled, str):
+                end_enabled = end_enabled.strip().lower() in {"1", "true", "yes", "on"}
+            else:
+                end_enabled = bool(end_enabled) if end_enabled is not None else False
+        normalized["start_enabled"] = bool(start_enabled)
+        normalized["end_enabled"] = bool(end_enabled)
+        normalized["date_range_enabled"] = bool(start_enabled or end_enabled)
 
-        start = state.get("start")
-        if start:
-            try:
-                normalized["start"] = pd.Timestamp(start)
-            except Exception:
-                logger.warning("Exception in _normalize_filter_state", exc_info=True)
+        if start_enabled:
+            start = state.get("start")
+            if start:
+                try:
+                    normalized["start"] = pd.Timestamp(start)
+                except Exception:
+                    logger.warning("Exception in _normalize_filter_state", exc_info=True)
 
-        end = state.get("end")
-        if end:
-            try:
-                normalized["end"] = pd.Timestamp(end)
-            except Exception:
-                logger.warning("Exception in _normalize_filter_state", exc_info=True)
+        if end_enabled:
+            end = state.get("end")
+            if end:
+                try:
+                    normalized["end"] = pd.Timestamp(end)
+                except Exception:
+                    logger.warning("Exception in _normalize_filter_state", exc_info=True)
 
         systems: list[str] = []
         for item in state.get("systems", []) or []:

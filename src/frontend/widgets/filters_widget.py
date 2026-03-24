@@ -5,7 +5,6 @@ from typing import Any, Iterable, Optional
 import pandas as pd
 from PySide6.QtCore import QDateTime, Qt, Signal, QObject
 from PySide6.QtWidgets import (
-    QDateTimeEdit,
     QGridLayout,
     QGroupBox,
     QLabel,
@@ -27,10 +26,10 @@ from ..threading.utils import run_in_main_thread
 from ..utils import toast_error, toast_success
 from .help_widgets import InfoButton
 from ..viewmodels.help_viewmodel import HelpViewModel, get_help_viewmodel
+from .date_time_filter_control import DateTimeFilterControl
 
 NO_GROUP_FILTER_VALUE = -1
 NO_TAG_FILTER_VALUE = "__NO_TAG__"
-
 
 
 class FiltersWidgetViewModel(QObject):
@@ -431,19 +430,25 @@ class FiltersWidget(CollapsibleSection):
         from_label = self._make_label(tr("From:"))
         date_range_info = self._make_info("controls.filters.date_range")
         grid.addWidget(from_label, 1, 0, Qt.AlignmentFlag.AlignRight)
-        self.dt_from = QDateTimeEdit()
-        self.dt_from.setDisplayFormat("dd/MM/yyyy HH:mm")
-        self.dt_from.setCalendarPopup(True)
-        self.dt_from.setDateTime(QDateTime.currentDateTime().addYears(-10))
-        grid.addWidget(self.dt_from, 1, 1)
+        self.start_datetime_control = DateTimeFilterControl(
+            enabled_label=tr("Enable"),
+            watermark_text=tr("Disabled"),
+            initial_datetime=QDateTime.currentDateTime().addYears(-10),
+            initial_enabled=False,
+            parent=self,
+        )
+        grid.addWidget(self.start_datetime_control, 1, 1)
 
         to_label = self._make_label(tr("To:"))
         grid.addWidget(to_label, 1, 3, Qt.AlignmentFlag.AlignRight)
-        self.dt_to = QDateTimeEdit()
-        self.dt_to.setDisplayFormat("dd/MM/yyyy HH:mm")
-        self.dt_to.setCalendarPopup(True)
-        self.dt_to.setDateTime(QDateTime.currentDateTime())
-        grid.addWidget(self.dt_to, 1, 4)
+        self.end_datetime_control = DateTimeFilterControl(
+            enabled_label=tr("Enable"),
+            watermark_text=tr("Disabled"),
+            initial_datetime=QDateTime.currentDateTime(),
+            initial_enabled=False,
+            parent=self,
+        )
+        grid.addWidget(self.end_datetime_control, 1, 4)
         if date_range_info:
             grid.addWidget(date_range_info, 1, 5, Qt.AlignmentFlag.AlignLeft)
 
@@ -494,8 +499,18 @@ class FiltersWidget(CollapsibleSection):
         self.months_combo.set_items(months, check_all=True)
 
         # Signals
-        self.dt_from.dateTimeChanged.connect(lambda _dt: self._emit_filter_change("date_range_changed"))
-        self.dt_to.dateTimeChanged.connect(lambda _dt: self._emit_filter_change("date_range_changed"))
+        self.start_datetime_control.date_time_changed.connect(
+            lambda _dt: self._emit_filter_change("date_range_changed")
+        )
+        self.end_datetime_control.date_time_changed.connect(
+            lambda _dt: self._emit_filter_change("date_range_changed")
+        )
+        self.start_datetime_control.enabled_changed.connect(
+            lambda _checked: self._emit_filter_change("date_range_changed")
+        )
+        self.end_datetime_control.enabled_changed.connect(
+            lambda _checked: self._emit_filter_change("date_range_changed")
+        )
         self.systems_combo.selection_changed.connect(self._on_systems_selection_changed)
         self.datasets_combo.selection_changed.connect(self._on_datasets_selection_changed)
         self.imports_combo.selection_changed.connect(self._on_imports_selection_changed)
@@ -815,6 +830,9 @@ class FiltersWidget(CollapsibleSection):
         start = self.start_timestamp()
         end = self.end_timestamp()
         return {
+            "start_enabled": bool(self.is_start_date_enabled()),
+            "end_enabled": bool(self.is_end_date_enabled()),
+            "date_range_enabled": bool(self.is_date_range_enabled()),
             "start": start.isoformat() if start is not None else None,
             "end": end.isoformat() if end is not None else None,
             "systems": self.selected_systems(),
@@ -829,7 +847,19 @@ class FiltersWidget(CollapsibleSection):
         self._apply_filter_state_with_dependencies(dict(state or {}))
 
     def _apply_filter_state_with_dependencies(self, state: dict[str, Any]) -> None:
-        def _set_qdt(widget: QDateTimeEdit, value: str | None) -> None:
+        start_enabled_raw = state.get("start_enabled")
+        end_enabled_raw = state.get("end_enabled")
+        if start_enabled_raw is None and end_enabled_raw is None:
+            range_enabled = _parse_bool_value(state.get("date_range_enabled", False), default=False)
+            start_enabled = range_enabled
+            end_enabled = range_enabled
+        else:
+            start_enabled = _parse_bool_value(start_enabled_raw, default=False)
+            end_enabled = _parse_bool_value(end_enabled_raw, default=False)
+        self.set_start_date_enabled(start_enabled, emit_signals=False)
+        self.set_end_date_enabled(end_enabled, emit_signals=False)
+
+        def _set_qdt(control: DateTimeFilterControl, value: str | None) -> None:
             if not value:
                 return
             try:
@@ -841,14 +871,10 @@ class FiltersWidget(CollapsibleSection):
                 ts.hour, ts.minute, ts.second,
                 int(ts.microsecond / 1000),
             )
-            was = widget.blockSignals(True)
-            try:
-                widget.setDateTime(qdt)
-            finally:
-                widget.blockSignals(was)
+            control.set_date_time(qdt, emit_signal=False)
 
-        _set_qdt(self.dt_from, state.get("start"))
-        _set_qdt(self.dt_to, state.get("end"))
+        _set_qdt(self.start_datetime_control, state.get("start"))
+        _set_qdt(self.end_datetime_control, state.get("end"))
 
         raw_systems = self._state_values(state, "systems")
         wanted_systems: list[str] | None = None
@@ -966,8 +992,8 @@ class FiltersWidget(CollapsibleSection):
 
         widgets = [
             self,
-            self.dt_from,
-            self.dt_to,
+            self.start_datetime_control,
+            self.end_datetime_control,
             self.systems_combo,
             self.datasets_combo,
             self.imports_combo,
@@ -1020,6 +1046,8 @@ class FiltersWidget(CollapsibleSection):
     def _emit_filter_signals_now(self, signal_names: set[str]) -> None:
         emit_key = (
             tuple(sorted(signal_names)),
+            bool(self.is_start_date_enabled()),
+            bool(self.is_end_date_enabled()),
             self.filter_state().get("start"),
             self.filter_state().get("end"),
             tuple(self.selected_systems()),
@@ -1229,10 +1257,53 @@ class FiltersWidget(CollapsibleSection):
 
     # ------------------------------------------------------------------
     def start_timestamp(self) -> pd.Timestamp | None:
-        return _parse_qdatetime(self.dt_from.dateTime())
+        if not self.is_start_date_enabled():
+            return None
+        return _parse_qdatetime(self.start_datetime_control.date_time())
 
     def end_timestamp(self) -> pd.Timestamp | None:
-        return _parse_qdatetime(self.dt_to.dateTime())
+        if not self.is_end_date_enabled():
+            return None
+        return _parse_qdatetime(self.end_datetime_control.date_time())
+
+    # @ai(gpt-5, codex-cli, feature, 2026-03-24)
+    def set_date_range_enabled(self, enabled: bool, *, emit_signals: bool = True) -> None:
+        self.set_start_date_enabled(bool(enabled), emit_signals=False)
+        self.set_end_date_enabled(bool(enabled), emit_signals=False)
+        if emit_signals:
+            self._emit_filter_change("date_range_changed")
+
+    # @ai(gpt-5, codex-cli, feature, 2026-03-24)
+    def is_start_date_enabled(self) -> bool:
+        return bool(self.start_datetime_control.is_enabled())
+
+    # @ai(gpt-5, codex-cli, feature, 2026-03-24)
+    def is_end_date_enabled(self) -> bool:
+        return bool(self.end_datetime_control.is_enabled())
+
+    # @ai(gpt-5, codex-cli, feature, 2026-03-24)
+    def is_date_range_enabled(self) -> bool:
+        return bool(self.is_start_date_enabled() or self.is_end_date_enabled())
+
+    # @ai(gpt-5, codex-cli, feature, 2026-03-24)
+    def set_start_date_enabled(self, enabled: bool, *, emit_signals: bool = True) -> None:
+        self.start_datetime_control.set_enabled(bool(enabled), emit_signal=emit_signals)
+
+    # @ai(gpt-5, codex-cli, feature, 2026-03-24)
+    def set_end_date_enabled(self, enabled: bool, *, emit_signals: bool = True) -> None:
+        self.end_datetime_control.set_enabled(bool(enabled), emit_signal=emit_signals)
+
+    # @ai(gpt-5, codex-cli, feature, 2026-03-24)
+    def set_start_date_time(self, value: QDateTime, *, emit_signals: bool = False) -> None:
+        self.start_datetime_control.set_date_time(value, emit_signal=emit_signals)
+        if emit_signals:
+            self._emit_filter_change("date_range_changed")
+
+    # @ai(gpt-5, codex-cli, feature, 2026-03-24)
+    def set_end_date_time(self, value: QDateTime, *, emit_signals: bool = False) -> None:
+        self.end_datetime_control.set_date_time(value, emit_signal=emit_signals)
+        if emit_signals:
+            self._emit_filter_change("date_range_changed")
 
     def _make_label(self, text: str) -> QLabel:
         label = QLabel(text)
@@ -1262,3 +1333,16 @@ def _parse_qdatetime(qdt: QDateTime) -> pd.Timestamp | None:
         )
     except Exception:
         return None
+
+
+def _parse_bool_value(value: Any, *, default: bool) -> bool:
+    if value is None:
+        return bool(default)
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"1", "true", "yes", "on"}:
+            return True
+        if text in {"0", "false", "no", "off"}:
+            return False
+        return bool(default)
+    return bool(value)

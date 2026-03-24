@@ -1120,6 +1120,9 @@ class DataSelectorWidget(QGroupBox):
     @staticmethod
     def _full_filter_state_key(state: Mapping[str, Any]) -> tuple:
         return (
+            bool(state.get("start_enabled", state.get("date_range_enabled", False))),
+            bool(state.get("end_enabled", state.get("date_range_enabled", False))),
+            bool(state.get("date_range_enabled", False)),
             state.get("start"),
             state.get("end"),
             tuple(state.get("systems") or []),
@@ -1133,6 +1136,9 @@ class DataSelectorWidget(QGroupBox):
     @staticmethod
     def _data_state_key(data_scope: Mapping[str, Any]) -> tuple:
         return (
+            bool(data_scope.get("start_enabled", data_scope.get("date_range_enabled", False))),
+            bool(data_scope.get("end_enabled", data_scope.get("date_range_enabled", False))),
+            bool(data_scope.get("date_range_enabled", False)),
             data_scope.get("start"),
             data_scope.get("end"),
             tuple(data_scope.get("systems") or []),
@@ -1192,6 +1198,9 @@ class DataSelectorWidget(QGroupBox):
             import_ids = list(state.get("import_ids") or [])
 
         return {
+            "start_enabled": bool(state.get("start_enabled", state.get("date_range_enabled", False))),
+            "end_enabled": bool(state.get("end_enabled", state.get("date_range_enabled", False))),
+            "date_range_enabled": bool(state.get("date_range_enabled", False)),
             "start": state.get("start"),
             "end": state.get("end"),
             "systems": systems,

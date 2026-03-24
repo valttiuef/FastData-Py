@@ -219,13 +219,15 @@ Scope results by system and dataset in one place.
 
 ##### Date range
 
-Limit data between a start and end timestamp.
+Optionally limit data between a start and end timestamp.
 
-<p>Pick a starting and ending date/time to bound the records that are loaded, previewed, and charted.</p>
+<p>Use the compact <b>From</b> and <b>To</b> controls and open each picker to edit its calendar/time and enable state.</p>
 <ul>
-  <li>Set only the start to include everything after that point.</li>
-  <li>Set only the end to include everything up to that timestamp.</li>
-  <li>Leave both empty to include the full available history.</li>
+  <li>You can enable only start, only end, or both.</li>
+  <li>Disable a boundary inside the opened picker instead of a separate always-visible checkbox.</li>
+  <li>Disabled controls show a watermark so it is clear that boundary is not active.</li>
+  <li>Enable both to focus the scope for analysis and exports.</li>
+  <li>In chart view, pan/zoom enables date range automatically; Home reset clears it automatically.</li>
 </ul>
 
 

@@ -2,7 +2,7 @@
 from __future__ import annotations
 from PySide6.QtWidgets import (
 
-    QVBoxLayout, QLabel, QCheckBox, QPushButton,
+    QVBoxLayout, QLabel, QPushButton,
     QGroupBox
 )
 from ...localization import tr
@@ -81,10 +81,6 @@ class Sidebar(SidebarWidget):
         return self.data_selector.filters_widget.selected_group_ids()
 
     def set_date_range_controls(self, start: QDateTime, end: QDateTime) -> None:
-        for widget, value in (
-            (self.data_selector.filters_widget.dt_from, start),
-            (self.data_selector.filters_widget.dt_to, end),
-        ):
-            was_blocked = widget.blockSignals(True)
-            widget.setDateTime(value)
-            widget.blockSignals(was_blocked)
+        filters_widget = self.data_selector.filters_widget
+        filters_widget.set_start_date_time(start, emit_signals=False)
+        filters_widget.set_end_date_time(end, emit_signals=False)
