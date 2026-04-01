@@ -72,6 +72,8 @@ class SelectionsTab(TabWidget):
         self._select_all_default = True
         self._pending_toast_action: Optional[str] = None
         self._group_filters_refresh_pending = False
+        self._features_refresh_pending = False
+        self._full_refresh_pending = False
         super().__init__(parent)
 
         self._table_model.setParent(self)
@@ -174,28 +176,31 @@ class SelectionsTab(TabWidget):
 
     # ------------------------------------------------------------------
     def _on_database_changed(self, *_args) -> None:
-        # Keep the embedded DataSelectorWidget on the same refresh path as every
-        # other selector in the app. Avoid calling filters_widget.refresh_filters()
-        # directly because that bypasses the widget/viewmodel sequencing and can
-        # repopulate datasets/imports with all items.
-        try:
-            self.sidebar.data_selector.view_model.refresh_from_model()
-        except Exception:
-            logger.warning("Exception in _on_database_changed", exc_info=True)
+        # DataSelectorWidget already listens to DatabaseModel signals directly.
+        # Coalesce bursty DB change notifications to one Selections refresh pass.
+        if self._full_refresh_pending:
+            return
+        self._full_refresh_pending = True
+        QTimer.singleShot(0, self._flush_full_refresh)
 
+    def _flush_full_refresh(self) -> None:
+        self._full_refresh_pending = False
         self._view_model.refresh()
 
     def _on_selection_database_changed(self, *_args) -> None:
         self._view_model._refresh_settings()
 
     def _on_features_list_changed(self) -> None:
-        # Same rule as startup/database changes: let the embedded DataSelectorWidget
-        # refresh through its own view model instead of forcing a raw filter refresh.
-        try:
-            self.sidebar.data_selector.view_model.refresh_from_model()
-        except Exception:
-            logger.warning("Exception in _on_features_list_changed", exc_info=True)
+        # DataSelectorWidget and filter widgets already subscribe to
+        # features_list_changed. Keep Selections tab refresh coalesced to avoid
+        # stacked duplicate refresh work during rapid feature-update bursts.
+        if self._features_refresh_pending:
+            return
+        self._features_refresh_pending = True
+        QTimer.singleShot(0, self._flush_features_refresh)
 
+    def _flush_features_refresh(self) -> None:
+        self._features_refresh_pending = False
         self._view_model.refresh_features()
 
     def _on_scope_filters_changed(self, *_args) -> None:

@@ -360,6 +360,7 @@ class SelectionsViewModel(QObject):
             return pd.DataFrame(columns=["group_id", "kind", "label"])
 
     # ------------------------------------------------------------------
+    # @ai(gpt-5, codex-cli, fix, 2026-04-01)
     def save_features(
         self,
         new_features: Sequence[dict],
@@ -417,10 +418,9 @@ class SelectionsViewModel(QObject):
                     "deleted_count": len(delete_ids),
                 }
             )
-            try:
-                self.features_changed.emit(self._database_model.all_features_df())
-            except Exception:
-                self._refresh_features()
+            # Avoid synchronous all_features_df() here: it can perform a heavy
+            # DB read on the UI thread right after save. Refresh is already
+            # triggered via DatabaseModel.features_list_changed listeners.
 
         self._run_in_thread(_save, on_result=lambda result: run_in_main_thread(_apply, result))
 

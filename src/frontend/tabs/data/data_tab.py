@@ -472,6 +472,18 @@ class DataTab(TabWidget):
             names=names, start=s, end=e, rows=rows, timestep=timestep_str
         )
 
+    def _effective_display_row_count(self, frame: pd.DataFrame | None) -> int:
+        """Count rows with at least one visible numeric value for info display."""
+        if frame is None or not isinstance(frame, pd.DataFrame) or frame.empty:
+            return 0
+        value_columns = [col for col in frame.columns if col != "t"]
+        if not value_columns:
+            return int(len(frame))
+        try:
+            return int(frame[value_columns].notna().any(axis=1).sum())
+        except Exception:
+            return int(len(frame))
+
     def _update_features_info_button(self, flt: DataFilters | None) -> None:
         try:
             self.features_info_button.setEnabled(bool(flt and getattr(flt, "features", None)))
@@ -498,8 +510,9 @@ class DataTab(TabWidget):
             flt = self._build_filters()
             if flt:
                 self._sync_monthly_chart_title(flt.clone_with_range(start_ts, end_ts))
+                display_rows = self._effective_display_row_count(series_df)
                 self.data_info.setText(
-                    self._build_data_info_text(flt, start_ts, end_ts, rows=len(series_df))
+                    self._build_data_info_text(flt, start_ts, end_ts, rows=display_rows)
                 )
             self._update_features_info_button(flt)
             return
@@ -684,8 +697,9 @@ class DataTab(TabWidget):
             flt = self._build_filters()
             if flt:
                 self._sync_monthly_chart_title(flt.clone_with_range(visible_start, visible_end))
+                display_rows = self._effective_display_row_count(series_df)
                 self.data_info.setText(
-                    self._build_data_info_text(flt, visible_start, visible_end, rows=len(series_df))
+                    self._build_data_info_text(flt, visible_start, visible_end, rows=display_rows)
                 )
             self._update_features_info_button(flt)
 
@@ -793,8 +807,9 @@ class DataTab(TabWidget):
         flt = self._build_filters()
         if flt:
             self._sync_monthly_chart_title(flt.clone_with_range(start_ts, end_ts))
+            display_rows = self._effective_display_row_count(series_df)
             self.data_info.setText(
-                self._build_data_info_text(flt, start_ts, end_ts, rows=len(series_df))
+                self._build_data_info_text(flt, start_ts, end_ts, rows=display_rows)
             )
         self._update_features_info_button(flt)
         _perf("total", perf_total_started, rows=len(series_df))
@@ -1212,8 +1227,9 @@ class DataTab(TabWidget):
         self._sync_monthly_chart_title(title_filters)
         _perf("sync_monthly_title", t_title)
 
+        display_rows = self._effective_display_row_count(series_df)
         self.data_info.setText(
-            self._build_data_info_text(flt, b0, b1, rows=len(series_df))
+            self._build_data_info_text(flt, b0, b1, rows=display_rows)
         )
         self._update_features_info_button(flt)
         self._last_requirements_key = requirements_key
