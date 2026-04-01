@@ -895,7 +895,11 @@ class RegressionViewModel(QObject):
                     toast_warn(warning_text, title="Regression", tab_key="regression")
                 except Exception:
                     logger.warning("Exception in _handle_service_status_update", exc_info=True)
-            self._handle_status_update("Regression inputs adjusted.")
+            lowered = warning_text.lower()
+            if lowered.startswith("stratified k-fold merged small strata:"):
+                self._handle_status_update("Stratification groups merged.")
+            else:
+                self._handle_status_update("Regression inputs adjusted.")
             return
         if text:
             self._log_info(text)

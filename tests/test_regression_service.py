@@ -5,6 +5,7 @@ import uuid
 import pandas as pd
 import numpy as np
 import pytest
+from sklearn.model_selection import KFold
 
 sys.path.insert(0, str((Path(__file__).parent.parent / "src").resolve()))
 
@@ -13,6 +14,7 @@ from backend.models import HeaderRoles, ImportOptions
 from backend.services.feature_selection_service import FeatureSelectionService
 from backend.services.modeling_shared import prepare_wide_frame
 from backend.services.regression_service import RegressionService
+import backend.services.regression_service as regression_service_module
 
 TEST_DIR = Path(__file__).parent
 TEST_IMPORTS_DIR = TEST_DIR / "test_data" / "imports"
@@ -845,3 +847,62 @@ def test_import_to_regression_pipeline_csv_supports_group_and_stratified_modes(p
 
 def test_import_to_regression_pipeline_excel_supports_group_and_stratified_modes(pipeline_context_excel):
     _assert_pipeline_regression_modes(pipeline_context_excel)
+
+
+def test_stratified_kfold_reports_small_strata_merge_mapping() -> None:
+    service = RegressionService(StubDatabase(), feature_selection_service=FeatureSelectionService())
+    size = 58
+    X = pd.DataFrame({"x": np.linspace(0.0, 1.0, size)})
+    y = pd.Series(np.linspace(1.0, 2.0, size))
+    stratify = pd.Series((["A"] * 30) + (["B"] * 25) + (["C"] * 2) + (["D"] * 1))
+    status_messages: list[str] = []
+
+    cv = service._build_cv(
+        X,
+        y,
+        strategy="stratified_kfold",
+        folds=5,
+        shuffle=True,
+        random_state=0,
+        stratify_series=stratify,
+        stratify_bins=5,
+        gap=0,
+        status_callback=status_messages.append,
+    )
+
+    assert cv is not None
+    merge_warnings = [msg for msg in status_messages if "Stratified K-Fold merged small strata:" in msg]
+    assert merge_warnings
+    assert "C->" in merge_warnings[0]
+    assert "D->" in merge_warnings[0]
+
+
+def test_stratified_kfold_merge_guardrails_prevent_over_combining(monkeypatch) -> None:
+    service = RegressionService(StubDatabase(), feature_selection_service=FeatureSelectionService())
+    size = 62
+    X = pd.DataFrame({"x": np.linspace(0.0, 1.0, size)})
+    y = pd.Series(np.linspace(1.0, 2.0, size))
+    stratify = pd.Series((["A"] * 30) + (["B"] * 30) + (["C"] * 1) + (["D"] * 1))
+    status_messages: list[str] = []
+
+    monkeypatch.setattr(regression_service_module, "TRAINING_STRATIFIED_KFOLD_MAX_SMALL_GROUPS_TO_MERGE", 1)
+    monkeypatch.setattr(regression_service_module, "TRAINING_STRATIFIED_KFOLD_MAX_MERGED_ROW_SHARE", 0.25)
+
+    cv = service._build_cv(
+        X,
+        y,
+        strategy="stratified_kfold",
+        folds=5,
+        shuffle=True,
+        random_state=0,
+        stratify_series=stratify,
+        stratify_bins=5,
+        gap=0,
+        status_callback=status_messages.append,
+    )
+
+    assert isinstance(cv, KFold)
+    assert any(
+        "Not enough samples per stratum for Stratified K-Fold; falling back to K-Fold." in msg
+        for msg in status_messages
+    )

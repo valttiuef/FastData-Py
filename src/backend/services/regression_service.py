@@ -14,6 +14,8 @@ from core.training_settings import (
     TRAINING_SPARSE_FEATURE_NAN_RATIO_THRESHOLD,
     TRAINING_STATIC_FEATURE_MAX_UNIQUE_NON_NULL,
     TRAINING_STRATIFIED_KFOLD_MERGE_SMALL_GROUPS,
+    TRAINING_STRATIFIED_KFOLD_MAX_SMALL_GROUPS_TO_MERGE,
+    TRAINING_STRATIFIED_KFOLD_MAX_MERGED_ROW_SHARE,
 )
 
 from sklearn.base import RegressorMixin, clone
@@ -900,7 +902,7 @@ class RegressionService:
                         merged_preview = ", ".join(merged_source_labels[:8])
                         if len(merged_source_labels) > 8:
                             merged_preview = f"{merged_preview}, ..."
-                        _warn(f"Stratified K-Fold combined small strata into one group: {merged_preview}.")
+                        _warn(f"Stratified K-Fold merged small strata: {merged_preview}.")
                     else:
                         _warn("Not enough samples per stratum for Stratified K-Fold; falling back to K-Fold.")
                         return KFold(n_splits=folds, shuffle=shuffle, random_state=random_state)
@@ -1114,6 +1116,7 @@ class RegressionService:
             return None
         return labels
 
+    # @ai(gpt-5, codex, refactor, 2026-04-01)
     def _merge_small_strata_for_kfold(self, labels: pd.Series, folds: int) -> Optional[tuple[pd.Series, list[str]]]:
         if folds <= 1:
             return labels, []
@@ -1123,23 +1126,55 @@ class RegressionService:
         if int(counts.min()) >= folds:
             return labels, []
 
-        small_labels = counts[counts < folds].index.tolist()
-        if not small_labels:
+        small_counts = counts[counts < folds]
+        if small_counts.empty:
             return labels, []
-        small_label_names = [str(v) for v in small_labels]
 
-        merged = labels.astype("string").copy()
-        merged_label = "__combined_small_strata__"
-        while merged_label in set(merged.dropna().unique()):
-            merged_label = f"{merged_label}_x"
-        merged = merged.where(~merged.isin(small_labels), other=merged_label)
+        small_group_limit = max(0, int(TRAINING_STRATIFIED_KFOLD_MAX_SMALL_GROUPS_TO_MERGE))
+        if small_group_limit and int(len(small_counts)) > small_group_limit:
+            return None
+
+        merged_row_share_limit = float(TRAINING_STRATIFIED_KFOLD_MAX_MERGED_ROW_SHARE)
+        total_rows = int(len(labels))
+        small_rows = int(small_counts.sum())
+        if total_rows <= 0:
+            return None
+        if merged_row_share_limit >= 0 and (small_rows / total_rows) > merged_row_share_limit:
+            return None
+
+        large_counts = counts[counts >= folds]
+
+        labels_as_string = labels.astype("string")
+        merged = labels_as_string.copy()
+        merge_notes: list[str] = []
+
+        if not large_counts.empty:
+            # Reassign undersized strata into already-valid strata to preserve
+            # StratifiedKFold feasibility when only a few small strata exist.
+            target_counts: dict[str, int] = {str(k): int(v) for k, v in large_counts.items()}
+            target_labels = list(target_counts.keys())
+            small_pairs = [(str(label), int(cnt)) for label, cnt in small_counts.items()]
+            small_pairs.sort(key=lambda item: item[1], reverse=True)
+
+            for small_label, _count in small_pairs:
+                target = min(target_labels, key=lambda lbl: target_counts[lbl])
+                merged = merged.where(merged != small_label, other=target)
+                target_counts[target] += int((labels_as_string == small_label).sum())
+                merge_notes.append(f"{small_label}->{target}")
+        else:
+            small_labels = [str(v) for v in small_counts.index.tolist()]
+            merged_label = "__combined_small_strata__"
+            while merged_label in set(merged.dropna().unique()):
+                merged_label = f"{merged_label}_x"
+            merged = merged.where(~merged.isin(small_labels), other=merged_label)
+            merge_notes = small_labels
 
         merged_counts = merged.value_counts(dropna=True)
         if merged_counts.empty or len(merged_counts) < 2:
             return None
         if int(merged_counts.min()) < folds:
             return None
-        return merged, small_label_names
+        return merged, merge_notes
 
     def _cross_validate(self, pipeline: Pipeline, X: pd.DataFrame, y: pd.Series, cv) -> dict[str, list[float]]:
         if cv is None:
