@@ -1257,6 +1257,7 @@ class _ChatBubbleWidget(QWidget):
         self._available_width = 800
         self._raw_content = ""
         self._thinking_toggle_button: Optional[QToolButton] = None
+        self._thinking_toggle_handler: Optional[Callable[[], None]] = None
         self._thinking_view: Optional[QTextBrowser] = None
 
         layout = QHBoxLayout(self)
@@ -1435,12 +1436,16 @@ class _ChatBubbleWidget(QWidget):
         self._set_copy_button_icon(role)
 
         if self._thinking_toggle_button is not None:
-            try:
-                self._thinking_toggle_button.clicked.disconnect()
-            except Exception:
-                pass
+            if self._thinking_toggle_handler is not None:
+                try:
+                    self._thinking_toggle_button.clicked.disconnect(self._thinking_toggle_handler)
+                except Exception:
+                    pass
+                finally:
+                    self._thinking_toggle_handler = None
             if on_toggle_thinking is not None:
                 self._thinking_toggle_button.clicked.connect(on_toggle_thinking)
+                self._thinking_toggle_handler = on_toggle_thinking
             has_thoughts = bool(thinking.strip())
             label = tr("Thoughts")
             if thinking_active:
