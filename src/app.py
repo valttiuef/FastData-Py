@@ -25,7 +25,7 @@ QGuiApplication.setHighDpiScaleFactorRoundingPolicy(
 from PySide6.QtWidgets import QApplication, QSplashScreen, QMessageBox
 from PySide6.QtGui import QPixmap, QColor, QIcon
 from core.paths import get_icon_path, get_splash_image_path
-from core.settings_manager import SettingsManager
+from core.settings_manager import configure_settings_manager
 from frontend.localization import init_localization_manager
 from backend.services.logging import configure_logging, install_global_exception_hooks
 from backend.services.logging.storage import crash_log_path
@@ -174,9 +174,9 @@ def main():
         logger.debug("Failed to bind crash-log cleanup to aboutToQuit", exc_info=True)
     app.setStyle("Fusion")  # OK to keep
 
-    settings_manager = SettingsManager("Visima", "FastData")
+    settings_manager = configure_settings_manager("Visima", "FastData")
     localization = init_localization_manager(app)
-    localization.apply_language(settings_manager.get_language())
+    localization.apply_language(settings_manager.general.get_language())
 
     # Application/window icon
     icon_path = get_icon_path()

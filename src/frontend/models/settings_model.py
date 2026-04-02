@@ -1,13 +1,14 @@
 
 from __future__ import annotations
 from pathlib import Path
+from typing import Any, Mapping
 from typing import Optional
 
-from PySide6.QtCore import QObject, QSettings, Signal, QCoreApplication, QThread
+from PySide6.QtCore import QObject, QCoreApplication, QThread, Signal
 
 from ..threading.utils import run_in_main_thread
 
-from core.settings_manager import SettingsManager
+from core.settings_manager import configure_settings_manager
 
 
 class SettingsModel(QObject):
@@ -36,24 +37,23 @@ class SettingsModel(QObject):
         super().__init__(parent)
         self._organization = organization
         self._application = application
-        self._settings = QSettings(organization, application)
-        self._settings_manager = SettingsManager(organization, application)
+        self._settings_manager = configure_settings_manager(organization, application)
 
         self._theme = self._load_theme()
-        self._db_path = self._settings_manager.get_db_path()
-        self._selection_db_path = self._settings_manager.get_selection_db_path()
-        self._log_db_path = self._settings_manager.ensure_log_database()
-        self._log_sources = self._settings_manager.get_log_sources()
-        self._log_visible = self._settings_manager.get_log_visible()
-        self._llm_provider = self._settings_manager.get_llm_provider()
+        self._db_path = self._settings_manager.database.get_db_path()
+        self._selection_db_path = self._settings_manager.database.get_selection_db_path()
+        self._log_db_path = self._settings_manager.logs.ensure_log_database()
+        self._log_sources = self._settings_manager.logs.get_log_sources()
+        self._log_visible = self._settings_manager.logs.get_log_visible()
+        self._llm_provider = self._settings_manager.ai.get_llm_provider()
         self._llm_models: dict[str, str] = {}
         for provider in ("openai", "ollama"):
-            model_value = self._settings_manager.get_llm_model(provider)
+            model_value = self._settings_manager.ai.get_llm_model(provider)
             if model_value:
                 self._llm_models[provider] = model_value
-        self._openai_api_key = self._settings_manager.get_openai_api_key()
-        self._llm_thinking_mode = self._settings_manager.get_llm_thinking_mode()
-        self._language = self._settings_manager.get_language()
+        self._openai_api_key = self._settings_manager.ai.get_openai_api_key()
+        self._llm_thinking_mode = self._settings_manager.ai.get_llm_thinking_mode()
+        self._language = self._settings_manager.general.get_language()
 
     # ------------------------------------------------------------------
     def _emit_in_main_thread(self, signal, *args) -> None:
@@ -71,8 +71,7 @@ class SettingsModel(QObject):
 
     # ------------------------------------------------------------------
     def _load_theme(self) -> str:
-        value = self._settings.value("theme", "", type=str) or ""
-        return value if value in {"dark", "light"} else ""
+        return self._settings_manager.general.get_theme()
 
     # ------------------------------------------------------------------
     @property
@@ -84,7 +83,7 @@ class SettingsModel(QObject):
         if normalized == self._theme:
             return
         self._theme = normalized
-        self._settings.setValue("theme", normalized)
+        self._settings_manager.general.set_theme(normalized)
         self.theme_changed.emit(normalized)
 
     # ------------------------------------------------------------------
@@ -97,16 +96,16 @@ class SettingsModel(QObject):
         if new_path == self._db_path:
             return
         self._db_path = new_path
-        self._settings_manager.set_db_path(new_path)
+        self._settings_manager.database.set_db_path(new_path)
         self._emit_in_main_thread(self.database_path_changed, new_path)
 
     def refresh_database_path(self) -> Path:
         """Ensure the stored database path exists and return it."""
-        self._db_path = self._settings_manager.get_db_path()
+        self._db_path = self._settings_manager.database.get_db_path()
         return self._db_path
 
     def default_database_path(self) -> Path:
-        return self._settings_manager.default_db_path()
+        return self._settings_manager.database.default_db_path()
 
     @property
     def selection_db_path(self) -> Path:
@@ -117,15 +116,15 @@ class SettingsModel(QObject):
         if new_path == self._selection_db_path:
             return
         self._selection_db_path = new_path
-        self._settings_manager.set_selection_db_path(new_path)
+        self._settings_manager.database.set_selection_db_path(new_path)
         self._emit_in_main_thread(self.selection_db_path_changed, new_path)
 
     def refresh_selection_db_path(self) -> Path:
-        self._selection_db_path = self._settings_manager.get_selection_db_path()
+        self._selection_db_path = self._settings_manager.database.get_selection_db_path()
         return self._selection_db_path
 
     def default_selection_db_path(self) -> Path:
-        return self._settings_manager.default_selection_db_path()
+        return self._settings_manager.database.default_selection_db_path()
 
     # ------------------------------------------------------------------
     @property
@@ -137,21 +136,21 @@ class SettingsModel(QObject):
         if new_path == self._log_db_path:
             return
         self._log_db_path = new_path
-        self._settings_manager.set_log_db_path(new_path)
+        self._settings_manager.logs.set_log_db_path(new_path)
         self.log_db_path_changed.emit(new_path)
 
     def default_log_database_path(self) -> Path:
-        return self._settings_manager.default_log_db_path()
+        return self._settings_manager.logs.default_log_db_path()
 
     # ------------------------------------------------------------------
     # @ai(gpt-5, codex-cli, feature, 2026-03-11)
     def get_file_dialog_directory(self, scope: str, fallback: Path | str | None = None) -> Path:
         fallback_path = Path(fallback) if fallback is not None else None
-        return self._settings_manager.get_file_dialog_directory(scope, fallback_path)
+        return self._settings_manager.general.get_file_dialog_directory(scope, fallback_path)
 
     # @ai(gpt-5, codex-cli, feature, 2026-03-11)
     def set_file_dialog_directory(self, scope: str, path: Path | str) -> None:
-        self._settings_manager.set_file_dialog_directory(scope, path)
+        self._settings_manager.general.set_file_dialog_directory(scope, path)
 
     # ------------------------------------------------------------------
     @property
@@ -162,7 +161,7 @@ class SettingsModel(QObject):
         if sources == self._log_sources:
             return
         self._log_sources = list(sources)
-        self._settings_manager.set_log_sources(self._log_sources)
+        self._settings_manager.logs.set_log_sources(self._log_sources)
         self.log_sources_changed.emit(self._log_sources)
 
     # ------------------------------------------------------------------
@@ -175,7 +174,7 @@ class SettingsModel(QObject):
         if normalized == self._log_visible:
             return
         self._log_visible = normalized
-        self._settings_manager.set_log_visible(normalized)
+        self._settings_manager.logs.set_log_visible(normalized)
         self.log_visibility_changed.emit(normalized)
 
     # ------------------------------------------------------------------
@@ -188,21 +187,21 @@ class SettingsModel(QObject):
         if normalized == self._llm_provider:
             return
         self._llm_provider = normalized
-        self._settings_manager.set_llm_provider(normalized)
+        self._settings_manager.ai.set_llm_provider(normalized)
 
     def llm_model(self, provider: str | None = None) -> str:
         chosen = provider or self.llm_provider
-        return self._llm_models.get(chosen, self._settings_manager.default_llm_model(chosen))
+        return self._llm_models.get(chosen, self._settings_manager.ai.default_llm_model(chosen))
 
     def set_llm_model(self, model: str, provider: str | None = None) -> None:
         chosen = provider or self.llm_provider
         if self._llm_models.get(chosen) == model:
             return
         self._llm_models[chosen] = model
-        self._settings_manager.set_llm_model(model, chosen)
+        self._settings_manager.ai.set_llm_model(model, chosen)
 
     def default_llm_model(self, provider: str) -> str:
-        return self._settings_manager.default_llm_model(provider)
+        return self._settings_manager.ai.default_llm_model(provider)
 
 
     # @ai(gpt-5.2-codex, codex-cli, feature, 2026-03-05)
@@ -218,7 +217,7 @@ class SettingsModel(QObject):
         if normalized == self._llm_thinking_mode:
             return
         self._llm_thinking_mode = normalized
-        self._settings_manager.set_llm_thinking_mode(normalized)
+        self._settings_manager.ai.set_llm_thinking_mode(normalized)
 
 
     @property
@@ -232,7 +231,7 @@ class SettingsModel(QObject):
         if normalized == self._language:
             return
         self._language = normalized
-        self._settings_manager.set_language(normalized)
+        self._settings_manager.general.set_language(normalized)
         self.language_changed.emit(normalized)
 
     @property
@@ -244,4 +243,43 @@ class SettingsModel(QObject):
         if cleaned == self._openai_api_key:
             return
         self._openai_api_key = cleaned
-        self._settings_manager.set_openai_api_key(cleaned)
+        self._settings_manager.ai.set_openai_api_key(cleaned)
+
+    # ------------------------------------------------------------------
+    # @ai(gpt-5, codex-cli, feature, 2026-04-02)
+    def export_all_settings(self) -> dict[str, Any]:
+        return self._settings_manager.export_all()
+
+    # @ai(gpt-5, codex-cli, feature, 2026-04-02)
+    def import_all_settings(self, payload: Mapping[str, Any], *, reset_missing: bool = False) -> None:
+        self._settings_manager.import_all(payload, reset_missing=reset_missing)
+        self._theme = self._settings_manager.general.get_theme()
+        self._db_path = self._settings_manager.database.get_db_path()
+        self._selection_db_path = self._settings_manager.database.get_selection_db_path()
+        self._log_db_path = self._settings_manager.logs.get_log_db_path()
+        self._log_sources = self._settings_manager.logs.get_log_sources()
+        self._log_visible = self._settings_manager.logs.get_log_visible()
+        self._llm_provider = self._settings_manager.ai.get_llm_provider()
+        self._llm_thinking_mode = self._settings_manager.ai.get_llm_thinking_mode()
+        self._language = self._settings_manager.general.get_language()
+
+    # @ai(gpt-5, codex-cli, feature, 2026-04-02)
+    def reset_all_settings(self) -> None:
+        self._settings_manager.reset_all()
+        self.import_all_settings(self._settings_manager.export_all())
+
+    # @ai(gpt-5, codex-cli, feature, 2026-04-02)
+    def component_settings(
+        self, component_key: str, defaults: Mapping[str, Any] | None = None
+    ) -> dict[str, Any]:
+        return self._settings_manager.get_component_settings(component_key, defaults=defaults)
+
+    # @ai(gpt-5, codex-cli, feature, 2026-04-02)
+    def set_component_settings(
+        self, component_key: str, payload: Mapping[str, Any], *, merge: bool = True
+    ) -> dict[str, Any]:
+        return self._settings_manager.set_component_settings(component_key, payload, merge=merge)
+
+    # @ai(gpt-5, codex-cli, feature, 2026-04-02)
+    def reset_component_settings(self, component_key: str) -> None:
+        self._settings_manager.reset_component_settings(component_key)

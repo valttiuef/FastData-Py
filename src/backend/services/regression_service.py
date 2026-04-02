@@ -16,6 +16,11 @@ from core.training_settings import (
     TRAINING_STRATIFIED_KFOLD_MERGE_SMALL_GROUPS,
     TRAINING_STRATIFIED_KFOLD_MAX_SMALL_GROUPS_TO_MERGE,
     TRAINING_STRATIFIED_KFOLD_MAX_MERGED_ROW_SHARE,
+    get_training_sparse_feature_nan_ratio_threshold,
+    get_training_static_feature_max_unique_non_null,
+    get_training_stratified_kfold_merge_small_groups,
+    get_training_stratified_kfold_max_small_groups_to_merge,
+    get_training_stratified_kfold_max_merged_row_share,
 )
 
 from sklearn.base import RegressorMixin, clone
@@ -439,7 +444,10 @@ class RegressionService:
             dropped_sparse_input_names = [
                 name
                 for name in input_names
-                if float(nan_ratio.get(name, 0.0)) > TRAINING_SPARSE_FEATURE_NAN_RATIO_THRESHOLD
+                if float(nan_ratio.get(name, 0.0))
+                > get_training_sparse_feature_nan_ratio_threshold(
+                    TRAINING_SPARSE_FEATURE_NAN_RATIO_THRESHOLD
+                )
             ]
             if dropped_sparse_input_names:
                 input_names = [name for name in input_names if name not in set(dropped_sparse_input_names)]
@@ -451,7 +459,10 @@ class RegressionService:
                 dropped_static_input_names = [
                     name
                     for name in input_names
-                    if int(pd.Series(data[name]).dropna().nunique()) <= TRAINING_STATIC_FEATURE_MAX_UNIQUE_NON_NULL
+                    if int(pd.Series(data[name]).dropna().nunique())
+                    <= get_training_static_feature_max_unique_non_null(
+                        TRAINING_STATIC_FEATURE_MAX_UNIQUE_NON_NULL
+                    )
                 ]
                 if dropped_static_input_names:
                     input_names = [name for name in input_names if name not in set(dropped_static_input_names)]
@@ -895,7 +906,13 @@ class RegressionService:
                 _warn("Stratified K-Fold has only one stratum; falling back to K-Fold.")
                 return KFold(n_splits=folds, shuffle=shuffle, random_state=random_state)
             if int(counts.min()) < folds:
-                if bool(int(TRAINING_STRATIFIED_KFOLD_MERGE_SMALL_GROUPS)):
+                if bool(
+                    int(
+                        get_training_stratified_kfold_merge_small_groups(
+                            TRAINING_STRATIFIED_KFOLD_MERGE_SMALL_GROUPS
+                        )
+                    )
+                ):
                     merge_result = self._merge_small_strata_for_kfold(labels, folds)
                     if merge_result is not None:
                         labels, merged_source_labels = merge_result
@@ -1130,11 +1147,22 @@ class RegressionService:
         if small_counts.empty:
             return labels, []
 
-        small_group_limit = max(0, int(TRAINING_STRATIFIED_KFOLD_MAX_SMALL_GROUPS_TO_MERGE))
+        small_group_limit = max(
+            0,
+            int(
+                get_training_stratified_kfold_max_small_groups_to_merge(
+                    TRAINING_STRATIFIED_KFOLD_MAX_SMALL_GROUPS_TO_MERGE
+                )
+            ),
+        )
         if small_group_limit and int(len(small_counts)) > small_group_limit:
             return None
 
-        merged_row_share_limit = float(TRAINING_STRATIFIED_KFOLD_MAX_MERGED_ROW_SHARE)
+        merged_row_share_limit = float(
+            get_training_stratified_kfold_max_merged_row_share(
+                TRAINING_STRATIFIED_KFOLD_MAX_MERGED_ROW_SHARE
+            )
+        )
         total_rows = int(len(labels))
         small_rows = int(small_counts.sum())
         if total_rows <= 0:

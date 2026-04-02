@@ -23,6 +23,8 @@ from backend.services.modeling_shared import display_name
 from core.training_settings import (
     TRAINING_SPARSE_FEATURE_NAN_RATIO_THRESHOLD,
     TRAINING_STATIC_FEATURE_MAX_UNIQUE_NON_NULL,
+    get_training_sparse_feature_nan_ratio_threshold,
+    get_training_static_feature_max_unique_non_null,
 )
 
 import logging
@@ -1139,7 +1141,10 @@ class SomViewModel(QObject):
         dropped_sparse_cols = [
             name
             for name in feature_cols
-            if float(nan_ratio.get(name, 0.0)) > TRAINING_SPARSE_FEATURE_NAN_RATIO_THRESHOLD
+            if float(nan_ratio.get(name, 0.0))
+            > get_training_sparse_feature_nan_ratio_threshold(
+                TRAINING_SPARSE_FEATURE_NAN_RATIO_THRESHOLD
+            )
         ]
         if dropped_sparse_cols:
             dropped_display = [full_feature_display_map.get(name, name) for name in dropped_sparse_cols]
@@ -1156,7 +1161,10 @@ class SomViewModel(QObject):
             dropped_static_cols = [
                 name
                 for name in feature_cols
-                if int(pd.Series(numeric_df[name]).dropna().nunique()) <= TRAINING_STATIC_FEATURE_MAX_UNIQUE_NON_NULL
+                if int(pd.Series(numeric_df[name]).dropna().nunique())
+                <= get_training_static_feature_max_unique_non_null(
+                    TRAINING_STATIC_FEATURE_MAX_UNIQUE_NON_NULL
+                )
             ]
             if dropped_static_cols:
                 dropped_display = [full_feature_display_map.get(name, name) for name in dropped_static_cols]

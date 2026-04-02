@@ -42,6 +42,29 @@ This makes FastData-Py suitable for industrial, research, and manufacturing envi
 
 ---
 
+# Settings System
+
+Application settings are centralized behind `src/core/settings_manager.py` and grouped under:
+
+- `general`
+- `database`
+- `logs`
+- `ai`
+- `training`
+- `charts`
+- `components` (generic per-tab/per-sidebar payloads)
+
+Implementation modules live in `src/core/settings/`.
+
+Design goals:
+
+- Use defaults from code as safe fallbacks.
+- Persist user overrides through grouped settings APIs.
+- Support full export/import/reset flows (`export_all`, `import_all`, `reset_all`).
+- Keep component/sidebar settings ready for a future dedicated settings window.
+
+---
+
 # Typical Use Cases
 
 FastData-Py is designed for industrial and research data analysis workflows, including:

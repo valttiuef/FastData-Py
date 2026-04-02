@@ -22,6 +22,8 @@ Do not introduce new architectural patterns without explicit instruction.
 ## Architectural Rules
 
 - Use centralized path helpers from `src/core/paths.py`. Do not use ad-hoc `Path(__file__)`.
+- Use grouped settings via `src/core/settings_manager.py` and `src/core/settings/*`; avoid ad-hoc `QSettings` access in feature code.
+- For tab/sidebar/widget preferences, persist payloads through `SettingsManager.components` (component-keyed settings).
 - UI logic belongs in viewmodels. Views only dispatch signals and render state.
 - Heavy work (DB writes, exports, processing) must run in background threads using existing threading helpers.
 - Control flow pattern:  
