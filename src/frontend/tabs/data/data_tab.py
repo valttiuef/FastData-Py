@@ -905,16 +905,48 @@ class DataTab(TabWidget):
     def _build_filters(self) -> DataFilters | None:
         return self.sidebar.data_selector.build_data_filters()
 
+    # @ai(gpt-5, codex-cli, fix, 2026-04-02)
     def _build_chart_filters(self, flt: DataFilters | None = None) -> DataFilters | None:
-        """Build filters used for chart/cache work, capped to visible feature count."""
+        """Build filters used for chart/cache work.
+
+        Keep all selected features, but prioritize features with active value
+        filters so capped chart views still surface those columns first.
+        """
         if flt is None:
             flt = self._build_filters()
         if flt is None:
             return None
-        if len(flt.features) <= MAX_FEATURES_SHOWN_LEGEND:
-            return flt
+        prioritized_ids: set[int] = set()
+        try:
+            for value_filter in self._view_model.selection_value_filters() or []:
+                fid = getattr(value_filter, "feature_id", None)
+                if fid is None:
+                    continue
+                try:
+                    prioritized_ids.add(int(fid))
+                except Exception:
+                    continue
+        except Exception:
+            logger.warning("Exception in _build_chart_filters", exc_info=True)
+
+        selected_features = list(flt.features or [])
+        if prioritized_ids and selected_features:
+            prioritized_features: list = []
+            fallback_features: list = []
+            for feature in selected_features:
+                fid = getattr(feature, "feature_id", None)
+                if fid is not None:
+                    try:
+                        if int(fid) in prioritized_ids:
+                            prioritized_features.append(feature)
+                            continue
+                    except Exception:
+                        logger.warning("Exception in _build_chart_filters", exc_info=True)
+                fallback_features.append(feature)
+            selected_features = prioritized_features + fallback_features
+
         return DataFilters(
-            features=list(flt.features[:MAX_FEATURES_SHOWN_LEGEND]),
+            features=selected_features,
             start=flt.start,
             end=flt.end,
             group_ids=list(flt.group_ids) if flt.group_ids is not None else None,

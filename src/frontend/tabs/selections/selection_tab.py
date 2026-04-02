@@ -111,7 +111,7 @@ class SelectionsTab(TabWidget):
         self._proxy_model = FastPandasProxyModel(self)
         self._proxy_model.setSourceModel(self._table_model)
         self.features_table = FastTable(
-            select="items",
+            select="rows",
             single_selection=False,
             tint_current_selection=True,
             editable=True,
