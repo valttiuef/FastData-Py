@@ -187,7 +187,7 @@ FastData-Py can be installed using the official Windows installer (recommended) 
 1. Go to the latest release page:
 https://github.com/valttiuef/FastData-Py/releases
 
-2. Download the installer from the newest version (for example v0.1.1).
+2. Download the installer from the newest version.
 
 3. Run the installer and follow the setup instructions.
 
