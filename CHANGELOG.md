@@ -4,6 +4,11 @@ All notable end-user changes are documented in this file.
 
 The format is based on Keep a Changelog, with entries grouped by release.
 
+## [0.2.3] - 2026-08-28
+
+### Fixed
+- Statistics grouped by dataset or import now preserve each selected source as a separate group instead of combining overlapping values into full-selection totals.
+
 ## [0.2.2] - 2026-03-23
 
 ### Added

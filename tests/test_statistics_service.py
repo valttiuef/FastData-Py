@@ -12,8 +12,9 @@ sys.path.insert(0, str((Path(__file__).parent.parent / "src").resolve()))
 from backend.data_db.database import Database
 from backend.models import ImportOptions
 from backend.services.statistics_service import StatisticsService, available_statistics
-from frontend.models.hybrid_pandas_model import FeatureSelection
+from frontend.models.hybrid_pandas_model import DataFilters, FeatureSelection
 from frontend.tabs.statistics.viewmodel import StatisticsViewModel
+from frontend.widgets.data_selector_widget import DataSelectorViewModel
 
 
 class StubDatabase:
@@ -694,6 +695,63 @@ def test_group_by_dataset_and_import_columns():
 
     assert set(by_dataset.preview["group_value"].dropna().astype(str).tolist()) == {"Dataset A", "Dataset B"}
     assert set(by_import.preview["group_value"].dropna().astype(str).tolist()) == {"A.csv", "B.csv"}
+
+
+# @ai(gpt-5, codex, regression-test, 2026-08-28)
+def test_statistics_partitioned_fetch_preserves_dataset_and_import_values():
+    class _PartitionDatabase:
+        @staticmethod
+        def list_imports(**_kwargs):
+            return pd.DataFrame(
+                {
+                    "import_id": [101, 202],
+                    "dataset": ["Dataset A", "Dataset B"],
+                    "system": ["System1", "System1"],
+                    "file_name": ["A.csv", "B.csv"],
+                    "sheet_name": [None, None],
+                }
+            )
+
+    class _PartitionModel:
+        def __init__(self):
+            self.db = _PartitionDatabase()
+            self._frame = pd.DataFrame()
+
+        def load_base_threadsafe(self, filters, **_params):
+            if filters.datasets and len(filters.datasets) == 1:
+                value = {"Dataset A": 1.0, "Dataset B": 10.0}[filters.datasets[0]]
+            else:
+                value = {101: 1.0, 202: 10.0}[filters.import_ids[0]]
+            self._frame = pd.DataFrame(
+                {"t": pd.to_datetime(["2024-01-01"]), "Temperature": [value]}
+            )
+
+        def base_dataframe(self):
+            return self._frame.copy()
+
+    filters = DataFilters(
+        features=[FeatureSelection(feature_id=1, base_name="Temperature")],
+        systems=["System1"],
+        datasets=["Dataset A", "Dataset B"],
+        import_ids=[101, 202],
+    )
+    model = _PartitionModel()
+
+    by_dataset = DataSelectorViewModel._load_partitioned_base_dataframe(
+        model, filters, {}, "Dataset"
+    )
+    by_import = DataSelectorViewModel._load_partitioned_base_dataframe(
+        model, filters, {}, "import_id"
+    )
+
+    assert by_dataset[["Dataset", "Temperature"]].to_dict("records") == [
+        {"Dataset": "Dataset A", "Temperature": 1.0},
+        {"Dataset": "Dataset B", "Temperature": 10.0},
+    ]
+    assert by_import[["import_id", "import_name", "Temperature"]].to_dict("records") == [
+        {"import_id": 101, "import_name": "A.csv", "Temperature": 1.0},
+        {"import_id": 202, "import_name": "B.csv", "Temperature": 10.0},
+    ]
 
 
 def test_wide_to_long_uses_payload_dataset_and_import_metadata():

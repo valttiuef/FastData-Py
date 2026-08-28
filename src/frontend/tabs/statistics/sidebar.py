@@ -275,6 +275,9 @@ class StatisticsSidebar(SidebarWidget):
         started = self.data_selector.fetch_base_dataframe_token_async(
             preprocessing_override=stats_preprocessing,
             group_kinds=requested_group_kinds or None,
+            partition_column=(
+                str(group_column) if group_column in {"Dataset", "import_id"} else None
+            ),
             on_result=_on_fetch_result,
             on_error=_on_fetch_error,
             owner=self,

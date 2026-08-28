@@ -408,6 +408,85 @@ class DataSelectorViewModel(QObject):
             logger.warning("Exception in _append_requested_group_columns", exc_info=True)
             return frame
 
+    @staticmethod
+    def _load_partitioned_base_dataframe(
+        model: HybridPandasModel,
+        filters: DataFilters,
+        params: Mapping[str, object],
+        partition_column: Optional[str],
+    ) -> pd.DataFrame:
+        """Load a wide frame without collapsing dataset/import provenance."""
+        column = str(partition_column or "").strip()
+        if column not in {"Dataset", "import_id"}:
+            model.load_base_threadsafe(filters, **dict(params))
+            return model.base_dataframe()
+
+        try:
+            systems = list(filters.systems or [])
+            import_frames = (
+                [
+                    model.db.list_imports(system=system, datasets=filters.datasets)
+                    for system in systems
+                ]
+                if systems
+                else [model.db.list_imports(datasets=filters.datasets)]
+            )
+            imports = pd.concat(import_frames, ignore_index=True) if import_frames else pd.DataFrame()
+        except Exception:
+            logger.warning("Failed to resolve statistics data partitions", exc_info=True)
+            imports = pd.DataFrame()
+
+        if imports.empty:
+            model.load_base_threadsafe(filters, **dict(params))
+            return model.base_dataframe()
+        if filters.import_ids:
+            wanted_imports = {int(value) for value in filters.import_ids}
+            import_numbers = pd.to_numeric(imports["import_id"], errors="coerce")
+            imports = imports[import_numbers.isin(wanted_imports)]
+
+        partitions: list[tuple[DataFilters, dict[str, object]]] = []
+        if column == "Dataset":
+            for dataset in imports["dataset"].dropna().astype(str).drop_duplicates().tolist():
+                partition = filters.clone_with_range(filters.start, filters.end)
+                partition.datasets = [dataset]
+                partitions.append((partition, {"Dataset": dataset}))
+        else:
+            for row in imports.drop_duplicates(subset=["import_id"]).itertuples(index=False):
+                import_id = int(row.import_id)
+                file_name = str(getattr(row, "file_name", "") or "").strip()
+                sheet_name = str(getattr(row, "sheet_name", "") or "").strip()
+                import_name = file_name
+                if sheet_name and sheet_name.casefold() != "nan":
+                    import_name = f"{file_name} [{sheet_name}]"
+                partition = filters.clone_with_range(filters.start, filters.end)
+                partition.import_ids = [import_id]
+                partitions.append(
+                    (
+                        partition,
+                        {
+                            "import_id": import_id,
+                            "import_name": import_name,
+                            "Dataset": str(getattr(row, "dataset", "") or "").strip(),
+                        },
+                    )
+                )
+
+        frames: list[pd.DataFrame] = []
+        for partition, metadata in partitions:
+            model.load_base_threadsafe(partition, **dict(params))
+            frame = model.base_dataframe()
+            if frame is None or frame.empty:
+                continue
+            frame = frame.copy()
+            for name, value in metadata.items():
+                frame[name] = value
+            frames.append(frame)
+        return (
+            pd.concat(frames, ignore_index=True, sort=False)
+            if frames
+            else pd.DataFrame(columns=["t"])
+        )
+
     # @ai(gpt-5, codex, refactor, 2026-03-02)
     def fetch_base_dataframe(
         self,
@@ -484,13 +563,14 @@ class DataSelectorViewModel(QObject):
         )
         return True
 
-    # @ai(gpt-5, codex, refactor, 2026-03-05)
+    # @ai(gpt-5, codex, fix, 2026-08-28)
     def fetch_base_dataframe_token_async(
         self,
         *,
         preprocessing_override: Optional[Mapping[str, object]] = None,
         group_payloads: Optional[Sequence[Mapping[str, object]]] = None,
         group_kinds: Optional[Sequence[str]] = None,
+        partition_column: Optional[str] = None,
         on_result=None,
         on_error=None,
         owner: object | None = None,
@@ -506,8 +586,9 @@ class DataSelectorViewModel(QObject):
         )
 
         def _work() -> str:
-            model.load_base_threadsafe(filters, **params)
-            frame = model.base_dataframe()
+            frame = self._load_partitioned_base_dataframe(
+                model, filters, params, partition_column
+            )
             frame = self._append_requested_group_columns(
                 frame,
                 group_payloads=group_payloads,
@@ -1342,13 +1423,14 @@ class DataSelectorWidget(QGroupBox):
             cancel_previous=cancel_previous,
         )
 
-    # @ai(gpt-5, codex, refactor, 2026-03-05)
+    # @ai(gpt-5, codex, fix, 2026-08-28)
     def fetch_base_dataframe_token_async(
         self,
         *,
         preprocessing_override: Optional[Mapping[str, object]] = None,
         group_payloads: Optional[Sequence[Mapping[str, object]]] = None,
         group_kinds: Optional[Sequence[str]] = None,
+        partition_column: Optional[str] = None,
         on_result=None,
         on_error=None,
         owner: object | None = None,
@@ -1359,6 +1441,7 @@ class DataSelectorWidget(QGroupBox):
             preprocessing_override=preprocessing_override,
             group_payloads=group_payloads,
             group_kinds=group_kinds,
+            partition_column=partition_column,
             on_result=on_result,
             on_error=on_error,
             owner=owner,
