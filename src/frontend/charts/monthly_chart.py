@@ -13,7 +13,6 @@ from PySide6.QtCharts import QBarSet
 from PySide6.QtWidgets import (
     QApplication,
     QGraphicsRectItem,
-    QGraphicsLineItem,
     QToolTip,
     QToolButton,
     QStyle,
@@ -68,7 +67,6 @@ class MonthlyBarChart(GroupBarChart):
         # These are accessed by _apply_theme, which can be invoked from
         # GroupBarChart.__init__ before MonthlyBarChart init finishes.
         self._hover_item = None
-        self._zero_line_item = None
         self._multi_mode = False
         super().__init__(title=title, parent=parent, y_label="Value")
         self.set_hover_cursor_enabled(True)
@@ -110,12 +108,6 @@ class MonthlyBarChart(GroupBarChart):
         # Visual overlays
         self._hover_item = QGraphicsRectItem(self.chart)
         self._hover_item.setZValue(10_000); self._hover_item.setVisible(False)
-        self._zero_line_item = QGraphicsLineItem(self.chart)
-        self._zero_line_item.setZValue(5_000); self._zero_line_item.setVisible(False)
-        try:
-            self.chart.plotAreaChanged.connect(self._update_zero_line)
-        except Exception:
-            logger.warning("Failed to connect plot-area change handler for monthly zero line.", exc_info=True)
 
         # Interaction state
         self._max_bars = int(max_bars)
@@ -188,7 +180,6 @@ class MonthlyBarChart(GroupBarChart):
         super()._apply_theme(theme_name)
         self._set_reset_button_icon()
         colors = self._chart_colors
-        self._set_zero_line_pen(colors)
 
         if getattr(self, "_multi_mode", False) and self.series.barSets():
             bar_colors = self._multi_bar_colors(len(self.series.barSets()))
@@ -206,8 +197,6 @@ class MonthlyBarChart(GroupBarChart):
         hover_border = QColor(colors.bar_border).darker(110)
         self._hover_item.setBrush(QBrush(hover_fill)); self._hover_item.setPen(QPen(hover_border, 1.0))
 
-        # baseline rendering removed — keep hover only
-
         self.axis_x.setLabelsAngle(-60)
 
         try:
@@ -217,40 +206,6 @@ class MonthlyBarChart(GroupBarChart):
         except Exception:
             self.chart.update()
         self.view.viewport().update()
-        self._update_zero_line()
-
-    def _set_zero_line_pen(self, colors):
-        if getattr(self, "_zero_line_item", None) is None or colors is None:
-            return
-        pen = QPen(QColor(colors.grid))
-        pen.setCosmetic(True)
-        self._zero_line_item.setPen(pen)
-
-    def _update_zero_line(self):
-        if self._zero_line_item is None:
-            return
-        try:
-            y_min = float(self.axis_y.min())
-            y_max = float(self.axis_y.max())
-        except Exception:
-            self._zero_line_item.setVisible(False)
-            return
-        if not (y_min < 0 < y_max):
-            self._zero_line_item.setVisible(False)
-            return
-        plot_area = self.chart.plotArea()
-        if not plot_area.isValid():
-            self._zero_line_item.setVisible(False)
-            return
-        span = y_max - y_min
-        if span == 0:
-            self._zero_line_item.setVisible(False)
-            return
-        ratio = (0.0 - y_min) / span
-        y = plot_area.bottom() - (plot_area.height() * ratio)
-        self._zero_line_item.setLine(plot_area.left(), y, plot_area.right(), y)
-        self._zero_line_item.setVisible(True)
-
     # ---------- Public API ----------
     def set_title(self, title: str):
         # remember base title and show it (timeframe will be appended dynamically)
@@ -288,7 +243,7 @@ class MonthlyBarChart(GroupBarChart):
             self.axis_x.setLabelsVisible(False)
             self.axis_x.setGridLineVisible(False)
             self.axis_x.setMinorGridLineVisible(False)
-            self.axis_y.setRange(0.0, 1.0)
+            self._set_bar_value_range(0.0, 1.0)
             self.chart.setTitle(self._base_title)
         if reset_navigation:
             self._raw_t = []
@@ -301,8 +256,6 @@ class MonthlyBarChart(GroupBarChart):
         if getattr(self, "_single_click_timer", None) is not None and self._single_click_timer.isActive():
             self._single_click_timer.stop()
         self._hover_item.setVisible(False)
-        if self._zero_line_item is not None:
-            self._zero_line_item.setVisible(False)
         self._multi_categories = []
         self._multi_feature_order = []
         self._multi_category_bounds = {}
@@ -587,14 +540,7 @@ class MonthlyBarChart(GroupBarChart):
                 vmax = max(self._vals)
             else:
                 vmin, vmax = 0.0, 1.0
-            y_min = min(vmin, 0.0); y_max = max(vmax, 0.0)
-            if y_max == y_min: y_max = y_min + 1.0
-            # small padding
-            pad = 0.0
-            if vmin >= 0:
-                y_min = 0.0
-            self.axis_y.setRange(y_min, y_max + pad)
-            self._update_zero_line()
+            self._set_bar_value_range(vmin, vmax)
 
             self._connect_hover_signals()
             self._update_highlight()
@@ -723,10 +669,7 @@ class MonthlyBarChart(GroupBarChart):
                 vmax = float(pivot.max().max())
             else:
                 vmin = vmax = 0.0
-            if vmin == vmax:
-                vmax = vmin + 1.0
-            self.axis_y.setRange(min(0.0, vmin), max(0.0, vmax))
-            self._update_zero_line()
+            self._set_bar_value_range(vmin, vmax)
 
             # disable hover overlay in multi-mode
             self._series_hover_supported = False

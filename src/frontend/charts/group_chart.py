@@ -255,6 +255,44 @@ class GroupBarChart(QFrame):
         self._y_label = label
         self.axis_y.setTitleText(label)
 
+    # @ai(gpt-5, codex, fix, 2026-08-31)
+    def _set_bar_value_range(self, value_min: float, value_max: float) -> None:
+        """Set a zero-based, tick-aligned range for a bar value axis."""
+        value_min = float(value_min)
+        value_max = float(value_max)
+        if not math.isfinite(value_min) or not math.isfinite(value_max):
+            value_min, value_max = 0.0, 1.0
+
+        data_min = min(value_min, 0.0)
+        data_max = max(value_max, 0.0)
+        span = data_max - data_min
+        if span <= 0.0:
+            data_min, data_max = 0.0, 1.0
+            span = 1.0
+
+        # Use a native dynamic tick axis anchored at zero. This makes the zero
+        # grid line part of the chart's layout, so it remains aligned while the
+        # chart resizes and bars on either side share the correct baseline.
+        rough_interval = span / 5.0
+        magnitude = 10.0 ** math.floor(math.log10(rough_interval))
+        normalized = rough_interval / magnitude
+        if normalized <= 1.0:
+            multiplier = 1.0
+        elif normalized <= 2.0:
+            multiplier = 2.0
+        elif normalized <= 5.0:
+            multiplier = 5.0
+        else:
+            multiplier = 10.0
+        tick_interval = multiplier * magnitude
+
+        axis_min = 0.0 if data_min == 0.0 else math.floor(data_min / tick_interval) * tick_interval
+        axis_max = 0.0 if data_max == 0.0 else math.ceil(data_max / tick_interval) * tick_interval
+        self.axis_y.setTickType(QValueAxis.TickType.TicksDynamic)
+        self.axis_y.setTickAnchor(0.0)
+        self.axis_y.setTickInterval(tick_interval)
+        self.axis_y.setRange(axis_min, axis_max)
+
     # @ai(gpt-5, codex, refactor, 2026-02-27)
     def clear(self, *, request_repaint: bool = True):
         """Clear all data from the chart."""
@@ -278,7 +316,7 @@ class GroupBarChart(QFrame):
         self.axis_x.setLabelsVisible(False)
         self.axis_x.setGridLineVisible(False)
         self.axis_x.setMinorGridLineVisible(False)
-        self.axis_y.setRange(0.0, 1.0)
+        self._set_bar_value_range(0.0, 1.0)
         self._categories.clear()
         self._values.clear()
         self._axis_categories_raw.clear()
@@ -354,16 +392,7 @@ class GroupBarChart(QFrame):
         else:
             vmin, vmax = 0.0, 1.0
         
-        y_min = min(vmin, 0.0)
-        y_max = max(vmax, 0.0)
-        if y_max == y_min:
-            y_max = y_min + 1.0
-        
-        # Add padding
-        padding = (y_max - y_min) * 0.1
-        if vmin >= 0:
-            y_min = 0.0
-        self.axis_y.setRange(y_min, y_max + padding)
+        self._set_bar_value_range(vmin, vmax)
 
         # Keep explicit group palette color for single-series group bars.
 
@@ -481,15 +510,7 @@ class GroupBarChart(QFrame):
         else:
             vmin, vmax = 0.0, 1.0
         
-        y_min = min(vmin, 0.0)
-        y_max = max(vmax, 0.0)
-        if y_max == y_min:
-            y_max = y_min + 1.0
-        
-        padding = (y_max - y_min) * 0.1
-        if vmin >= 0:
-            y_min = 0.0
-        self.axis_y.setRange(y_min, y_max + padding)
+        self._set_bar_value_range(vmin, vmax)
         
         # Show legend if multiple series
         if len(value_cols) > 1:
