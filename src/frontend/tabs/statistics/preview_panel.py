@@ -193,7 +193,8 @@ class StatisticsPreview(Panel):
         model = self.preview_table.model()
         if model is None:
             return pd.DataFrame()
-        return self._model_to_frame(model)
+        selected_rows = self._selected_table_row_numbers()
+        return self._model_to_frame(model, row_numbers=selected_rows or None)
 
     # @ai(gpt-5, codex, refactor, 2026-03-12)
     def export_feature_options(self) -> list[tuple[str, str]]:
@@ -301,18 +302,25 @@ class StatisticsPreview(Panel):
         }
         return merged.rename(columns=rename_map)
 
-    def _model_to_frame(self, model) -> pd.DataFrame:
+    def _model_to_frame(self, model, *, row_numbers: Optional[list[int]] = None) -> pd.DataFrame:
         headers = [
             str(model.headerData(col, Qt.Orientation.Horizontal, Qt.ItemDataRole.DisplayRole) or "")
             for col in range(model.columnCount())
         ]
         rows: list[list[object]] = []
-        for row in range(model.rowCount()):
+        rows_to_export = row_numbers if row_numbers is not None else range(model.rowCount())
+        for row in rows_to_export:
             values: list[object] = []
             for col in range(model.columnCount()):
                 values.append(model.data(model.index(row, col), Qt.ItemDataRole.DisplayRole))
             rows.append(values)
         return pd.DataFrame(rows, columns=headers)
+
+    def _selected_table_row_numbers(self) -> list[int]:
+        sel_model = self.preview_table.selectionModel()
+        if sel_model is None:
+            return []
+        return sorted({int(index.row()) for index in sel_model.selectedIndexes() if index.isValid()})
 
     def editable_preview_for_save(self) -> pd.DataFrame:
         """Return preview dataframe with user-edited metadata applied."""

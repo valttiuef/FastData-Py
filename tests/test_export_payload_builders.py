@@ -265,8 +265,13 @@ def test_statistics_preview_feature_export_tracks_selected_rows(qapp) -> None:
     summary, raw_rows = preview._build_feature_summary(frame)
     preview._preview_df = frame.copy()
     preview._feature_rows = raw_rows
-    preview.preview_table = _Table(summary, selected_rows=[0, 1])
+    preview.preview_table = _Table(summary, selected_rows=[1])
 
+    summary_export = preview.export_summary_table_frame()
+    assert len(summary_export.index) == 1
+    assert summary_export.iloc[0]["Name"] == "Pressure"
+
+    preview.preview_table = _Table(summary, selected_rows=[0, 1])
     selected_keys = preview.default_selected_feature_export_keys()
     assert len(selected_keys) == 2
 
