@@ -40,6 +40,8 @@ class ImportOptions:
     time_column: Optional[str] = None
     # Merged Excel cells are always expanded; this also handles unmerged blanks.
     fill_down_timestamps: bool = False
+    # Average repeated rows per measurement column and timestamp instead of sample types.
+    average_repeated_measurements: bool = True
     auto_detect_datetime: bool = True
     assume_dayfirst: bool = True
 

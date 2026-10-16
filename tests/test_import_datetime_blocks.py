@@ -38,7 +38,7 @@ def test_continuation_rows_preserve_samples_and_reset_clock_at_new_date():
         ["03/01/2025", None, 999],
         ["03/01/2025", "17:45", 8.25],
     ])
-    opts = ImportOptions(excel_header_rows=1, fill_down_timestamps=True, header_roles=HeaderRoles(0, None, None, None))
+    opts = ImportOptions(excel_header_rows=1, fill_down_timestamps=True, average_repeated_measurements=False, header_roles=HeaderRoles(0, None, None, None))
     tall, _ = _build_tall_from_raw(raw, opts)
     assert tall.value.tolist() == [5.25, 6.25, 7.25, 999, 8.25]
     assert tall.type.tolist() == ["Sample 1", "Sample 2", "Sample 3", "Sample 1", "Sample 1"]
@@ -79,14 +79,17 @@ def test_merged_workbook_headers_and_repeated_values(tmp_path):
     opts = dialog.build_options()
     assert opts.header_roles.unit_row is None
     assert opts.header_roles.type_row is None
+    assert opts.average_repeated_measurements is True
+    dialog.average_repeats_cb.setChecked(False)
+    assert dialog.build_options().average_repeated_measurements is False
     dialog.close()
     tall, _ = _build_tall_from_raw(raw, opts)
-    assert tall.value.tolist() == [1.5, 1.7, 1.6, 1.8]
+    assert tall.value.tolist() == pytest.approx([1.6, 1.7])
     assert set(tall.ts) == {pd.Timestamp("2025-01-02 10:20")}
     assert set(tall.base_name) == {"Thickness"}
     assert set(tall.source) == {"Left", "Right"}
     assert set(tall.Operator) == {"Operator A"}
-    assert set(tall.type) == {"Sample 1", "Sample 2"}
+    assert tall.type.isna().all()
 
 
 def test_preview_detects_unmerged_continuation_rows(tmp_path):
@@ -114,8 +117,9 @@ def test_separate_clock_csv_survives_database_import(tmp_path, use_duckdb):
         db.close()
 
 
+@pytest.mark.parametrize("average", [True, False])
 @pytest.mark.parametrize("header_count,date_as_text", [(5, False), (4, True)])
-def test_generated_excel_preview_and_database_preserve_every_measurement(tmp_path, header_count, date_as_text):
+def test_generated_excel_preview_and_database_preserve_every_measurement(tmp_path, header_count, date_as_text, average):
     # @ai(gpt-6, codex, integration-test, 2026-10-16)
     from openpyxl import Workbook
 
@@ -145,22 +149,54 @@ def test_generated_excel_preview_and_database_preserve_every_measurement(tmp_pat
     assert payload["time_column"] == "Time"
     assert payload["force_meta_columns_guess"] == ["Operator"]
     opts = ImportOptions(
+        average_repeated_measurements=average,
         excel_header_rows=header_count, date_column=payload["date_column"], time_column=payload["time_column"],
         fill_down_timestamps=payload["fill_down_timestamps"], assume_dayfirst=payload["assume_dayfirst"],
         datetime_formats=payload["datetime_formats"], force_meta_columns=payload["force_meta_columns_guess"],
         header_roles=HeaderRoles(payload["base_header_index"], payload["source_header_index"], None, None),
     )
     tall = parse_file_to_tall(path, opts)[0][1]
-    assert len(tall) == 12
+    assert len(tall) == (4 if average else 12)
     first = tall[tall.ts == pd.Timestamp("2030-05-14 09:15")]
-    assert len(first) == 6
-    assert set(first.type) == {"Sample 1", "Sample 2", "Sample 3"}
+    assert len(first) == (2 if average else 6)
+    if average:
+        assert first.type.isna().all()
+        assert sorted(first.value) == [11.0, 21.0]
+    else:
+        assert set(first.type) == {"Sample 1", "Sample 2", "Sample 3"}
     assert set(first.Operator) == {"Operator A"}
     assert set(first.base_name) == {"Length"}
     db = Database(tmp_path / "data.duckdb")
     try:
         db.import_file(path, opts)
         stored = db.con.execute("SELECT value FROM measurements ORDER BY value").fetchall()
-        assert stored == [(float(value),) for value in [10, 11, 12, 13, 14, 15, 20, 21, 22, 23, 24, 25]]
+        values = [11, 14, 21, 24] if average else [10, 11, 12, 13, 14, 15, 20, 21, 22, 23, 24, 25]
+        assert stored == [(float(value),) for value in values]
     finally:
         db.close()
+
+
+@pytest.mark.parametrize("fill_down", [True, False])
+def test_average_repeated_rows_preserves_columns_types_and_missing_values(fill_down):
+    # @ai(gpt-6, codex, regression-test, 2026-10-16)
+    raw = pd.DataFrame([
+        ["Date", "Temperature", "Temperature", "Operator"],
+        [None, "Indoor", "Outdoor", None],
+        [None, "C", "C", None],
+        [None, "Measured", "Measured", None],
+        ["02/01/2025", 2, 10, "A"],
+        ["02/01/2025", 4, None, None],
+        ["02/01/2025", None, 20, "B"],
+        ["03/01/2025", 8, 30, "C"],
+    ])
+    opts = ImportOptions(
+        excel_header_rows=4, header_roles=HeaderRoles(0, 1, 2, 3),
+        fill_down_timestamps=fill_down, force_meta_columns=["Operator"],
+    )
+    tall, _ = _build_tall_from_raw(raw, opts)
+    assert tall.value.tolist() == [3.0, 8.0, 15.0, 30.0]
+    assert tall.source.tolist() == ["Indoor", "Indoor", "Outdoor", "Outdoor"]
+    assert set(tall.unit) == {"C"}
+    assert set(tall.type) == {"Measured"}
+    assert tall.Operator.tolist() == ["A", "C", "A", "C"]
+    assert tall.attrs["forced_meta_kinds"] == ["Operator"]

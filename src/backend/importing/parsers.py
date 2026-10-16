@@ -902,6 +902,7 @@ def _build_tall_from_raw(raw: pd.DataFrame, options: ImportOptions, unit_callbac
     # normalize ts once
     ts = _timestamps_for_data(data, ts_col, time_col, options)
     repeated_rows = options.fill_down_timestamps or bool(raw.attrs.get("merged_row_spans", {}).get(ts_col))
+    separate_samples = repeated_rows and not options.average_repeated_measurements
     sample_numbers = ts.groupby(ts).cumcount() + 1 if repeated_rows else None
 
     roles: HeaderRoles = options.header_roles
@@ -1097,13 +1098,13 @@ def _build_tall_from_raw(raw: pd.DataFrame, options: ImportOptions, unit_callbac
     stream_values           = rep([mm["source"]           for mm in metric_meta])
     unit_values             = rep([mm["unit"]             for mm in metric_meta])
     qualifier_values        = rep([mm["type"]        for mm in metric_meta])
-    if repeated_rows:
+    if separate_samples:
         for metric_idx, mm in enumerate(metric_meta):
             for row_idx in np.flatnonzero(ts.notna().to_numpy()):
                 sample = f"Sample {int(sample_numbers.iloc[row_idx])}"
                 qualifier_values[metric_idx * n_rows + row_idx] = f"{mm['type']} / {sample}" if mm["type"] else sample
     feature_order_values    = rep([mm["feature_order"] for mm in metric_meta])
-    if repeated_rows:
+    if separate_samples:
         # Each sample is a feature occurrence; keep the database's timestamp key intact.
         stride = max(1, int(sample_numbers.max())) if sample_numbers.notna().any() else 1
         feature_order_values = np.concatenate([
@@ -1148,6 +1149,15 @@ def _build_tall_from_raw(raw: pd.DataFrame, options: ImportOptions, unit_callbac
 
     if repeated_rows:
         tall = tall.dropna(subset=["value"]).reset_index(drop=True)
+
+    if options.average_repeated_measurements and tall.duplicated(["feature_order", "ts"]).any():
+        # Column identity keeps sources, units, and explicit types separate. Metadata
+        # describes the averaged point using its first available label.
+        attrs = tall.attrs.copy()
+        aggregations = {col: "first" for col in tall.columns if col not in {"feature_order", "ts"}}
+        aggregations["value"] = "mean"
+        tall = tall.groupby(["feature_order", "ts"], sort=False, dropna=False).agg(aggregations).reset_index()[tall.columns]
+        tall.attrs = attrs
 
     # Optional: compress repeated strings
     if getattr(options, "strings_as_category", False):

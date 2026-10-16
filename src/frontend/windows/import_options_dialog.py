@@ -586,6 +586,12 @@ class ImportOptionsDialog(QDialog):
         basic_form.addRow(QLabel(tr("File-type basics")))
         basic_form.addRow(self.excel_basic_container)
 
+        self.average_repeats_cb = QCheckBox(tr("Average repeated measurements"))
+        self.average_repeats_cb.setChecked(self.opts.average_repeated_measurements)
+        basic_form.addRow(self._wrap_with_help(
+            self.average_repeats_cb, "controls.import.average_repeated_measurements"
+        ))
+
         root.addWidget(basic_box, 0)
 
         # ---------------------------------------------------------------------
@@ -851,6 +857,7 @@ class ImportOptionsDialog(QDialog):
             date_column=self.date_col_edit.text().strip() or None,
             time_column=self.time_col_edit.text().strip() or None,
             fill_down_timestamps=self.fill_timestamps_cb.isChecked(),
+            average_repeated_measurements=self.average_repeats_cb.isChecked(),
             auto_detect_datetime= not self.date_col_edit.text().strip(),
             assume_dayfirst=bool(self.dayfirst_cb.isChecked()),
             # NEW:

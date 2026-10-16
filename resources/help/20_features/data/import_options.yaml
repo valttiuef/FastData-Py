@@ -13,7 +13,15 @@ entries:
     body: |
       <p>Merged Excel cells are expanded automatically, including group headers and operator labels.</p>
       <p>Enable this option for unmerged continuation rows with blank dates and times. A new date starts a new clock block.</p>
-      <p>Repeated measurements at the same timestamp are kept as separate <b>Sample 1</b>, <b>Sample 2</b>, etc. feature types. Existing type labels are preserved before the sample label. Timestamps and measured values are unchanged.</p>
+      <p>Repeated measurements are averaged by default. Disable <b>Average repeated measurements</b> to keep continuation rows as numbered sample types.</p>
+
+  controls.import.average_repeated_measurements:
+    title: "Average repeated measurements"
+    short: "Average repeated rows into one value per datetime."
+    body: |
+      <p>Enabled by default for Excel imports and CSV continuation/date-and-time blocks. Each measurement column is averaged separately at each datetime; sources, units, and existing type labels remain separate.</p>
+      <p>Missing numeric values are excluded from the mean. Metadata uses the first available label for the averaged point.</p>
+      <p>Disable to preserve continuation measurements as <b>Sample 1</b>, <b>Sample 2</b>, etc. Existing type labels are kept before the sample label.</p>
 
   controls.import.system_name:
     title: "System name"

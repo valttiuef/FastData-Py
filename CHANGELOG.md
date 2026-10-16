@@ -7,6 +7,7 @@ The format is based on Keep a Changelog, with entries grouped by release.
 ## [0.2.3] - 2026-08-28
 
 ### Added
+- Import options now average repeated measurements at the same datetime by default, with an option to keep numbered sample types instead.
 - Systems, datasets, and imports can now be removed by right-clicking their filter entries, with confirmation before deletion and background cleanup.
 - Excel and CSV imports now combine separate date and time columns, with automatic detection of headers such as Date and Time and support for Excel clock cells and dot-separated times.
 - Import options now include a separate time column and a continuation-row setting for records whose date and time cover multiple measurement rows.
