@@ -23,7 +23,7 @@ from .collapsible_section import CollapsibleSection
 from ..models.database_model import DatabaseModel
 from ..threading.runner import run_in_thread
 from ..threading.utils import run_in_main_thread
-from ..utils import toast_error, toast_success
+from ..utils import toast_error, toast_info, toast_success
 from .help_widgets import InfoButton
 from ..viewmodels.help_viewmodel import HelpViewModel, get_help_viewmodel
 from .date_time_filter_control import DateTimeFilterControl
@@ -43,6 +43,9 @@ class FiltersWidgetViewModel(QObject):
     tags_updated = Signal(list)
     group_remove_finished = Signal(object)
     group_remove_failed = Signal(str)
+    item_remove_finished = Signal(object)
+    item_remove_failed = Signal(str)
+    item_remove_started = Signal()
 
     def __init__(
         self,
@@ -217,6 +220,33 @@ class FiltersWidgetViewModel(QObject):
             return
         self.groups_updated.emit(payload["groups"])
         self.tags_updated.emit(payload["tags"])
+
+    # @ai(gpt-6, codex, feature, 2026-10-16)
+    def remove_filter_item(self, kind: str, value: object, *, label: str, systems: list[str]) -> None:
+        if self._remove_running:
+            return
+        model = self._model
+        if model is None:
+            self.item_remove_failed.emit(tr("Database is not available."))
+            return
+        self._remove_running = True
+        self.item_remove_started.emit()
+        toast_info(tr("Removing data..."))
+        run_in_thread(
+            model.remove_filter_item,
+            kind=kind, value=value, label=label, systems=list(systems),
+            on_result=lambda payload: run_in_main_thread(self._on_item_remove_finished, payload),
+            on_error=lambda message: run_in_main_thread(self._on_item_remove_failed, message),
+            owner=self, key="filters_remove_item",
+        )
+
+    def _on_item_remove_finished(self, payload: object) -> None:
+        self._remove_running = False
+        self.item_remove_finished.emit(payload)
+
+    def _on_item_remove_failed(self, message: str) -> None:
+        self._remove_running = False
+        self.item_remove_failed.emit(message)
 
     def remove_group(self, group_id: int) -> None:
         if self._remove_running:
@@ -538,6 +568,60 @@ class FiltersWidget(CollapsibleSection):
         self._filters_view_model.filters_refreshed.connect(self.filters_refreshed.emit)
         self._filters_view_model.group_remove_finished.connect(self._on_group_remove_finished)
         self._filters_view_model.group_remove_failed.connect(self._on_group_remove_failed)
+        for combo, kind, caption in (
+            (self.systems_combo, "system", tr("Remove system")),
+            (self.datasets_combo, "dataset", tr("Remove dataset")),
+            (self.imports_combo, "import", tr("Remove import")),
+        ):
+            combo.set_context_actions([("remove_" + kind, caption)])
+            combo.context_action_triggered.connect(self._on_item_context_action)
+        self._filters_view_model.item_remove_finished.connect(self._on_item_remove_finished)
+        self._filters_view_model.item_remove_failed.connect(self._on_item_remove_failed)
+        self._remove_status = QLabel(self)
+        self._remove_status.hide()
+        grid.addWidget(self._remove_status, 4, 0, 1, 6)
+        self._filters_view_model.item_remove_started.connect(self._on_item_remove_started)
+
+    def _on_item_remove_started(self) -> None:
+        self._remove_status.setText(tr("Removing data..."))
+        self._remove_status.show()
+        for combo in (self.systems_combo, self.datasets_combo, self.imports_combo, self.group_combo):
+            combo.setEnabled(False)
+
+    # @ai(gpt-6, codex, feature, 2026-10-16)
+    def _on_item_context_action(self, action_key: str, payload: object) -> None:
+        kind = {"remove_system": "system", "remove_dataset": "dataset", "remove_import": "import"}.get(action_key)
+        if kind is None or not isinstance(payload, dict) or payload.get("value") is None:
+            return
+        label = str(payload.get("label") or payload["value"])
+        title = {"system": tr("Remove system"), "dataset": tr("Remove dataset"), "import": tr("Remove import")}[kind]
+        body = tr(
+            'Permanently remove "{item}" and all its imported data from this database?\n\n'
+            'Systems include their datasets and imports; datasets include their imports. '
+            'Features and groups used only by this data, and related saved models and results, will also be removed. '
+            'Shared features and groups will be kept. Original files will be kept.\n\n'
+            'This cannot be undone.'
+        ).format(item=label)
+        if QMessageBox.question(self, title, body,
+                               QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                               QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+            return
+        self._filters_view_model.remove_filter_item(kind, payload["value"], label=label, systems=self.selected_systems())
+
+    def _on_item_remove_finished(self, payload: object) -> None:
+        self._remove_status.setText(tr("Data removed."))
+        for combo in (self.systems_combo, self.datasets_combo, self.imports_combo, self.group_combo):
+            combo.setEnabled(True)
+        data = payload if isinstance(payload, dict) else {}
+        toast_success(tr("Data removed. Removed {features} exclusive features and {groups} exclusive groups.").format(
+            features=data.get("features_deleted", 0), groups=data.get("groups_deleted", 0)))
+
+    def _on_item_remove_failed(self, message: str) -> None:
+        self._remove_status.setText(tr("Removing data failed."))
+        self._remove_status.show()
+        for combo in (self.systems_combo, self.datasets_combo, self.imports_combo, self.group_combo):
+            combo.setEnabled(True)
+        toast_error(str(message), title=tr("Remove data"))
 
     def _on_group_context_action(self, action_key: str, payload: object) -> None:
         if str(action_key or "").strip() != "remove_group":

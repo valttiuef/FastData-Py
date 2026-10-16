@@ -12,6 +12,7 @@ entries:
         <li>Compare subsets of data</li>
       </ul>
       <p>The selected filter set is applied to the dataframe used by downstream analysis and visualizations.</p>
+      <p>Right-click an entry in Systems, Datasets, or Imports and choose Remove to permanently delete it from the database. A confirmation is required and defaults to No. Systems include their datasets and imports; datasets include their imports. Related measurements, imported tables, exclusive features and groups, and affected saved models and results are removed. Shared features and groups and original source files are kept. Deletion runs in the background and refreshes the available filters.</p>
     aliases: ["filter.widget", "data.filter"]
 
   controls.filters.systems_datasets:

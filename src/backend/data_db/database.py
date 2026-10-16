@@ -2157,13 +2157,116 @@ class Database:
         return pivot
 
     # ---------- Asset management (systems/datasets) ----------
+    # @ai(gpt-6, codex, feature, 2026-10-16)
+    def delete_filter_item(self, kind: str, value: object, *, system: str | None = None) -> dict:
+        """Delete one asset and its exclusive dependants atomically; preserve shared data."""
+        if kind not in {"system", "dataset", "import"}:
+            raise ValueError("Invalid data category")
+        with self.write_transaction() as con:
+            if kind == "system":
+                rows = con.execute("SELECT id FROM systems WHERE name = ?", [str(value)]).fetchall()
+            elif kind == "dataset":
+                rows = con.execute(
+                    "SELECT d.id FROM datasets d JOIN systems s ON s.id = d.system_id "
+                    "WHERE d.name = ? AND s.name = ?", [str(value), system],
+                ).fetchall()
+            else:
+                rows = con.execute("SELECT id FROM imports WHERE id = ?", [int(value)]).fetchall()
+            if len(rows) != 1:
+                raise ValueError("The selected item was not found or is ambiguous. Refresh the filters.")
+            item_id = int(rows[0][0])
+            return self._delete_asset(con, kind, item_id)
+
+    # @ai(gpt-6, codex, feature, 2026-10-16)
+    def _delete_asset(self, con, kind: str, item_id: int) -> dict:
+        # Temporary snapshots restrict orphan cleanup to this deletion's dependants.
+        dataset_where = "system_id = ?" if kind == "system" else "id = ?"
+        con.execute("CREATE TEMP TABLE deleted_datasets AS SELECT id FROM datasets WHERE "
+                    + (dataset_where if kind != "import" else "FALSE"),
+                    [item_id] if kind != "import" else [])
+        con.execute("CREATE TEMP TABLE deleted_imports AS SELECT id, dataset_id, csv_table_name FROM imports WHERE "
+                    + ("id = ?" if kind == "import" else "dataset_id IN (SELECT id FROM deleted_datasets)"),
+                    [item_id] if kind == "import" else [])
+        con.execute("""CREATE TEMP TABLE deleted_features AS
+            SELECT feature_id AS id FROM feature_import_map WHERE import_id IN (SELECT id FROM deleted_imports)
+            UNION SELECT feature_id FROM feature_dataset_map WHERE dataset_id IN (SELECT id FROM deleted_datasets)
+            UNION SELECT feature_id FROM measurements WHERE import_id IN (SELECT id FROM deleted_imports)
+                OR dataset_id IN (SELECT id FROM deleted_datasets)
+            UNION SELECT feature_id FROM csv_feature_columns WHERE import_id IN (SELECT id FROM deleted_imports)
+            UNION SELECT feature_id FROM csv_group_columns WHERE import_id IN (SELECT id FROM deleted_imports)
+            UNION SELECT id FROM features WHERE system_id = ?""", [item_id if kind == "system" else -1])
+        con.execute("""CREATE TEMP TABLE affected_groups AS
+            SELECT group_id AS id FROM group_label_scopes WHERE import_id IN (SELECT id FROM deleted_imports)
+                OR dataset_id IN (SELECT id FROM deleted_datasets)
+            UNION SELECT group_id FROM group_points WHERE dataset_id IN (SELECT id FROM deleted_datasets)
+            UNION SELECT id FROM group_labels WHERE kind IN (
+                SELECT group_kind FROM csv_group_columns WHERE import_id IN (SELECT id FROM deleted_imports)
+                UNION SELECT kind FROM group_value_aliases WHERE feature_id IN (SELECT id FROM deleted_features))""")
+        con.execute("""CREATE TEMP TABLE affected_group_datasets AS
+            SELECT DISTINCT group_id, dataset_id FROM group_label_scopes
+            WHERE import_id IN (SELECT id FROM deleted_imports)""")
+        con.execute("""CREATE TEMP TABLE deleted_models AS
+            SELECT id FROM model_runs WHERE dataset_id IN (SELECT id FROM deleted_datasets)
+            UNION SELECT model_id FROM model_imports WHERE import_id IN (SELECT id FROM deleted_imports)""")
+        for table in ("model_results", "model_features", "model_imports"):
+            con.execute(f"DELETE FROM {table} WHERE model_id IN (SELECT id FROM deleted_models)")
+        con.execute("DELETE FROM model_runs WHERE id IN (SELECT id FROM deleted_models)")
+        for table in ("measurements", "csv_feature_columns", "csv_group_columns", "feature_import_map", "group_label_scopes"):
+            con.execute(f"DELETE FROM {table} WHERE import_id IN (SELECT id FROM deleted_imports)")
+        for table in ("measurements", "group_points", "feature_import_map", "feature_dataset_map", "group_label_scopes"):
+            con.execute(f"DELETE FROM {table} WHERE dataset_id IN (SELECT id FROM deleted_datasets)")
+        con.execute("""DELETE FROM group_points p WHERE EXISTS (
+            SELECT 1 FROM affected_group_datasets a WHERE a.group_id = p.group_id AND a.dataset_id = p.dataset_id)
+            AND NOT EXISTS (SELECT 1 FROM group_label_scopes s
+                WHERE s.group_id = p.group_id AND s.dataset_id = p.dataset_id)""")
+        for (table_name,) in con.execute("SELECT DISTINCT csv_table_name FROM deleted_imports WHERE csv_table_name IS NOT NULL").fetchall():
+            if table_name and not con.execute(
+                "SELECT 1 FROM imports WHERE csv_table_name = ? AND id NOT IN (SELECT id FROM deleted_imports)",
+                [table_name],
+            ).fetchone():
+                relation = con.execute("SELECT table_type FROM information_schema.tables WHERE table_name = ?", [table_name]).fetchone()
+                object_type = "VIEW" if relation and relation[0] == "VIEW" else "TABLE"
+                con.execute(f"DROP {object_type} IF EXISTS {_sql_quote_identifier(table_name)}")
+        con.execute("DELETE FROM imports WHERE id IN (SELECT id FROM deleted_imports)")
+        self.feature_scopes_repo.sync_dataset_scope(con, [r[0] for r in con.execute("SELECT DISTINCT dataset_id FROM deleted_imports").fetchall()])
+        con.execute("""DELETE FROM deleted_features f WHERE
+            EXISTS (SELECT 1 FROM feature_import_map m WHERE m.feature_id = f.id)
+            OR EXISTS (SELECT 1 FROM feature_dataset_map m WHERE m.feature_id = f.id)
+            OR EXISTS (SELECT 1 FROM measurements m WHERE m.feature_id = f.id)
+            OR EXISTS (SELECT 1 FROM csv_feature_columns m WHERE m.feature_id = f.id)
+            OR EXISTS (SELECT 1 FROM csv_group_columns m WHERE m.feature_id = f.id)""")
+        # Models that reference removed features cannot be used safely either.
+        con.execute("INSERT INTO deleted_models SELECT DISTINCT model_id FROM model_features WHERE feature_id IN (SELECT id FROM deleted_features)")
+        for table in ("model_results", "model_features", "model_imports"):
+            con.execute(f"DELETE FROM {table} WHERE model_id IN (SELECT id FROM deleted_models)")
+        con.execute("DELETE FROM model_runs WHERE id IN (SELECT id FROM deleted_models)")
+        for table in ("feature_tags", "group_value_aliases", "feature_dataset_map", "feature_import_map"):
+            con.execute(f"DELETE FROM {table} WHERE feature_id IN (SELECT id FROM deleted_features)")
+        con.execute("DELETE FROM features WHERE id IN (SELECT id FROM deleted_features)")
+        con.execute("""DELETE FROM affected_groups g WHERE
+            EXISTS (SELECT 1 FROM group_label_scopes s WHERE s.group_id = g.id)
+            OR EXISTS (SELECT 1 FROM group_points p WHERE p.group_id = g.id)
+            OR EXISTS (SELECT 1 FROM csv_group_columns c JOIN group_labels l ON c.group_kind = l.kind WHERE l.id = g.id)
+            OR EXISTS (SELECT 1 FROM group_value_aliases a JOIN group_labels l ON a.kind = l.kind WHERE l.id = g.id)""")
+        con.execute("DELETE FROM group_labels WHERE id IN (SELECT id FROM affected_groups)")
+        con.execute("DELETE FROM datasets WHERE id IN (SELECT id FROM deleted_datasets)")
+        if kind == "system":
+            con.execute("DELETE FROM systems WHERE id = ?", [item_id])
+        result = {"kind": kind, "features_deleted": con.execute("SELECT count(*) FROM deleted_features").fetchone()[0],
+                  "groups_deleted": con.execute("SELECT count(*) FROM affected_groups").fetchone()[0]}
+        for table in ("deleted_datasets", "deleted_imports", "deleted_features", "affected_groups", "affected_group_datasets", "deleted_models"):
+            con.execute(f"DROP TABLE {table}")
+        return result
+
+    # @ai(gpt-6, codex, fix, 2026-10-16)
     def delete_dataset(self, dataset_id: int) -> None:
         with self.write_transaction() as con:
-            self.datasets_repo.delete_by_id(con, int(dataset_id))
+            self._delete_asset(con, "dataset", int(dataset_id))
 
+    # @ai(gpt-6, codex, fix, 2026-10-16)
     def delete_system(self, system_id: int) -> None:
         with self.write_transaction() as con:
-            self.systems_repo.delete_by_id(con, int(system_id))
+            self._delete_asset(con, "system", int(system_id))
 
     def _delete_dataset(self, con: duckdb.DuckDBPyConnection, dataset_id: int) -> None:
         self.datasets_repo.delete_by_id(con, dataset_id)

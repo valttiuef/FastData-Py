@@ -1672,6 +1672,25 @@ class DatabaseModel(QObject):
             .reset_index(drop=True)
         )
 
+    # @ai(gpt-6, codex, feature, 2026-10-16)
+    def remove_filter_item(self, kind: str, value: object, *, label: str = "", systems: list[str] | None = None) -> dict:
+        db = self._ensure_database()
+        system = None
+        if kind == "dataset":
+            entries = self.list_datasets_for_filters(systems=systems)
+            matches = [(name, owner) for name, owner in entries if name == str(value)]
+            if len(matches) > 1:
+                matches = [(name, owner) for name, owner in matches if f"{name} ({owner})" == label]
+            if len(matches) != 1:
+                raise ValueError("Dataset was not found or is ambiguous. Refresh the filters.")
+            system = matches[0][1]
+        result = db.delete_filter_item(kind, value, system=system)
+        self._invalidate_features_cache()
+        self._emit_in_main_thread(self.database_changed, self._path)
+        self._emit_in_main_thread(self.features_list_changed)
+        self._emit_in_main_thread(self.groups_changed)
+        return result
+
     def remove_group_by_id(self, group_id: int) -> dict[str, Any]:
         """Delete one group label and all related group points."""
         try:

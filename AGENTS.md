@@ -126,6 +126,12 @@ When adding dependencies:
 
 Do not introduce mandatory cloud dependencies.
 
+## Changelog and Versioning
+
+- Automatically update `CHANGELOG.md` whenever a feature is added, behavior is changed, or an issue is fixed, as part of the same task.
+- Add concise, user-facing entries under the current application version (defined in `appmeta.json`), using the existing changelog sections such as Added, Changed, and Fixed. Create the current version's section if it is missing.
+- Only increase the application version or create a new release version when the user explicitly asks. Otherwise, keep version metadata and the current release date unchanged.
+
 ## AI Fingerprinting
 
 For significant AI-generated changes, annotate with one of these forms:

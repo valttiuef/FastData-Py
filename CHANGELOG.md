@@ -7,10 +7,12 @@ The format is based on Keep a Changelog, with entries grouped by release.
 ## [0.2.3] - 2026-08-28
 
 ### Added
-- Excel and CSV imports now combine separate date and time columns, with automatic detection of date and time headers and support for Excel clock cells and dot-separated times.
+- Systems, datasets, and imports can now be removed by right-clicking their filter entries, with confirmation before deletion and background cleanup.
+- Excel and CSV imports now combine separate date and time columns, with automatic detection of headers such as Date and Time and support for Excel clock cells and dot-separated times.
 - Import options now include a separate time column and a continuation-row setting for records whose date and time cover multiple measurement rows.
 
 ### Fixed
+- Deleting data now removes related measurements, imported tables, exclusive features and groups, and affected saved models and results while preserving shared features, shared groups, and original source files.
 - Statistics grouped by dataset or import now preserve each selected source as a separate group instead of combining overlapping values into full-selection totals.
 - Excel imports now expand merged headers and metadata cells, preserving measurement group names, positions, and operator labels across continuation rows.
 - Repeated measurements at the same timestamp are preserved as numbered sample series instead of losing values during database import.
