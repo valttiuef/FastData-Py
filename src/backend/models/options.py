@@ -36,6 +36,10 @@ class ImportOptions:
 
     # Timestamp handling
     date_column: Optional[str] = None
+    # A separate clock column is combined with the date, never treated as a metric.
+    time_column: Optional[str] = None
+    # Merged Excel cells are always expanded; this also handles unmerged blanks.
+    fill_down_timestamps: bool = False
     auto_detect_datetime: bool = True
     assume_dayfirst: bool = True
 

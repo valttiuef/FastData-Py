@@ -22,6 +22,7 @@ from ..importing import (
     _get_encoding_candidates,
 )
 from ..importing.utils import as_path, file_sha256, chunks, coalesce
+from ..importing.parsers import _find_time_column
 from .sql_loader import load_and_execute_sql, detect_engine_name
 from .sql_utils import load_sql, render_sql
 from .repositories import (
@@ -456,6 +457,8 @@ class Database:
         needed = {"ts","value","base_name","source","unit","type"}
         if missing := (needed - set(tall.columns)):
             raise ImportError(f"Missing columns for insert: {missing}")
+        for message in tall.attrs.get("import_warnings", []):
+            self._progress("import_warning", 0, 0, f"{file_path.name}: {message}", options.progress_cb)
 
         # --- sanitize (fast path, minimal copies) ---
         t = tall  # alias; if callers may reuse `tall`, do: t = tall.copy(deep=False)
@@ -1509,6 +1512,7 @@ class Database:
         return []
 
     def import_file(self, file_path: PathLike, options: Optional[ImportOptions] = None) -> List[int]:
+        # @ai(gpt-6, codex, bugfix, 2026-10-16)
         options = options or ImportOptions()
         f = as_path(file_path)
 
@@ -1517,6 +1521,29 @@ class Database:
             return self._import_excel(f, options)
 
         unit_callback = getattr(options, "_unit_callback", None)
+        # Split clocks and continuation blocks need the shared, whole-record parser.
+        # Ordinary CSV files retain the existing streaming / DuckDB fast paths.
+        read_kwargs = dict(header=None, dtype=object, nrows=128)
+        if options.csv_delimiter:
+            read_kwargs["sep"] = options.csv_delimiter
+        for encoding in _get_encoding_candidates(options.csv_encoding):
+            try:
+                sample = pd.read_csv(f, encoding=encoding, **read_kwargs)
+                break
+            except UnicodeDecodeError:
+                continue
+        else:
+            sample = None
+        needs_records = options.fill_down_timestamps or bool(options.time_column)
+        if sample is not None and not needs_records:
+            from ..importing.parsers import _find_ts_column
+            header_rows, ts_col = _find_ts_column(sample, options, file_type="csv")
+            needs_records = _find_time_column(sample, header_rows, ts_col, options) is not None
+        if needs_records:
+            results = []
+            for sheet_name, tall, header_rows in parse_file_to_tall(f, options, unit_callback=unit_callback):
+                results.extend(self._insert_tall_dataframe(tall, f, None, header_rows, options))
+            return results
         if self._should_use_duckdb_csv_import(f, options):
             return self._import_csv_duckdb(f, options, unit_callback)
         return self._import_csv_streaming(f, options, unit_callback)

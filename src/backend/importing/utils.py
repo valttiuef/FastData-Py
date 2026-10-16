@@ -1,5 +1,6 @@
 
 from __future__ import annotations
+import datetime
 import hashlib
 import math
 import re
@@ -156,17 +157,22 @@ def _normalize_ts_series(
     Normalize timestamps to a timezone-naive datetime64[ns] Series without altering
     the original wall-clock times.
     """
+    # @ai(gpt-6, codex, bugfix, 2026-10-16)
     s = ts_col.copy()
 
     # --- 0) Already datetime-like -> drop any timezone info without conversion ---
     if isinstance(s.dtype, pd.DatetimeTZDtype):
         return ensure_series_naive(s)
 
-    if np.issubdtype(s.dtype, np.datetime64):
+    if pd.api.types.is_datetime64_any_dtype(s.dtype):
         return pd.to_datetime(s, errors="coerce")
 
     # --- 1) Excel serials (vectorized heuristic) ---
     nn = s.dropna()
+    numeric = pd.to_numeric(nn, errors="coerce")
+    for unit, low, high in (("s", 10**9, 2_000_000_000), ("ms", 10**12, 2_000_000_000_000)):
+        if not numeric.empty and numeric.between(low, high).mean() > 0.5:
+            return pd.to_datetime(pd.to_numeric(s, errors="coerce"), unit=unit, errors="coerce")
     excel_mask = nn.map(_is_excel_serial_number)
     if not nn.empty and excel_mask.mean() > 0.5:
         # Parse serials and drop any timezone information without conversion
@@ -204,6 +210,9 @@ def _normalize_ts_series(
                     format="mixed",
                     utc=False,
                 )
+                iso = s2[remaining].map(lambda x: isinstance(x, str) and bool(_ISO_LEADING_DATE_RE.match(x)))
+                if iso.any():
+                    p1.loc[iso] = pd.to_datetime(s2[remaining][iso], errors="coerce", format="mixed", dayfirst=False)
         except Exception:
             # Fall back to per-value parsing if vectorized parsing fails
             # (e.g. mixed timezone offsets / mixed aware+naive values).
@@ -278,16 +287,19 @@ def detect_first_data_row(raw: pd.DataFrame, search_cols: int = 6, *, dayfirst: 
         dayfirst: Whether to interpret ambiguous dates as DD/MM
         dot_time_as_colon: Whether to rewrite dot-separated times (HH.MM -> HH:MM)
     """
+    # @ai(gpt-6, codex, bugfix, 2026-10-16)
     best = (None, None)
     for c in range(min(search_cols, raw.shape[1])):
         col_data = raw.iloc[:, c].copy()
+        # Header numbers, measurements and times alone are not calendar dates.
+        col_data = col_data.where(col_data.map(_is_calendar_value))
         
         # Apply dot-time normalization if enabled
         if dot_time_as_colon:
             col_data = col_data.map(lambda x: _rewrite_dot_time_to_colon(x) if isinstance(x, str) else x)
         
         try:
-            s = pd.to_datetime(col_data, dayfirst=dayfirst, errors="coerce")
+            s = _normalize_ts_series(col_data, dayfirst=dayfirst, dot_time_as_colon=dot_time_as_colon)
         except Exception:
             s = col_data.map(
                 lambda x: _parse_single_datetime_mixed(x, dayfirst=dayfirst)
@@ -301,6 +313,46 @@ def detect_first_data_row(raw: pd.DataFrame, search_cols: int = 6, *, dayfirst: 
     if best[0] is None:
         raise ValueError("Could not find a timestamp column in the first few columns.")
     return best
+
+
+def _is_calendar_value(value) -> bool:
+    if isinstance(value, (datetime.datetime, datetime.date, pd.Timestamp, np.datetime64)):
+        return not pd.isna(value)
+    if isinstance(value, str):
+        if value.strip().isdigit():
+            number = int(value.strip())
+            return 10**9 <= number <= 2_000_000_000 or 10**12 <= number <= 2_000_000_000_000
+        return bool(re.search(r"(?:\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}[-/.]\d{1,2}[-/.]\d{4}|\d{1,2}\s+[A-Za-z]{3,}\s+\d{4}|[A-Za-z]{3,}\s+\d{1,2},?\s+\d{4})", value))
+    if isinstance(value, (int, float, np.number)) and not pd.isna(value):
+        return 20000 <= value <= 80000 or 10**9 <= value <= 2_000_000_000 or 10**12 <= value <= 2_000_000_000_000
+    return False
+
+
+def _normalize_time_series(series: pd.Series, *, dot_time_as_colon: bool = True) -> pd.Series:
+    """Parse clock times as offsets from midnight, never using today's date."""
+    # @ai(gpt-6, codex, implementation, 2026-10-16)
+    def parse(value):
+        if pd.isna(value):
+            return pd.NaT
+        if isinstance(value, datetime.time):
+            return pd.Timedelta(hours=value.hour, minutes=value.minute, seconds=value.second, microseconds=value.microsecond)
+        if isinstance(value, (float, int, np.number)):
+            if 0 <= value < 1:
+                return pd.Timedelta(seconds=round(float(value) * 86400, 6))
+            value = str(value)
+            if dot_time_as_colon and re.fullmatch(r"\d{1,2}\.\d", value):
+                value += "0"
+        text = str(value).strip()
+        if dot_time_as_colon:
+            text = _rewrite_dot_time_to_colon(text)
+        match = re.fullmatch(r"(\d{1,2}):(\d{2})(?::(\d{2})(\.\d{1,6})?)?", text)
+        if not match:
+            return pd.NaT
+        h, m, s = (int(match.group(i) or 0) for i in (1, 2, 3))
+        if h >= 24 or m >= 60 or s >= 60:
+            return pd.NaT
+        return pd.Timedelta(hours=h, minutes=m, seconds=s + float(match.group(4) or 0))
+    return pd.Series([parse(value) for value in series], index=series.index, dtype="timedelta64[ns]")
 
 def header_tuple_for_col(raw: pd.DataFrame, col_idx: int, header_rows: int) -> tuple:
     """Return a fixed-length 4-tuple (row0..row3) of header cells for a column."""

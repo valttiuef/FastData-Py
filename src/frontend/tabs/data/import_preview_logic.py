@@ -11,6 +11,8 @@ import numpy as np
 import pandas as pd
 
 from backend.importing import _get_encoding_candidates
+from backend.importing.parsers import read_raw_excel, _find_ts_column, _find_time_column
+from backend.models import ImportOptions
 
 _EPOCH_S_LO = 10**9
 _EPOCH_S_HI = 2_000_000_000
@@ -290,10 +292,21 @@ def _read_preview_df(
 ) -> pd.DataFrame:
     usecols = _limited_usecols(ncolumns)
     if _is_excel(file_path):
-        try:
-            return pd.read_excel(file_path, header=header, nrows=nrows, usecols=usecols)
-        except Exception:
-            return pd.read_excel(file_path, header=header, nrows=nrows)
+        raw = next(iter(read_raw_excel(file_path, suffix=os.path.splitext(file_path)[1].lower(), nrows=nrows + (header or 0) + 1).values()))
+        if header is None:
+            return raw.iloc[:nrows, :ncolumns]
+        frame = raw.iloc[header + 1:header + 1 + nrows, :ncolumns].copy()
+        names = []
+        for idx, value in enumerate(raw.iloc[header, :ncolumns]):
+            base = str(value) if pd.notna(value) else f"Unnamed: {idx}"
+            name = base
+            suffix = 1
+            while name in names:
+                name = f"{base}.{suffix}"
+                suffix += 1
+            names.append(name)
+        frame.columns = names
+        return frame
     try:
         return _read_csv_with_encoding_fallback(
             file_path,
@@ -386,12 +399,15 @@ def build_import_preview_payload(
     nrows: int = _MAX_PREVIEW_ROWS,
     ncolumns: int = _MAX_PREVIEW_COLS,
 ) -> dict[str, object]:
+    # @ai(gpt-6, codex, bugfix, 2026-10-16)
     path = str(file_path)
     payload: dict[str, object] = {
         "display_df": pd.DataFrame(),
         "header_rows": None,
         "base_header_index": base_header_index,
         "date_column": None,
+        "time_column": None,
+        "fill_down_timestamps": None,
         "datetime_formats": [],
         "assume_dayfirst": None,
         "dot_time_as_colon": None,
@@ -425,7 +441,7 @@ def build_import_preview_payload(
                 file_path=path,
                 user_encoding=user_encoding,
                 header=None,
-                nrows=preview_rows,
+                nrows=64,
                 ncolumns=preview_cols,
                 kwargs=kwargs,
             )
@@ -450,6 +466,36 @@ def build_import_preview_payload(
                 if header_rows is not None and resolved_base_index >= int(header_rows):
                     resolved_base_index = max(0, int(header_rows) - 1)
 
+            detection_opts = ImportOptions(excel_header_rows=0, csv_header_rows=0)
+            try:
+                detected_rows, date_idx = _find_ts_column(raw_df, detection_opts)
+            except ValueError:
+                detected_rows, date_idx = None, None
+            if detected_rows is not None and date_idx is not None:
+                header_rows = detected_rows
+                labels = [str(x).strip() for x in raw_df.iloc[:header_rows, date_idx] if pd.notna(x) and str(x).strip()]
+                payload["date_column"] = labels[-1] if labels else None
+                time_idx = _find_time_column(raw_df, header_rows, date_idx, detection_opts)
+                if time_idx is not None:
+                    labels = [str(x).strip() for x in raw_df.iloc[:header_rows, time_idx] if pd.notna(x) and str(x).strip()]
+                    payload["time_column"] = labels[-1] if labels else None
+                payload["fill_down_timestamps"] = bool(raw_df.attrs.get("merged_row_spans", {}).get(date_idx))
+                if time_idx is not None:
+                    body = raw_df.iloc[header_rows:]
+                    continuations = body.iloc[:, date_idx].isna() & body.iloc[:, time_idx].isna() & body.notna().any(axis=1)
+                    payload["fill_down_timestamps"] = payload["fill_down_timestamps"] or bool(continuations.any())
+                # A repeated group label above position labels is a two-level header.
+                if header_rows <= 1:
+                    resolved_base_index = 0
+                for row_idx in range(max(0, header_rows - 2), header_rows - 1):
+                    values = raw_df.iloc[row_idx].dropna().astype(str)
+                    if values.duplicated().any():
+                        resolved_base_index = row_idx
+                        payload["source_header_index"] = row_idx + 1
+                        payload["unit_header_index"] = None
+                        payload["type_header_index"] = None
+                        break
+
         if header_rows is not None and header_rows > 0:
             df = _read_preview_df(
                 file_path=path,
@@ -469,7 +515,7 @@ def build_import_preview_payload(
                 payload["date_column"] = name
             if formats:
                 payload["datetime_formats"] = [fmt for fmt in formats if not fmt.startswith("epoch_")]
-            payload["assume_dayfirst"] = bool(dayfirst)
+            payload["assume_dayfirst"] = bool(dayfirst) if formats else True
             if dot_time:
                 payload["dot_time_as_colon"] = True
             if guess:
@@ -499,6 +545,25 @@ def build_import_preview_payload(
         payload["display_df"] = df.head(rows).iloc[:, :cols]
         payload["header_rows"] = header_rows
         payload["base_header_index"] = resolved_base_index
+        if guess and header_rows is not None and date_idx is not None:
+            guessed_meta = []
+            for col_idx in range(raw_df.shape[1]):
+                if col_idx in {date_idx, time_idx}:
+                    continue
+                values = raw_df.iloc[header_rows:, col_idx].dropna()
+                if values.empty or pd.to_numeric(values, errors="coerce").notna().any():
+                    continue
+                labels = [str(x).strip() for x in raw_df.iloc[:header_rows, col_idx] if pd.notna(x) and str(x).strip()]
+                if labels:
+                    guessed_meta.append(labels[-1])
+            payload["force_meta_columns_guess"] = guessed_meta
+            if time_idx is not None:
+                samples = raw_df.iloc[header_rows:, date_idx].dropna().astype(str).tolist()
+                # Keep ambiguous European dates consistent with import defaults.
+                dayfirst = not any(re.match(r"^\d{1,2}/(?:1[3-9]|2\d|3[01])/\d{4}", x) for x in samples)
+                formats, _ = _infer_common_format(samples, dayfirst)
+                payload["datetime_formats"] = [fmt for fmt in formats if "%H" not in fmt]
+                payload["assume_dayfirst"] = dayfirst
         return payload
     except Exception as exc:
         payload["error"] = str(exc)

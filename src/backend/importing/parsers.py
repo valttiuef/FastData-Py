@@ -1,4 +1,5 @@
 from __future__ import annotations
+import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Set
 
@@ -12,6 +13,7 @@ from .utils import (
     detect_first_data_row,
     header_tuple_for_col,
     clean_cell,
+    _normalize_time_series,
 )
 
 import os
@@ -664,7 +666,7 @@ def read_raw_csv(file_path: Path, options: ImportOptions, unit_callback=None) ->
                             exc_info=True,
                         )
             # Successfully read all chunks with this encoding
-            df = pd.concat(frames, ignore_index=True, copy=False) if frames else pd.DataFrame()
+            df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
             return {"-": df}
         except UnicodeDecodeError as e:
             # This encoding failed, try the next one
@@ -703,8 +705,38 @@ def _pick_excel_engine(suffix: str) -> str:
     return None  # type: ignore[return-value]
 
 
-def read_raw_excel(file_path: Path, unit_callback=None, suffix: str = ".xlsx") -> Dict[str, pd.DataFrame]:
+def read_raw_excel(file_path: Path, unit_callback=None, suffix: str = ".xlsx", nrows=None) -> Dict[str, pd.DataFrame]:
     """Read all sheets as raw dataframes (no header inference)."""
+    # @ai(gpt-6, codex, bugfix, 2026-10-16)
+    if suffix == ".xlsx":
+        import openpyxl
+
+        workbook = openpyxl.load_workbook(file_path, data_only=True)
+        try:
+            out = {}
+            for sheet in workbook:
+                rows = list(sheet.iter_rows(max_row=min(sheet.max_row, nrows) if nrows else sheet.max_row, values_only=True))
+                df = pd.DataFrame(rows, dtype=object)
+                spans = {}
+                for merged in sheet.merged_cells.ranges:
+                    if merged.min_row > len(df):
+                        continue
+                    value = sheet.cell(merged.min_row, merged.min_col).value
+                    if value is None:
+                        continue
+                    for row_idx in range(merged.min_row - 1, min(merged.max_row, len(df))):
+                        for col_idx in range(merged.min_col - 1, merged.max_col):
+                            df.iat[row_idx, col_idx] = value
+                    if merged.max_row > merged.min_row:
+                        for col in range(merged.min_col - 1, merged.max_col):
+                            spans.setdefault(col, []).append((merged.min_row - 1, merged.max_row))
+                df.attrs["merged_row_spans"] = spans
+                out[sheet.title] = df
+                if unit_callback:
+                    unit_callback(f"Read sheet {sheet.title}")
+            return out
+        finally:
+            workbook.close()
     engine = _pick_excel_engine(suffix)
     # ExcelFile avoids re-opening the workbook for each sheet
     try:
@@ -759,7 +791,7 @@ def _find_ts_column(raw: pd.DataFrame, options: ImportOptions, file_type: str = 
         for c in range(raw.shape[1]):
             tup = header_tuple_for_col(raw, c, header_rows)
             stacked = " ".join([x for x in tup if x])  # collapse
-            if stacked and stacked.strip().lower() == options.date_column.strip().lower():
+            if options.date_column.strip().casefold() in {str(x).strip().casefold() for x in (*tup, stacked) if x}:
                 return header_rows, c
         # fall through to detection
 
@@ -770,6 +802,57 @@ def _find_ts_column(raw: pd.DataFrame, options: ImportOptions, file_type: str = 
 
     # Fallback: assume first column after header_rows is timestamp
     return default_header_rows, 0
+
+
+def _find_time_column(raw: pd.DataFrame, header_rows: int, ts_col: int, options: ImportOptions) -> Optional[int]:
+    """Find a separate clock column using labels and date-aligned clock values."""
+    if not options.time_column:
+        dates = _normalize_ts_series(raw.iloc[header_rows:header_rows + 100, ts_col], dayfirst=options.assume_dayfirst)
+        if (dates.dropna() != dates.dropna().dt.normalize()).any():
+            return None
+    for col in range(raw.shape[1]):
+        if col == ts_col:
+            continue
+        labels = {str(x).strip().casefold() for x in header_tuple_for_col(raw, col, header_rows) if x}
+        if options.time_column:
+            if options.time_column.strip().casefold() in labels:
+                return col
+            continue
+        sample = raw.iloc[header_rows:header_rows + 100, col].dropna()
+        if sample.empty:
+            continue
+        named = bool(labels & {"time", "kell", "aika", "clock", "kellaaeg"})
+        # Dot-separated numbers need a clock label to distinguish measurements.
+        if not named:
+            sample = sample[sample.map(lambda x: isinstance(x, datetime.time) or (isinstance(x, str) and ":" in x))]
+        if not sample.empty and _normalize_time_series(sample, dot_time_as_colon=options.dot_time_as_colon).notna().mean() >= 0.8:
+            return col
+    if options.time_column:
+        raise ValueError(f"Time column not found: {options.time_column}")
+    return None
+
+
+def _timestamps_for_data(data: pd.DataFrame, ts_col: int, time_col: Optional[int], options: ImportOptions) -> pd.Series:
+    dates = data.iloc[:, ts_col].map(lambda x: None if isinstance(x, str) and not x.strip() else x)
+    if options.fill_down_timestamps:
+        dates = dates.ffill()
+    ts = _normalize_ts_series(dates, dayfirst=options.assume_dayfirst,
+                              dot_time_as_colon=options.dot_time_as_colon, explicit_formats=options.datetime_formats)
+    if time_col is not None:
+        times = data.iloc[:, time_col].map(lambda x: None if isinstance(x, str) and not x.strip() else x)
+        if options.fill_down_timestamps:
+            # Carry within a date block; a new date never inherits the previous clock.
+            groups = data.iloc[:, ts_col].notna().cumsum()
+            times = times.groupby(groups).ffill()
+        offsets = _normalize_time_series(times, dot_time_as_colon=options.dot_time_as_colon)
+        missing_clock = ts.notna() & offsets.isna()
+        ts = ts.dt.normalize() + offsets.fillna(pd.Timedelta(0))
+        if missing_clock.any():
+            rows = ", ".join(str(int(idx) + 1) for idx in data.index[missing_clock][:20])
+            message = f"Missing or invalid clock values in {int(missing_clock.sum())} row(s) (rows {rows}). Kept measurements at midnight on their recorded date."
+            logger.warning(message)
+            ts.attrs["import_warnings"] = [message]
+    return ts
 
 
 def _coerce_metric_series(
@@ -793,6 +876,7 @@ def _coerce_metric_series(
 
 
 def _build_tall_from_raw(raw: pd.DataFrame, options: ImportOptions, unit_callback=None, file_type: str = "excel") -> Tuple[pd.DataFrame, int]:
+    # @ai(gpt-6, codex, bugfix, 2026-10-16)
     # --- small upfronts ---
     ncols = int(raw.shape[1]) if raw is not None else 0
     if unit_callback and ncols:
@@ -814,13 +898,11 @@ def _build_tall_from_raw(raw: pd.DataFrame, options: ImportOptions, unit_callbac
     # --- Slice data once (no reset_index copy) ---
     # Keep as a view; we’ll reindex cheaply later only when we need to.
     data = raw.iloc[header_rows:]
+    time_col = _find_time_column(raw, header_rows, ts_col, options)
     # normalize ts once
-    ts = _normalize_ts_series(
-        data.iloc[:, ts_col],
-        dayfirst=options.assume_dayfirst,
-        dot_time_as_colon=options.dot_time_as_colon,
-        explicit_formats=options.datetime_formats,
-    )
+    ts = _timestamps_for_data(data, ts_col, time_col, options)
+    repeated_rows = options.fill_down_timestamps or bool(raw.attrs.get("merged_row_spans", {}).get(ts_col))
+    sample_numbers = ts.groupby(ts).cumcount() + 1 if repeated_rows else None
 
     roles: HeaderRoles = options.header_roles
 
@@ -840,7 +922,7 @@ def _build_tall_from_raw(raw: pd.DataFrame, options: ImportOptions, unit_callbac
     uc = unit_callback
 
     for col in range(ncols):
-        if col == ts_col:
+        if col == ts_col or col == time_col:
             continue
         s = data.iloc[:, col]
         s_num = _coerce_metric_series(s, decimal_hint=decimal_hint)
@@ -975,6 +1057,8 @@ def _build_tall_from_raw(raw: pd.DataFrame, options: ImportOptions, unit_callbac
 
     def _name_for_meta_col(cidx: int) -> str:
         tup = header_tuples.get(cidx, ())
+        if raw.attrs.get("merged_row_spans"):
+            tup = tuple(reversed(tup))
         first_non_empty = None
         for x in tup:
             if x is not None and str(x).strip():
@@ -1013,7 +1097,19 @@ def _build_tall_from_raw(raw: pd.DataFrame, options: ImportOptions, unit_callbac
     stream_values           = rep([mm["source"]           for mm in metric_meta])
     unit_values             = rep([mm["unit"]             for mm in metric_meta])
     qualifier_values        = rep([mm["type"]        for mm in metric_meta])
+    if repeated_rows:
+        for metric_idx, mm in enumerate(metric_meta):
+            for row_idx in np.flatnonzero(ts.notna().to_numpy()):
+                sample = f"Sample {int(sample_numbers.iloc[row_idx])}"
+                qualifier_values[metric_idx * n_rows + row_idx] = f"{mm['type']} / {sample}" if mm["type"] else sample
     feature_order_values    = rep([mm["feature_order"] for mm in metric_meta])
+    if repeated_rows:
+        # Each sample is a feature occurrence; keep the database's timestamp key intact.
+        stride = max(1, int(sample_numbers.max())) if sample_numbers.notna().any() else 1
+        feature_order_values = np.concatenate([
+            np.asarray(sample_numbers.fillna(1) - 1 + mm["feature_order"] * stride, dtype=np.int64)
+            for mm in metric_meta
+        ])
     data_dict = {
         "ts": ts_values,
         "value": value_values,
@@ -1034,6 +1130,9 @@ def _build_tall_from_raw(raw: pd.DataFrame, options: ImportOptions, unit_callbac
 
     tall = pd.DataFrame(data_dict, copy=False)
 
+    if ts.attrs.get("import_warnings"):
+        tall.attrs["import_warnings"] = ts.attrs["import_warnings"]
+
     forced_meta_names = [
         meta_name_map.get(mc)
         for mc in forced_meta_cols
@@ -1046,6 +1145,9 @@ def _build_tall_from_raw(raw: pd.DataFrame, options: ImportOptions, unit_callbac
     mask_ts = pd.notna(tall["ts"]).to_numpy()
     tall = tall.loc[mask_ts]
     tall.index = np.arange(mask_ts.sum(), dtype=np.int64)
+
+    if repeated_rows:
+        tall = tall.dropna(subset=["value"]).reset_index(drop=True)
 
     # Optional: compress repeated strings
     if getattr(options, "strings_as_category", False):

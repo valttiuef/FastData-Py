@@ -6,8 +6,15 @@ The format is based on Keep a Changelog, with entries grouped by release.
 
 ## [0.2.3] - 2026-08-28
 
+### Added
+- Excel and CSV imports now combine separate date and time columns, with automatic detection of date and time headers and support for Excel clock cells and dot-separated times.
+- Import options now include a separate time column and a continuation-row setting for records whose date and time cover multiple measurement rows.
+
 ### Fixed
 - Statistics grouped by dataset or import now preserve each selected source as a separate group instead of combining overlapping values into full-selection totals.
+- Excel imports now expand merged headers and metadata cells, preserving measurement group names, positions, and operator labels across continuation rows.
+- Repeated measurements at the same timestamp are preserved as numbered sample series instead of losing values during database import.
+- Missing or invalid clock values now retain measurements at midnight on the recorded date and produce an import warning identifying the affected rows.
 
 ## [0.2.2] - 2026-03-23
 

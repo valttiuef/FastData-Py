@@ -1,4 +1,20 @@
 entries:
+  controls.import.time_column:
+    title: "Time column"
+    short: "Combine a separate clock column with the date column."
+    body: |
+      <p>Leave empty for automatic detection, or enter the clock column header, such as <b>Time</b>.</p>
+      <p>Excel clock cells, fractions of a day, colon-separated times and dot-separated times are supported. The clock column is not imported as a measurement.</p>
+      <p>Missing or invalid clocks use midnight on the recorded date. An import warning lists the affected rows so you can correct the source workbook.</p>
+
+  controls.import.fill_down_timestamps:
+    title: "Date and time across multiple rows"
+    short: "Reuse date/time cells for continuation rows."
+    body: |
+      <p>Merged Excel cells are expanded automatically, including group headers and operator labels.</p>
+      <p>Enable this option for unmerged continuation rows with blank dates and times. A new date starts a new clock block.</p>
+      <p>Repeated measurements at the same timestamp are kept as separate <b>Sample 1</b>, <b>Sample 2</b>, etc. feature types. Existing type labels are preserved before the sample label. Timestamps and measured values are unchanged.</p>
+
   controls.import.system_name:
     title: "System name"
     short: "Label the imported data with a system name."

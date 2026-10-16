@@ -1,5 +1,6 @@
 from __future__ import annotations
 # @ai(gpt-5, codex, refactor, 2026-02-26)
+# @ai(gpt-6, codex, date-time-import-controls, 2026-10-16)
 import logging
 
 logger = logging.getLogger(__name__)
@@ -402,7 +403,8 @@ class _OptionalRowField(QWidget):
         self.setValue(value)
 
     def value(self) -> Optional[int]:
-        return int(self.spin.value())
+        # @ai(gpt-6, codex, bugfix, 2026-10-16)
+        return int(self.spin.value()) if self.spin.isEnabled() else None
 
     def setValue(self, v: Optional[int]):
         if v is None:
@@ -651,6 +653,10 @@ class ImportOptionsDialog(QDialog):
         ts_box = QGroupBox(tr("Timestamp"), self)
         ts_form = QFormLayout(ts_box)
         self.date_col_edit = QLineEdit(self.opts.date_column or "")
+        self.time_col_edit = QLineEdit(self.opts.time_column or "")
+        self.time_col_edit.setPlaceholderText(tr("auto"))
+        self.fill_timestamps_cb = QCheckBox(tr("Use date/time for following rows"))
+        self.fill_timestamps_cb.setChecked(self.opts.fill_down_timestamps)
         self.dayfirst_cb = QCheckBox(tr("Assume day-first dates (03/04 = 3 April)"))
         self.dayfirst_cb.setChecked(bool(self.opts.assume_dayfirst))
 
@@ -670,6 +676,8 @@ class ImportOptionsDialog(QDialog):
             self._wrap_with_help(self.date_col_edit, "controls.import.date_column"),
         )
         ts_form.addRow(self._wrap_with_help(self.dayfirst_cb, "controls.import.assume_dayfirst"))
+        ts_form.addRow(tr("Time column:"), self._wrap_with_help(self.time_col_edit, "controls.import.time_column"))
+        ts_form.addRow(self._wrap_with_help(self.fill_timestamps_cb, "controls.import.fill_down_timestamps"))
         ts_form.addRow(self._wrap_with_help(self.dot_time_cb, "controls.import.dot_time_as_colon"))
         ts_form.addRow(
             tr("Datetime formats:"),
@@ -775,6 +783,7 @@ class ImportOptionsDialog(QDialog):
 
     # ---- Public API ----------------------------------------------------------
     def build_options(self) -> ImportOptions:
+        # @ai(gpt-6, codex, date-time-import-options, 2026-10-16)
         # Merge advanced header roles
         hr = HeaderRoles(
             base_name_row=self.base_row.value(),
@@ -840,6 +849,8 @@ class ImportOptionsDialog(QDialog):
             csv_header_rows=excel_header_rows,
             header_roles=hr,
             date_column=self.date_col_edit.text().strip() or None,
+            time_column=self.time_col_edit.text().strip() or None,
+            fill_down_timestamps=self.fill_timestamps_cb.isChecked(),
             auto_detect_datetime= not self.date_col_edit.text().strip(),
             assume_dayfirst=bool(self.dayfirst_cb.isChecked()),
             # NEW:
@@ -1016,11 +1027,19 @@ class ImportOptionsDialog(QDialog):
                 self.source_row.setValue(base_idx + 1)
                 self.unit_row.setValue(base_idx + 2)
                 self.type_row_field.setValue(base_idx + 3)
+                if "source_header_index" in payload:
+                    self.source_row.setValue(payload["source_header_index"])
+                    self.unit_row.setValue(payload["unit_header_index"])
+                    self.type_row_field.setValue(payload["type_header_index"])
         except Exception:
             logger.warning("Exception in _apply_preview_payload", exc_info=True)
         try:
             if date_column:
                 self.date_col_edit.setText(str(date_column))
+            if payload.get("time_column"):
+                self.time_col_edit.setText(str(payload["time_column"]))
+            if payload.get("fill_down_timestamps") is not None:
+                self.fill_timestamps_cb.setChecked(bool(payload["fill_down_timestamps"]))
             if not self.csv_delim.text().strip() and delimiter_guess:
                 self.csv_delim.setText(str(delimiter_guess))
             if datetime_formats:
