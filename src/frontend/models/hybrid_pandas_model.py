@@ -2415,7 +2415,7 @@ class HybridPandasModel(DatabaseModel):
                 return s
         return NICE_STEPS[-1]
 
-    # @ai(gpt-5, codex, refactor, 2026-03-02)
+    # @ai(gpt-6, codex, fix, 2026-10-16)
     def _postprocess_timeseries(
         self,
         df: pd.DataFrame,
@@ -2471,7 +2471,10 @@ class HybridPandasModel(DatabaseModel):
 
             res = (
                 d.set_index("t")[value_cols]
-                .resample(chosen_freq)
+                # Match floor/ceil and the database's fixed epoch-aligned buckets.
+                # The default start-day origin can otherwise discard every value
+                # when reindexing multi-day or other non-day-divisor intervals.
+                .resample(chosen_freq, origin="epoch")
                 .agg(agg_fn)
                 .reindex(idx)
             )
@@ -2677,12 +2680,10 @@ class HybridPandasModel(DatabaseModel):
                 result = result.drop(columns=hidden_cols, errors="ignore")
         return result
 
+    # @ai(gpt-6, codex, fix, 2026-10-16)
     def _freq_str_from_seconds(self, secs: int) -> str:
-        # Use pandas-friendly, non-deprecated frequency strings.
-        # Days use 'D'; hours, minutes, and seconds use 'h', 'min', and 's'.
-        if secs % 86400 == 0:
-            n = secs // 86400
-            return f"{n}D"
+        # Keep fixed durations tick-like: pandas calendar-day offsets ignore
+        # the resampling origin, unlike hours, minutes, and seconds.
         if secs % 3600 == 0:
             n = secs // 3600
             return f"{n}h"

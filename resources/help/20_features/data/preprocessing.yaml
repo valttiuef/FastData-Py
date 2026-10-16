@@ -25,7 +25,7 @@ entries:
         <li><b>monthly</b>, after <b>weekly</b>, uses a fixed 30-day interval (2,592,000 seconds), not calendar-month boundaries.</li>
         <li>Enter a custom number of seconds to match an exact cadence.</li>
       </ul>
-      <p>Resampling can make downstream statistics and charts easier to compare.</p>
+      <p>Resampling can make downstream statistics and charts easier to compare. Fixed-interval buckets use a consistent time grid, including when the first measurement falls between bucket boundaries.</p>
 
   controls.preprocessing.moving_average:
     title: "Moving average"

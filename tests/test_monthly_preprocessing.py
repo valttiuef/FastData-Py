@@ -87,3 +87,17 @@ def test_monthly_moving_average_excludes_values_outside_window(widget):
     result = model._postprocess_timeseries(frame, **widget.parameters())
     assert result["t"].tolist() == frame["t"].tolist()
     assert result["value"].tolist() == [2.0, 3.0, 7.0]
+
+
+@pytest.mark.parametrize("seconds", [3600, 7 * 3600, 86400, 604800, 2592000])
+def test_resampling_preserves_values_when_first_timestamp_is_between_buckets(seconds):
+    model = HybridPandasModel.__new__(HybridPandasModel)
+    frame = pd.DataFrame({
+        "t": pd.date_range("2026-01-02 12:34:56", periods=70, freq="D"),
+        "value": range(70),
+    })
+    result = model._postprocess_timeseries(frame, timestep=seconds, fill="none")
+    # Timestamp.floor uses the same fixed epoch grid as database time buckets.
+    expected = frame.groupby(frame["t"].dt.floor(f"{seconds}s"))["value"].mean()
+    actual = result.set_index("t")["value"].dropna()
+    pd.testing.assert_series_equal(actual, expected, check_freq=False)

@@ -348,6 +348,47 @@ def test_hybrid_model_loads_rows_from_duckdb_csv_import(temp_db: Database, tmp_p
         model._close_database()
 
 
+# @ai(gpt-6, codex, regression-test, 2026-10-16)
+@pytest.mark.parametrize("seconds", [604800, 2592000])
+@pytest.mark.parametrize("use_raw", [True, False], ids=["raw", "database-buckets"])
+def test_hybrid_model_weekly_and_monthly_preserve_imported_values(
+    temp_db: Database, tmp_path: Path, seconds: int, use_raw: bool,
+):
+    source = pd.DataFrame({
+        "Time": pd.date_range("2026-01-02 12:34:56", periods=70, freq="D"),
+        "Temp": range(70),
+    })
+    csv_path = tmp_path / "monthly.csv"
+    source.to_csv(csv_path, index=False)
+    temp_db.import_file(csv_path, ImportOptions(
+        system_name="MonthlySystem",
+        dataset_name="MonthlyDataset",
+        csv_header_rows=1,
+        auto_detect_datetime=False,
+        date_column="Time",
+        use_duckdb_csv_import=True,
+    ))
+    settings = SettingsModel(organization="FastDataTests", application="MonthlyBuckets")
+    settings.set_database_path(temp_db.path)
+    model = HybridPandasModel(settings)
+    try:
+        model._small_threshold = 1000 if use_raw else 0
+        features = model.features_for_systems_datasets(
+            systems=["MonthlySystem"], datasets=["MonthlyDataset"],
+        )
+        filters = DataFilters(
+            features=[FeatureSelection.from_payload(dict(features.iloc[0].to_dict()))],
+            systems=["MonthlySystem"], datasets=["MonthlyDataset"],
+        )
+        model.load_base(filters, timestep=seconds, fill="none", agg="avg")
+        result = model.base_dataframe().set_index("t")["Temp"].dropna()
+        expected = source.groupby(source["Time"].dt.floor(f"{seconds}s"))["Temp"].mean()
+        expected.index.name = "t"
+        pd.testing.assert_series_equal(result, expected, check_freq=False)
+    finally:
+        model._close_database()
+
+
 def test_hybrid_model_load_base_respects_import_filters_across_cache_reuse(temp_db: Database, tmp_path: Path):
     csv_a = tmp_path / "hybrid_import_a.csv"
     csv_b = tmp_path / "hybrid_import_b.csv"

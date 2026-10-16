@@ -14,6 +14,7 @@ The format is based on Keep a Changelog, with entries grouped by release.
 - Import options now include a separate time column and a continuation-row setting for records whose date and time cover multiple measurement rows.
 
 ### Fixed
+- Monthly preprocessing no longer shows empty data when measurement dates fall between interval boundaries; resampling now preserves values on a consistent time grid.
 - Deleting data now removes related measurements, imported tables, exclusive features and groups, and affected saved models and results while preserving shared features, shared groups, and original source files.
 - Statistics grouped by dataset or import now preserve each selected source as a separate group instead of combining overlapping values into full-selection totals.
 - Excel imports now expand merged headers and metadata cells, preserving measurement group names, positions, and operator labels across continuation rows.
