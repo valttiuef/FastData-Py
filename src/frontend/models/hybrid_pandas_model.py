@@ -929,9 +929,12 @@ class HybridPandasModel(DatabaseModel):
         - 7200 -> "2 hours"
         - 86400 -> "daily"
         - 604800 -> "weekly"
+        - 2592000 -> "monthly" (fixed 30 days)
         """
         if seconds <= 0:
             return "raw"
+        if seconds == 2592000:
+            return "monthly"
         
         # Define common intervals with their thresholds
         intervals = [
@@ -2676,10 +2679,10 @@ class HybridPandasModel(DatabaseModel):
 
     def _freq_str_from_seconds(self, secs: int) -> str:
         # Use pandas-friendly, non-deprecated frequency strings.
-        # Use lowercase unit names: 'd' (days), 'h' (hours), 'min' (minutes), 's' (seconds).
+        # Days use 'D'; hours, minutes, and seconds use 'h', 'min', and 's'.
         if secs % 86400 == 0:
             n = secs // 86400
-            return f"{n}d"
+            return f"{n}D"
         if secs % 3600 == 0:
             n = secs // 3600
             return f"{n}h"

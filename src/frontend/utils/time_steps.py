@@ -14,6 +14,7 @@ TIMESTEP_OPTIONS: list[tuple[str, int | None]] = [
     ("12 hours", 43200),
     ("daily", 86400),
     ("weekly", 604800),
+    ("monthly", 2592000),  # Fixed 30-day interval, consistent with Statistics.
 ]
 
 MOVING_AVERAGE_OPTIONS: list[tuple[str, int | None]] = list(TIMESTEP_OPTIONS)

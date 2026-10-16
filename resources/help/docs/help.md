@@ -2,7 +2,7 @@
 
 Context-sensitive help entries for FastData application
 
-Updated: 2026-03-16
+Updated: 2026-10-16
 
 Version: 2
 
@@ -203,6 +203,7 @@ Apply conditions to subset your dataset.
   <li>Compare subsets of data</li>
 </ul>
 <p>The selected filter set is applied to the dataframe used by downstream analysis and visualizations.</p>
+<p>Right-click an entry in Systems, Datasets, or Imports and choose Remove to permanently delete it from the database. A confirmation is required and defaults to No. Systems include their datasets and imports; datasets include their imports. Related measurements, imported tables, exclusive features and groups, and affected saved models and results are removed. Shared features and groups and original source files are kept. Deletion runs in the background and refreshes the available filters.</p>
 
 
 ##### Systems and datasets
@@ -262,6 +263,33 @@ Filter by selected imports and feature tags together.
 
 
 #### Import Options
+
+##### Time column
+
+Combine a separate clock column with the date column.
+
+<p>Leave empty for automatic detection, or enter the clock column header, such as <b>Time</b>.</p>
+<p>Excel clock cells, fractions of a day, colon-separated times and dot-separated times are supported. The clock column is not imported as a measurement.</p>
+<p>Missing or invalid clocks use midnight on the recorded date. An import warning lists the affected rows so you can correct the source workbook.</p>
+
+
+##### Date and time across multiple rows
+
+Reuse date/time cells for continuation rows.
+
+<p>Merged Excel cells are expanded automatically, including group headers and operator labels.</p>
+<p>Enable this option for unmerged continuation rows with blank dates and times. A new date starts a new clock block.</p>
+<p>Repeated measurements are averaged by default. Disable <b>Average repeated measurements</b> to keep continuation rows as numbered sample types.</p>
+
+
+##### Average repeated measurements
+
+Average repeated rows into one value per datetime.
+
+<p>Enabled by default for Excel imports and CSV continuation/date-and-time blocks. Each measurement column is averaged separately at each datetime; sources, units, and existing type labels remain separate.</p>
+<p>Missing numeric values are excluded from the mean. Metadata uses the first available label for the averaged point.</p>
+<p>Disable to preserve continuation measurements as <b>Sample 1</b>, <b>Sample 2</b>, etc. Existing type labels are kept before the sample label.</p>
+
 
 ##### System name
 
@@ -486,6 +514,7 @@ Resample data to a fixed interval or leave it on auto.
 <ul>
   <li><b>auto</b> keeps the native spacing of the data.</li>
   <li>Preset values such as <b>1 minute</b> or <b>1 hour</b> resample the series to an even grid.</li>
+  <li><b>monthly</b>, after <b>weekly</b>, uses a fixed 30-day interval (2,592,000 seconds), not calendar-month boundaries.</li>
   <li>Enter a custom number of seconds to match an exact cadence.</li>
 </ul>
 <p>Resampling can make downstream statistics and charts easier to compare.</p>
@@ -499,6 +528,7 @@ Smooth measurements with an optional rolling window.
 <ul>
   <li><b>none</b> leaves the data untouched.</li>
   <li>Preset windows (e.g., <b>5 minutes</b>) smooth short-term spikes.</li>
+  <li><b>monthly</b>, after <b>weekly</b>, uses a rolling 30-day window (2,592,000 seconds).</li>
   <li>Type a custom window in seconds for finer control.</li>
 </ul>
 <p>Use smoothing when charts or models are sensitive to rapid fluctuations.</p>
@@ -624,6 +654,7 @@ Define the window used for time-based aggregation.
 <p>Time-based mode buckets records into regular windows before applying your chosen statistics.</p>
 <ul>
   <li><b>hourly</b>, <b>daily</b>, <b>weekly</b>, <b>monthly</b>: convenient presets that translate to fixed second intervals.</li>
+  <li><b>monthly</b> uses 30 days (2,592,000 seconds), not calendar-month boundaries, matching the preprocessing preset.</li>
   <li><b>custom</b>: enter a number of seconds in <b>Custom period (s)</b> to match your own cadence.</li>
   <li>Pick a shorter window for fine-grained trends or a longer one for smoother, aggregate views.</li>
 </ul>

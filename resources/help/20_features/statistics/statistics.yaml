@@ -56,6 +56,7 @@ entries:
       <p>Time-based mode buckets records into regular windows before applying your chosen statistics.</p>
       <ul>
         <li><b>hourly</b>, <b>daily</b>, <b>weekly</b>, <b>monthly</b>: convenient presets that translate to fixed second intervals.</li>
+        <li><b>monthly</b> uses 30 days (2,592,000 seconds), not calendar-month boundaries, matching the preprocessing preset.</li>
         <li><b>custom</b>: enter a number of seconds in <b>Custom period (s)</b> to match your own cadence.</li>
         <li>Pick a shorter window for fine-grained trends or a longer one for smoother, aggregate views.</li>
       </ul>

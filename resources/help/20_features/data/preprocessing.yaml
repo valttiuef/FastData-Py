@@ -22,6 +22,7 @@ entries:
       <ul>
         <li><b>auto</b> keeps the native spacing of the data.</li>
         <li>Preset values such as <b>1 minute</b> or <b>1 hour</b> resample the series to an even grid.</li>
+        <li><b>monthly</b>, after <b>weekly</b>, uses a fixed 30-day interval (2,592,000 seconds), not calendar-month boundaries.</li>
         <li>Enter a custom number of seconds to match an exact cadence.</li>
       </ul>
       <p>Resampling can make downstream statistics and charts easier to compare.</p>
@@ -34,6 +35,7 @@ entries:
       <ul>
         <li><b>none</b> leaves the data untouched.</li>
         <li>Preset windows (e.g., <b>5 minutes</b>) smooth short-term spikes.</li>
+        <li><b>monthly</b>, after <b>weekly</b>, uses a rolling 30-day window (2,592,000 seconds).</li>
         <li>Type a custom window in seconds for finer control.</li>
       </ul>
       <p>Use smoothing when charts or models are sensitive to rapid fluctuations.</p>
